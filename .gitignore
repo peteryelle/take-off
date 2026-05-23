@@ -1,0 +1,18 @@
+# Dependencies
+node_modules/
+
+# Environment — never commit real keys
+.env.local
+.env
+
+# Mac system files
+.DS_Store
+
+# Images and PDFs (too large for git)
+*.jpg
+*.jpeg
+*.png
+*.pdf
+
+# Netlify cache
+.netlify/
