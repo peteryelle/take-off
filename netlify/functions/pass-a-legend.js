@@ -48,7 +48,7 @@ Return JSON matching this exact schema — no other text:
   let legendResult;
   try {
     const msg = await anthropic.messages.create({
-      model:      "claude-sonnet-4-20250514",
+      model:      "claude-sonnet-4-5",
       max_tokens: 4096,
       system:     SYSTEM_PROMPT,
       messages: [{
