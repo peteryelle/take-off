@@ -776,20 +776,20 @@ async function runPassB2() {
       setStatus('pass-b2-status',
         `✓ ${j.devices_present.length} device types found on this page — pills populated`, 'ok');
       document.getElementById('pass-b2-output').textContent =
-        `Devices on this sheet:
+        'Devices on this sheet:
 
-` +
+' +
         j.devices_present.map(d =>
-          `${d.legend_id}  ${d.name}  — est. ${d.estimated_count ?? '?'} instances  [${d.confidence}]${d.notes ? '
-       ' + d.notes : ''}`
+          d.legend_id + '  ' + d.name + '  — est. ' + (d.estimated_count ?? '?') + ' instances  [' + d.confidence + ']' + (d.notes ? '
+       ' + d.notes : '')
         ).join('
 ') +
-        (j.scan_notes ? `
+        (j.scan_notes ? '
 
-Scan notes: ${j.scan_notes}` : '') +
-        (j.warnings?.length ? `
+Scan notes: ' + j.scan_notes : '') +
+        (j.warnings && j.warnings.length ? '
 
-Warnings: ${j.warnings.join('; ')}` : '');
+Warnings: ' + j.warnings.join('; ') : '');
     } else {
       setStatus('pass-b2-status', 'No devices detected on this page', 'err');
     }
