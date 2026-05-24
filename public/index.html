@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Take-off — Pipeline Test</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: monospace;
+    background: #0d0d0d;
+    color: #e0e0e0;
+    padding: 20px;
+    font-size: 13px;
+  }
+  h1 { color: #f0c040; font-size: 16px; margin-bottom: 4px; letter-spacing: 2px; text-transform: uppercase; }
+  .subtitle { color: #666; font-size: 11px; margin-bottom: 20px; }
+  .section {
+    border: 1px solid #2a2a2a;
+    border-radius: 4px;
+    padding: 14px;
+    margin-bottom: 16px;
+    background: #111;
+  }
+  .section-title {
+    color: #f0c040;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 10px;
+    border-bottom: 1px solid #222;
+    padding-bottom: 6px;
+  }
+  input[type="file"] { color: #ccc; width: 100%; margin-bottom: 10px; }
+  input[type="text"], input[type="number"] {
+    background: #1a1a1a;
+    border: 1px solid #333;
+    color: #e0e0e0;
+    padding: 5px 8px;
+    border-radius: 3px;
+    font-family: monospace;
+    font-size: 12px;
+    width: 100%;
+    margin-bottom: 6px;
+  }
+  label { color: #888; font-size: 11px; display: block; margin-bottom: 2px; }
+  button {
+    background: #1e3a1e;
+    border: 1px solid #3a7a3a;
+    color: #7af07a;
+    padding: 7px 14px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-family: monospace;
+    font-size: 12px;
+    margin-right: 8px;
+    margin-bottom: 6px;
+    transition: background 0.15s;
+  }
+  button:hover { background: #2a4a2a; }
+  button:disabled { opacity: 0.3; cursor: not-allowed; }
+  button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
+  button.info { background: #1e2d3a; border-color: #3a6a8a; color: #7ac0f0; }
+  .status {
+    font-size: 11px;
+    color: #aaa;
+    padding: 4px 0;
+    min-height: 18px;
+  }
+  .status.ok { color: #7af07a; }
+  .status.err { color: #f07a7a; }
+  .status.running { color: #f0c040; }
+  .thumbnails {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+  }
+  .thumb-wrap {
+    position: relative;
+    cursor: pointer;
+    border: 2px solid #333;
+    border-radius: 3px;
+    overflow: hidden;
+    transition: border-color 0.15s;
+  }
+  .thumb-wrap:hover { border-color: #666; }
+  .thumb-wrap.selected { border-color: #f0c040; }
+  .thumb-wrap.legend-page { border-color: #7a7af0; }
+  .thumb-wrap.eval-page { border-color: #7af07a; }
+  .thumb-label {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    background: rgba(0,0,0,0.75);
+    color: #ccc;
+    font-size: 9px;
+    text-align: center;
+    padding: 2px;
+  }
+  .thumb-wrap canvas { display: block; }
+  .output-area {
+    background: #0a0a0a;
+    border: 1px solid #222;
+    border-radius: 3px;
+    padding: 10px;
+    min-height: 60px;
+    margin-top: 10px;
+    white-space: pre-wrap;
+    font-size: 11px;
+    color: #aaa;
+    max-height: 320px;
+    overflow-y: auto;
+  }
+  .annotated-img {
+    margin-top: 10px;
+    max-width: 100%;
+    border: 1px solid #333;
+    border-radius: 3px;
+    display: none;
+  }
+  .tia-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 10px;
+    font-size: 11px;
+    display: none;
+  }
+  .tia-table th {
+    background: #1e1e00;
+    color: #f0c040;
+    padding: 5px 8px;
+    text-align: left;
+    border: 1px solid #333;
+  }
+  .tia-table td {
+    padding: 4px 8px;
+    border: 1px solid #222;
+    color: #ccc;
+  }
+  .tia-table tr:nth-child(even) td { background: #111; }
+  .tia-badge {
+    display: inline-block;
+    background: #3a0000;
+    color: #f07a7a;
+    border: 1px solid #7a3a3a;
+    border-radius: 3px;
+    padding: 1px 6px;
+    font-size: 10px;
+    margin-left: 6px;
+  }
+  .count-display {
+    font-size: 28px;
+    font-weight: bold;
+    color: #f0c040;
+    display: inline-block;
+    margin-right: 16px;
+  }
+  .count-label { color: #666; font-size: 11px; }
+  .row { display: flex; gap: 12px; align-items: flex-start; }
+  .col { flex: 1; }
+  .pill {
+    display: inline-block;
+    background: #1a1a1a;
+    border: 1px solid #333;
+    border-radius: 10px;
+    padding: 2px 8px;
+    font-size: 10px;
+    color: #aaa;
+    margin: 2px;
+    cursor: pointer;
+  }
+  .pill.active { background: #1e3a1e; border-color: #3a7a3a; color: #7af07a; }
+  .divider { border: none; border-top: 1px solid #1e1e1e; margin: 10px 0; }
+  #device-list { margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<h1>⚡ Take-off — Pipeline Test</h1>
+<p class="subtitle">winquest-take-off.netlify.app · Supabase lpjpqmpjxtwsnakcwqvb · Crude test harness</p>
+
+<!-- ── STEP 0: CONFIG ────────────────────────────────────────────── -->
+<div class="section">
+  <div class="section-title">0 · Config</div>
+  <label>Netlify base URL</label>
+  <input type="text" id="netlify-url" value="https://winquest-take-off.netlify.app">
+  <label>Project ID (leave blank to auto-create)</label>
+  <input type="text" id="project-id" placeholder="e.g. 42">
+  <label>Project name (used only when auto-creating)</label>
+  <input type="text" id="project-name" value="Test Project — Page 28">
+  <button class="info" onclick="createProject()">Create / Confirm Project</button>
+  <div class="status" id="project-status">—</div>
+</div>
+
+<!-- ── STEP 1: LOAD PDF ─────────────────────────────────────────── -->
+<div class="section">
+  <div class="section-title">1 · Load PDF</div>
+  <input type="file" id="pdf-file" accept=".pdf" onchange="loadPDF(this)">
+  <div class="status" id="pdf-status">No file loaded</div>
+  <div class="thumbnails" id="thumbnails"></div>
+  <div style="margin-top:8px; font-size:11px; color:#555;">
+    Click a thumbnail to mark it. Purple = legend page · Green = eval page
+  </div>
+</div>
+
+<!-- ── STEP 2: PASS A ───────────────────────────────────────────── -->
+<div class="section">
+  <div class="section-title">2 · Pass A — Legend Extraction</div>
+  <div style="font-size:11px; color:#666; margin-bottom:8px;">
+    Legend page: <strong id="legend-page-label" style="color:#7a7af0;">not selected</strong>
+    &nbsp;·&nbsp; Default: page 2
+  </div>
+  <button onclick="runPassA()">▶ Run Pass A</button>
+  <div class="status" id="pass-a-status">—</div>
+  <div class="output-area" id="pass-a-output">Output will appear here…</div>
+  <div id="device-list"></div>
+</div>
+
+<!-- ── STEP 3: PASS B ───────────────────────────────────────────── -->
+<div class="section">
+  <div class="section-title">3 · Pass B — Scale + Demarcation</div>
+  <div style="font-size:11px; color:#666; margin-bottom:8px;">
+    Eval page: <strong id="eval-page-label" style="color:#7af07a;">not selected</strong>
+    &nbsp;·&nbsp; Default: page 28
+  </div>
+  <button onclick="runPassB()">▶ Run Pass B</button>
+  <div class="status" id="pass-b-status">—</div>
+  <div class="output-area" id="pass-b-output">Output will appear here…</div>
+</div>
+
+<!-- ── STEP 4: PASS C ───────────────────────────────────────────── -->
+<div class="section">
+  <div class="section-title">4 · Pass C — Device Detection + Distances</div>
+  <div style="font-size:11px; color:#666; margin-bottom:6px;">Select device type from Pass A results:</div>
+  <div id="device-pills" style="margin-bottom:10px;">(run Pass A first)</div>
+  <button onclick="runPassC()">▶ Run Pass C</button>
+  <div class="status" id="pass-c-status">—</div>
+
+  <hr class="divider">
+
+  <!-- Results summary -->
+  <div id="results-summary" style="display:none; margin-top:8px;">
+    <span class="count-display" id="device-count">0</span>
+    <span class="count-label">devices found</span>
+    <span id="tia-badge-container"></span>
+    <div style="font-size:11px; color:#666; margin-top:4px;" id="longest-run-label"></div>
+  </div>
+
+  <div class="output-area" id="pass-c-output">Output will appear here…</div>
+  <img class="annotated-img" id="annotated-img" alt="Annotated drawing">
+
+  <!-- TIA violations table -->
+  <table class="tia-table" id="tia-table">
+    <thead>
+      <tr>
+        <th>#</th><th>Device ID</th><th>Location</th><th>Run (ft)</th><th>Confidence</th>
+      </tr>
+    </thead>
+    <tbody id="tia-tbody"></tbody>
+  </table>
+</div>
+
+<!-- ── STEP 5: SUMMARY ──────────────────────────────────────────── -->
+<div class="section">
+  <div class="section-title">5 · Supabase Summary</div>
+  <button class="info" onclick="fetchSummary()">▶ Fetch takeoff-summary</button>
+  <div class="status" id="summary-status">—</div>
+  <div class="output-area" id="summary-output">Output will appear here…</div>
+</div>
+
+<script>
+// ── PDF.js setup ────────────────────────────────────────────────────
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+// ── State ────────────────────────────────────────────────────────────
+let pdfDoc      = null;
+let pages       = {};        // pageNum → { canvas, base64 }
+let legendPage  = 2;         // default
+let evalPage    = 28;        // default
+let passAResult = null;
+let passBResult = null;
+let selectedDevice = null;
+let projectId   = null;
+
+function base() { return document.getElementById('netlify-url').value.replace(/\/$/, ''); }
+
+// ── Helpers ──────────────────────────────────────────────────────────
+function setStatus(id, msg, type='') {
+  const el = document.getElementById(id);
+  el.textContent = msg;
+  el.className = 'status ' + type;
+}
+function setOutput(id, obj) {
+  document.getElementById(id).textContent =
+    typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2);
+}
+
+// ── Project ──────────────────────────────────────────────────────────
+async function createProject() {
+  const pid = document.getElementById('project-id').value.trim();
+  if (pid) {
+    projectId = parseInt(pid);
+    setStatus('project-status', `Using existing project ID: ${projectId}`, 'ok');
+    return;
+  }
+  const name = document.getElementById('project-name').value.trim() || 'Test Project';
+  setStatus('project-status', 'Creating project…', 'running');
+  try {
+    const r = await fetch(`${base()}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name })
+    });
+    const j = await r.json();
+    if (j.id) {
+      projectId = j.id;
+      document.getElementById('project-id').value = j.id;
+      setStatus('project-status', `✓ Project created — ID: ${j.id}`, 'ok');
+    } else {
+      setStatus('project-status', 'Error: ' + JSON.stringify(j), 'err');
+    }
+  } catch(e) { setStatus('project-status', 'Error: ' + e.message, 'err'); }
+}
+
+// ── Load PDF ─────────────────────────────────────────────────────────
+async function loadPDF(input) {
+  const file = input.files[0];
+  if (!file) return;
+  setStatus('pdf-status', `Loading ${file.name}…`, 'running');
+  const ab = await file.arrayBuffer();
+  pdfDoc = await pdfjsLib.getDocument({ data: ab }).promise;
+  setStatus('pdf-status', `✓ Loaded — ${pdfDoc.numPages} pages`, 'ok');
+  renderThumbnails();
+}
+
+async function renderThumbnails() {
+  const container = document.getElementById('thumbnails');
+  container.innerHTML = '';
+  for (let n = 1; n <= pdfDoc.numPages; n++) {
+    const page = await pdfDoc.getPage(n);
+    const vp   = page.getViewport({ scale: 0.18 });
+    const cv   = document.createElement('canvas');
+    cv.width   = vp.width;
+    cv.height  = vp.height;
+    await page.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+
+    const wrap = document.createElement('div');
+    wrap.className = 'thumb-wrap';
+    wrap.dataset.page = n;
+    if (n === legendPage) wrap.classList.add('legend-page');
+    if (n === evalPage)   wrap.classList.add('eval-page');
+
+    const lbl = document.createElement('div');
+    lbl.className = 'thumb-label';
+    lbl.textContent = `p${n}`;
+
+    wrap.appendChild(cv);
+    wrap.appendChild(lbl);
+    wrap.onclick = () => handleThumbClick(n, wrap);
+    container.appendChild(wrap);
+  }
+  // Pre-render legend + eval pages at full res in background
+  prerenderPage(legendPage);
+  prerenderPage(evalPage);
+}
+
+function handleThumbClick(n, wrap) {
+  // Show a small popup with two options: Set as Legend / Set as Eval
+  const existing = document.getElementById('thumb-popup');
+  if (existing) existing.remove();
+
+  const popup = document.createElement('div');
+  popup.id = 'thumb-popup';
+  popup.style.cssText = `
+    position:fixed; background:#1a1a1a; border:1px solid #444;
+    border-radius:4px; padding:8px; z-index:999;
+    font-family:monospace; font-size:12px;
+    box-shadow:0 4px 12px rgba(0,0,0,0.6);
+  `;
+  popup.innerHTML = `
+    <div style="color:#aaa; margin-bottom:6px;">Page ${n}</div>
+    <button onclick="setLegendPage(${n})" style="display:block;width:100%;margin-bottom:4px;background:#1e1e3a;border:1px solid #5a5aaa;color:#aaaaff;padding:4px 8px;border-radius:3px;cursor:pointer;font-family:monospace;font-size:11px;">
+      📋 Set as Legend page
+    </button>
+    <button onclick="setEvalPage(${n})" style="display:block;width:100%;background:#1e3a1e;border:1px solid #3a7a3a;color:#7af07a;padding:4px 8px;border-radius:3px;cursor:pointer;font-family:monospace;font-size:11px;">
+      🔍 Set as Eval page
+    </button>
+  `;
+
+  const rect = wrap.getBoundingClientRect();
+  popup.style.left = Math.min(rect.left, window.innerWidth - 180) + 'px';
+  popup.style.top  = (rect.bottom + 4) + 'px';
+  document.body.appendChild(popup);
+  setTimeout(() => document.addEventListener('click', () => popup.remove(), { once: true }), 100);
+}
+
+function setLegendPage(n) {
+  document.querySelectorAll('.thumb-wrap').forEach(w => w.classList.remove('legend-page'));
+  const wrap = document.querySelector(`.thumb-wrap[data-page="${n}"]`);
+  if (wrap) wrap.classList.add('legend-page');
+  legendPage = n;
+  document.getElementById('legend-page-label').textContent = `Page ${n}`;
+  prerenderPage(n);
+  document.getElementById('thumb-popup')?.remove();
+}
+
+function setEvalPage(n) {
+  document.querySelectorAll('.thumb-wrap').forEach(w => w.classList.remove('eval-page'));
+  const wrap = document.querySelector(`.thumb-wrap[data-page="${n}"]`);
+  if (wrap) wrap.classList.add('eval-page');
+  evalPage = n;
+  document.getElementById('eval-page-label').textContent = `Page ${n}`;
+  prerenderPage(n);
+  document.getElementById('thumb-popup')?.remove();
+}
+
+async function prerenderPage(pageNum, scale=2.0) {
+  if (!pdfDoc || !pageNum) return;
+  if (pages[pageNum]) return;       // already rendered
+  const page = await pdfDoc.getPage(pageNum);
+  const vp   = page.getViewport({ scale });
+  const cv   = document.createElement('canvas');
+  cv.width   = vp.width;
+  cv.height  = vp.height;
+  await page.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+  const b64 = cv.toDataURL('image/jpeg', 0.92).split(',')[1];
+  pages[pageNum] = { canvas: cv, base64: b64 };
+}
+
+async function getPageBase64(pageNum) {
+  await prerenderPage(pageNum);
+  return pages[pageNum].base64;
+}
+
+// ── Pass A ───────────────────────────────────────────────────────────
+async function runPassA() {
+  if (!projectId) { alert('Create/confirm project first (Step 0)'); return; }
+  const pg = legendPage || 2;
+  setStatus('pass-a-status', `Rendering page ${pg}…`, 'running');
+  setOutput('pass-a-output', 'Rendering page…');
+
+  const b64 = await getPageBase64(pg);
+  setStatus('pass-a-status', `Calling /api/pass-a-legend…`, 'running');
+
+  try {
+    const r = await fetch(`${base()}/api/pass-a-legend`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: projectId, page_number: pg, page_image_base64: b64 })
+    });
+    const j = await r.json();
+    passAResult = j;
+    setOutput('pass-a-output', j);
+
+    if (j.devices && j.devices.length > 0) {
+      setStatus('pass-a-status', `✓ ${j.devices.length} device types extracted`, 'ok');
+      renderDevicePills(j.devices);
+    } else {
+      setStatus('pass-a-status', 'Returned but no devices found — check output', 'err');
+    }
+  } catch(e) {
+    setStatus('pass-a-status', 'Error: ' + e.message, 'err');
+    setOutput('pass-a-output', e.message);
+  }
+}
+
+function renderDevicePills(devices) {
+  const container = document.getElementById('device-pills');
+  container.innerHTML = '';
+  devices.forEach(dev => {
+    const pill = document.createElement('span');
+    pill.className = 'pill';
+    pill.textContent = `${dev.legend_id || dev.id} · ${dev.name}`;
+    pill.title = dev.description || '';
+    pill.dataset.deviceId = dev.legend_id || dev.id;
+    pill.dataset.deviceName = dev.name;
+    pill.dataset.deviceDesc = dev.description || '';
+    pill.onclick = () => {
+      document.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
+      pill.classList.add('active');
+      selectedDevice = { id: dev.legend_id || dev.id, name: dev.name, description: dev.description || '' };
+    };
+    container.appendChild(pill);
+  });
+}
+
+// ── Pass B ───────────────────────────────────────────────────────────
+async function runPassB() {
+  if (!projectId) { alert('Create/confirm project first (Step 0)'); return; }
+  const pg = evalPage || 28;
+  setStatus('pass-b-status', `Rendering page ${pg}…`, 'running');
+
+  const b64 = await getPageBase64(pg);
+  setStatus('pass-b-status', `Calling /api/pass-b-page…`, 'running');
+
+  try {
+    const r = await fetch(`${base()}/api/pass-b-page`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: projectId, page_number: pg, page_image_base64: b64 })
+    });
+    const j = await r.json();
+    passBResult = j;
+    setOutput('pass-b-output', j);
+
+    const scale  = j.scale?.display_label  || 'unknown';
+    const demarc = j.demarcation?.found
+      ? `${j.demarcation.label} @ (${j.demarcation.x}, ${j.demarcation.y})`
+      : 'NOT FOUND';
+    setStatus('pass-b-status', `✓ Scale: ${scale} · Demarc: ${demarc}`, 'ok');
+  } catch(e) {
+    setStatus('pass-b-status', 'Error: ' + e.message, 'err');
+    setOutput('pass-b-output', e.message);
+  }
+}
+
+// ── Pass C ───────────────────────────────────────────────────────────
+async function runPassC() {
+  if (!projectId) { alert('Create/confirm project first (Step 0)'); return; }
+  if (!selectedDevice) { alert('Select a device type from the pills above'); return; }
+  if (!passBResult)    { alert('Run Pass B first'); return; }
+
+  const pg = evalPage || 28;
+  setStatus('pass-c-status', `Rendering page ${pg}…`, 'running');
+
+  const b64 = await getPageBase64(pg);
+  setStatus('pass-c-status', `Calling /api/pass-c-detect…`, 'running');
+
+  // Hide previous results
+  document.getElementById('results-summary').style.display = 'none';
+  document.getElementById('tia-table').style.display = 'none';
+  document.getElementById('annotated-img').style.display = 'none';
+
+  const payload = {
+    project_id:         projectId,
+    page_number:        pg,
+    image_base64:       b64,
+    device_id:          selectedDevice.id,
+    device_name:        selectedDevice.name,
+    device_description: selectedDevice.description,
+    demarcation:        passBResult.demarcation,
+    scale:              passBResult.scale
+  };
+
+  try {
+    const r = await fetch(`${base()}/api/pass-c-detect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const j = await r.json();
+    setOutput('pass-c-output', j);
+
+    const count    = j.total_count ?? (j.devices?.length ?? 0);
+    const devices  = j.devices ?? [];
+    const longest  = j.longest_run ?? null;
+    const tiaViolations = devices.filter(d => (d.path_length_ft ?? 0) > 295);
+
+    // Count display
+    document.getElementById('device-count').textContent = count;
+    const badgeContainer = document.getElementById('tia-badge-container');
+    badgeContainer.innerHTML = tiaViolations.length > 0
+      ? `<span class="tia-badge">⚠ ${tiaViolations.length} TIA &gt;295 ft</span>` : '';
+
+    if (longest) {
+      document.getElementById('longest-run-label').textContent =
+        `Longest run: device ${longest.device_id} — ${longest.path_length_ft ?? (longest.path_length_normalized + ' norm')}`;
+    }
+    document.getElementById('results-summary').style.display = 'block';
+
+    // Annotated image
+    if (j.annotated_image_base64) {
+      const img = document.getElementById('annotated-img');
+      img.src = 'data:image/jpeg;base64,' + j.annotated_image_base64;
+      img.style.display = 'block';
+    }
+
+    // TIA table
+    if (tiaViolations.length > 0) {
+      const tbody = document.getElementById('tia-tbody');
+      tbody.innerHTML = '';
+      tiaViolations.forEach((d, i) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${i+1}</td>
+          <td>${d.id}</td>
+          <td>${d.label || d.location_label || '—'}</td>
+          <td style="color:#f07a7a; font-weight:bold;">${Math.round(d.path_length_ft ?? 0)} ft</td>
+          <td>${d.confidence}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+      document.getElementById('tia-table').style.display = 'table';
+    }
+
+    setStatus('pass-c-status',
+      `✓ ${count} devices found · ${tiaViolations.length} TIA violations`, 'ok');
+
+  } catch(e) {
+    setStatus('pass-c-status', 'Error: ' + e.message, 'err');
+    setOutput('pass-c-output', e.message);
+  }
+}
+
+// ── Summary ──────────────────────────────────────────────────────────
+async function fetchSummary() {
+  if (!projectId) { alert('Need a project ID'); return; }
+  setStatus('summary-status', 'Fetching…', 'running');
+  try {
+    const r = await fetch(`${base()}/api/takeoff-summary?project_id=${projectId}`);
+    const j = await r.json();
+    setOutput('summary-output', j);
+    setStatus('summary-status', '✓ Done', 'ok');
+  } catch(e) {
+    setStatus('summary-status', 'Error: ' + e.message, 'err');
+    setOutput('summary-output', e.message);
+  }
+}
+
+// ── Init defaults ────────────────────────────────────────────────────
+document.getElementById('legend-page-label').textContent = `Page ${legendPage} (default)`;
+document.getElementById('eval-page-label').textContent   = `Page ${evalPage} (default)`;
+</script>
+</body>
+</html>
