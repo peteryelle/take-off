@@ -18,7 +18,7 @@ export async function makeStrips(base64Image, n = 6) {
 
   for (let i = 0; i < n; i++) {
     const top    = i * stripH;
-    const height = i === n - 1 ? H - top : stripH;   // last strip gets remainder
+    const height = i === n - 1 ? H - top : stripH;
 
     const stripBuf = await sharp(buffer)
       .extract({ left: 0, top, width: W, height })
@@ -26,16 +26,72 @@ export async function makeStrips(base64Image, n = 6) {
       .toBuffer();
 
     strips.push({
-      index:       i,
-      base64:      stripBuf.toString("base64"),
+      index:        i,
+      base64:       stripBuf.toString("base64"),
       y_norm_start: top / H,
-      y_norm_end:  (top + height) / H,
-      width:       W,
+      y_norm_end:   (top + height) / H,
+      width:        W,
       height,
-      full_height: H
+      full_height:  H
     });
   }
   return strips;
+}
+
+/**
+ * Slice a base64 image into vertical column strips using x-boundary fractions.
+ * boundaries = [{ group, x_start, x_end }]
+ * Returns array of { index, base64, group, x_start, x_end, width, height }
+ */
+export async function makeColumnStrips(base64Image, boundaries) {
+  const buffer = Buffer.from(base64Image, "base64");
+  const meta   = await sharp(buffer).metadata();
+  const W      = meta.width;
+  const H      = meta.height;
+  const strips = [];
+
+  for (let i = 0; i < boundaries.length; i++) {
+    const { group, x_start, x_end } = boundaries[i];
+    const left  = Math.max(0, Math.round(x_start * W));
+    const right = Math.min(W, Math.round(x_end * W));
+    const width = right - left;
+
+    if (width < 10) continue; // skip degenerate slices
+
+    const cropBuf = await sharp(buffer)
+      .extract({ left, top: 0, width, height: H })
+      .jpeg({ quality: 90 })
+      .toBuffer();
+
+    strips.push({
+      index:   i,
+      base64:  cropBuf.toString("base64"),
+      group,
+      x_start,
+      x_end,
+      width,
+      height:  H
+    });
+  }
+  return strips;
+}
+
+/**
+ * Resize a base64 image by scale factor. Used for discovery pass.
+ * Returns base64 JPEG string.
+ */
+export async function resizeToBase64(base64Image, scale = 0.3) {
+  const buffer = Buffer.from(base64Image, "base64");
+  const meta   = await sharp(buffer).metadata();
+  const newW   = Math.max(1, Math.round(meta.width  * scale));
+  const newH   = Math.max(1, Math.round(meta.height * scale));
+
+  const resized = await sharp(buffer)
+    .resize(newW, newH)
+    .jpeg({ quality: 85 })
+    .toBuffer();
+
+  return resized.toString("base64");
 }
 
 /**
@@ -54,7 +110,9 @@ export function dedup(detections, threshold = 0.02) {
   const kept    = [];
   const removed = [];
   for (const d of detections) {
-    const isDupe = kept.some(k => Math.abs(d.x - k.x) < threshold && Math.abs(d.y - k.y) < threshold);
+    const isDupe = kept.some(k =>
+      Math.abs(d.x - k.x) < threshold && Math.abs(d.y - k.y) < threshold
+    );
     isDupe ? removed.push(d) : kept.push(d);
   }
   return { kept, removed };
@@ -70,7 +128,6 @@ export async function annotate(base64Image, detections) {
   const W      = meta.width;
   const H      = meta.height;
 
-  // Build SVG overlay
   const circles = detections.map((d, i) => {
     const cx = Math.round(d.x * W);
     const cy = Math.round(d.y * H);
@@ -99,17 +156,18 @@ export async function annotate(base64Image, detections) {
  * Returns { path_length_norm, path_length_ft } or nulls if demarc unknown.
  */
 export function calcPath(device, demarc, imageW, imageH, scaleIn, scaleFt, dpi = 150) {
-  if (demarc?.x == null || demarc?.y == null) return { path_length_norm: null, path_length_ft: null };
+  if (demarc?.x == null || demarc?.y == null)
+    return { path_length_norm: null, path_length_ft: null };
 
   const diag   = Math.sqrt(imageW ** 2 + imageH ** 2);
   const dx     = (device.x - demarc.x) * imageW;
   const dy     = (device.y - demarc.y) * imageH;
   const px     = Math.sqrt(dx ** 2 + dy ** 2);
-  const ROUTE  = 1.40;                                    // routing factor
+  const ROUTE  = 1.40;
 
-  const norm   = Math.round((px * ROUTE / diag) * 1000) / 1000;
+  const norm    = Math.round((px * ROUTE / diag) * 1000) / 1000;
   const ftPerPx = scaleIn > 0 ? (1 / dpi) * (scaleFt / scaleIn) : null;
-  const ft     = ftPerPx ? Math.round(px * ROUTE * ftPerPx) : null;
+  const ft      = ftPerPx ? Math.round(px * ROUTE * ftPerPx) : null;
 
   return { path_length_norm: norm, path_length_ft: ft };
 }
