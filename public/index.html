@@ -189,7 +189,7 @@
   <input type="text" id="project-id" placeholder="e.g. 42">
   <label>Project name (used only when auto-creating)</label>
   <input type="text" id="project-name" value="Test Project — Page 28">
-  <button class="info" onclick="createProject()">Create / Confirm Project</button>
+  <button class="info" id="btn-create-project">Create / Confirm Project</button>
   <div class="status" id="project-status">—</div>
 </div>
 
@@ -214,7 +214,7 @@
   <div class="status" id="legend-image-status">No images loaded</div>
   <div id="legend-previews" style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;"></div>
   <br>
-  <button onclick="runPassA()" style="margin-top:10px;">&#9654; Run Pass A on all columns</button>
+  <button id="btn-pass-a" style="margin-top:10px;">&#9654; Run Pass A on all columns</button>
   <div class="status" id="pass-a-status">—</div>
   <div class="output-area" id="pass-a-output">Output will appear here…</div>
   <div id="device-list"></div>
@@ -255,7 +255,7 @@
         <input type="text" id="scale-real-unit" value="ft" style="width:50px;">
       </div>
       <div style="padding-top:14px;">
-        <button class="info" onclick="applyScaleOverride()">✓ Apply</button>
+        <button class="info" id="btn-scale-apply">✓ Apply</button>
       </div>
     </div>
     <div style="font-size:10px; color:#555; margin-top:4px;">
@@ -273,7 +273,7 @@
     Scans the page against all legend devices — returns only what is actually on this sheet.
     Run after Pass B. Results auto-populate Pass C device pills.
   </div>
-  <button onclick="runPassB2()">&#9654; Scan for devices on this page</button>
+  <button id="btn-pass-b2">&#9654; Scan for devices on this page</button>
   <div class="status" id="pass-b2-status">—</div>
   <div class="output-area" id="pass-b2-output">Output will appear here…</div>
 </div>
@@ -282,10 +282,10 @@
 <div class="section">
   <div class="section-title">4 · Pass C — Device Detection + Distances</div>
   <div style="font-size:11px; color:#666; margin-bottom:6px;">Select a device type then run Pass C:</div>
-  <button class="info" onclick="loadDevicesFromSupabase()">↓ Load devices from Supabase</button>
+  <button class="info" id="btn-load-devices">↓ Load devices from Supabase</button>
   <div class="status" id="load-devices-status">—</div>
   <div id="device-pills" style="margin-bottom:10px; margin-top:8px;">(click Load devices above)</div>
-  <button onclick="runPassC()">▶ Run Pass C</button>
+  <button id="btn-pass-c">▶ Run Pass C</button>
   <div class="status" id="pass-c-status">—</div>
 
   <hr class="divider">
@@ -315,7 +315,7 @@
 <!-- ── STEP 5: SUMMARY ──────────────────────────────────────────── -->
 <div class="section">
   <div class="section-title">5 · Supabase Summary</div>
-  <button class="info" onclick="fetchSummary()">▶ Fetch takeoff-summary</button>
+  <button class="info" id="btn-summary">▶ Fetch takeoff-summary</button>
   <div class="status" id="summary-status">—</div>
   <div class="output-area" id="summary-output">Output will appear here…</div>
 </div>
@@ -927,17 +927,27 @@ async function fetchSummary() {
 
 // ── Init defaults ────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', function() {
+  // File inputs
   const pdfInput = document.getElementById('pdf-file');
   if (pdfInput) pdfInput.addEventListener('change', function() { loadPDF(this); });
 
   const legendInput = document.getElementById('legend-image-files');
   if (legendInput) legendInput.addEventListener('change', function() { loadLegendImages(this); });
 
+  // Buttons
+  const wire = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener('click', fn); };
+  wire('btn-create-project', createProject);
+  wire('btn-pass-a',         runPassA);
+  wire('btn-pass-b',         runPassB);
+  wire('btn-pass-b2',        runPassB2);
+  wire('btn-load-devices',   loadDevicesFromSupabase);
+  wire('btn-pass-c',         runPassC);
+  wire('btn-summary',        fetchSummary);
+  wire('btn-scale-apply',    () => applyScaleOverride(false));
+
+  // Init label
   const evalLbl = document.getElementById('eval-page-label');
   if (evalLbl) evalLbl.textContent = `Page ${evalPage} (default — change by clicking thumbnail)`;
-
-  const projBtn = document.querySelector('button[onclick="createProject()"]');
-  // createProject uses onclick so no listener needed — just confirm DOM is ready
 });
 </script>
 </body>
