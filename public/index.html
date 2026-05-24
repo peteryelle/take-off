@@ -822,14 +822,29 @@ async function enrichPillsWithDBIds(detectedDevices) {
     const r = await fetch(`${base()}/api/takeoff-summary?project_id=${projectId}`);
     const j = await r.json();
     const dbDevices = j.device_types ?? [];
-    const dbMap = {};
-    dbDevices.forEach(d => { dbMap[d.legend_id] = d; });
+
+    // Build lookup maps by both legend_id and name (lowercased for fuzzy match)
+    const byLegendId = {};
+    const byName = {};
+    dbDevices.forEach(d => {
+      if (d.legend_id) byLegendId[d.legend_id] = d;
+      if (d.name) byName[d.name.toLowerCase().trim()] = d;
+    });
 
     return detectedDevices.map(d => {
-      const db = dbMap[d.legend_id];
-      return db ? { ...d, id: db.id, description: db.description ?? d.description } : d;
+      // Try legend_id first, then name match
+      const db = byLegendId[d.legend_id]
+        ?? byName[d.name?.toLowerCase().trim()]
+        ?? null;
+      if (db) {
+        console.log('Enriched', d.legend_id, d.name, '→ db.id:', db.id);
+        return { ...d, id: db.id, legend_id: db.legend_id, description: db.description ?? d.description };
+      }
+      console.warn('No DB match for', d.legend_id, d.name);
+      return d;
     });
   } catch(e) {
+    console.error('enrichPillsWithDBIds error:', e);
     return detectedDevices;
   }
 }
@@ -891,9 +906,10 @@ async function runPassC() {
     document.getElementById('results-summary').style.display = 'block';
 
     // Annotated image
-    if (j.annotated_image_base64) {
+    const annotatedB64 = j.annotated_image_base64 ?? j.annotated_image;
+    if (annotatedB64) {
       const img = document.getElementById('annotated-img');
-      img.src = 'data:image/jpeg;base64,' + j.annotated_image_base64;
+      img.src = 'data:image/jpeg;base64,' + annotatedB64;
       img.style.display = 'block';
     }
 
