@@ -65,9 +65,25 @@ If demarcation is referenced but off-sheet, set found=false and type=off_sheet.`
         ]
       }]
     });
-#    result = JSON.parse(msg.content[0].text);
+      let result;
+  try {
+    const msg = await anthropic.messages.create({
+      model:      "claude-sonnet-4-5",
+      max_tokens: 1024,
+      system:     SYSTEM_PROMPT,
+      messages: [{
+        role: "user",
+        content: [
+          { type: "image", source: { type: "base64", media_type: "image/jpeg", data: page_image_base64 } },
+          { type: "text", text: prompt }
+        ]
+      }]
+    });
     const raw = msg.content[0].text.replace(/```json|```/g, "").trim();
-    const result = JSON.parse(raw);
+    result = JSON.parse(raw);
+  } catch (e) {
+    return err(`Anthropic error: ${e.message}`, 502);
+  }
   } catch (e) {
     return err(`Anthropic error: ${e.message}`, 502);
   }
