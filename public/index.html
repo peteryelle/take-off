@@ -230,6 +230,39 @@
   <button onclick="runPassB()">▶ Run Pass B</button>
   <div class="status" id="pass-b-status">—</div>
   <div class="output-area" id="pass-b-output">Output will appear here…</div>
+
+  <div id="scale-override-section" style="margin-top:12px; display:none;">
+    <hr class="divider">
+    <div style="font-size:11px; color:#888; margin-bottom:6px;">
+      Scale — edit if Claude misread or leave as detected:
+    </div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <div>
+        <label>Paper value</label>
+        <input type="number" id="scale-paper-val" value="0.125" step="0.0001" style="width:80px;">
+      </div>
+      <div>
+        <label>Paper unit</label>
+        <input type="text" id="scale-paper-unit" value="in" style="width:50px;">
+      </div>
+      <div style="color:#666; padding-top:14px;">=</div>
+      <div>
+        <label>Real value</label>
+        <input type="number" id="scale-real-val" value="1" step="0.5" style="width:80px;">
+      </div>
+      <div>
+        <label>Real unit</label>
+        <input type="text" id="scale-real-unit" value="ft" style="width:50px;">
+      </div>
+      <div style="padding-top:14px;">
+        <button class="info" onclick="applyScaleOverride()">✓ Apply</button>
+      </div>
+    </div>
+    <div style="font-size:10px; color:#555; margin-top:4px;">
+      1/8" = 1'-0" → paper value: 0.125, paper unit: in, real value: 1, real unit: ft
+    </div>
+    <div class="status" id="scale-override-status">—</div>
+  </div>
 </div>
 
 <!-- ── STEP 4: PASS C ───────────────────────────────────────────── -->
@@ -624,9 +657,57 @@ async function runPassB() {
       ? `CENTER default (0.5, 0.5)`
       : `${j.demarcation?.label ?? 'found'} @ (${j.demarcation?.x}, ${j.demarcation?.y})`;
     setStatus('pass-b-status', `✓ Scale: ${scale} · Demarc: ${demarc}`, 'ok');
+
+    // Always show scale section — pre-fill if Claude found it
+    document.getElementById('scale-override-section').style.display = 'block';
+    if (j.scale && j.scale.type !== 'none') {
+      const s = j.scale.text ?? j.scale.graphic ?? null;
+      if (s) {
+        if (s.paper_value) document.getElementById('scale-paper-val').value  = s.paper_value;
+        if (s.paper_unit)  document.getElementById('scale-paper-unit').value = s.paper_unit;
+        if (s.real_value)  document.getElementById('scale-real-val').value   = s.real_value;
+        if (s.real_unit)   document.getElementById('scale-real-unit').value  = s.real_unit;
+      }
+    }
+    // Auto-apply current values immediately
+    applyScaleOverride(true);
+
   } catch(e) {
     setStatus('pass-b-status', 'Error: ' + e.message, 'err');
     setOutput('pass-b-output', e.message);
+    // Still show scale input so user can enter manually
+    document.getElementById('scale-override-section').style.display = 'block';
+  }
+}
+
+function applyScaleOverride(silent = false) {
+  const paperVal  = parseFloat(document.getElementById('scale-paper-val').value);
+  const paperUnit = document.getElementById('scale-paper-unit').value.trim();
+  const realVal   = parseFloat(document.getElementById('scale-real-val').value);
+  const realUnit  = document.getElementById('scale-real-unit').value.trim();
+
+  if (isNaN(paperVal) || isNaN(realVal) || !paperUnit || !realUnit) {
+    setStatus('scale-override-status', 'Enter valid scale values', 'err');
+    return;
+  }
+
+  // Inject into passBResult so Pass C picks it up
+  if (!passBResult) passBResult = {};
+  passBResult.scale = {
+    type:          'text',
+    display_label: `${paperVal}${paperUnit} = ${realVal} ${realUnit}`,
+    confidence:    'high',
+    text: {
+      paper_value: paperVal,
+      paper_unit:  paperUnit,
+      real_value:  realVal,
+      real_unit:   realUnit
+    }
+  };
+
+  if (!silent) {
+    setStatus('scale-override-status',
+      `✓ Scale set: ${paperVal}${paperUnit} = ${realVal} ${realUnit}`, 'ok');
   }
 }
 
