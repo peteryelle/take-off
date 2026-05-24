@@ -19,9 +19,19 @@ export default async function handler(req) {
   const supabase  = getSupabase();
   const anthropic = getAnthropic();
 
+  // ── Detect image type ─────────────────────────────────────────
+  function detectMediaType(b64) {
+    if (b64.startsWith("/9j/"))  return "image/jpeg";
+    if (b64.startsWith("iVBOR")) return "image/png";
+    if (b64.startsWith("UklG"))  return "image/webp";
+    return "image/jpeg";
+  }
+  const mediaType = detectMediaType(page_image_base64);
+
   // ── Call Anthropic vision ─────────────────────────────────────
-  const prompt = `Analyze this engineering drawing page.
-Return JSON matching this schema exactly — no other text:
+  const prompt = `Analyze this engineering drawing page and return ONLY valid JSON with no markdown, no code fences, no extra text.
+
+Return exactly this structure:
 {
   "pass": "scale_and_demarc",
   "sheet_title": "string or null",
@@ -31,27 +41,31 @@ Return JSON matching this schema exactly — no other text:
   "level": "string or null",
   "area": "string or null",
   "scale": {
-    "type": "graphic|text|both|none",
-    "text": { "paper_value": 0.0625, "paper_unit": "in", "real_value": 1, "real_unit": "ft" },
-    "display_label": "1/16\\" = 1\\'-0\\"",
+    "type": "text|graphic|both|none",
+    "text": { "paper_value": 0.125, "paper_unit": "in", "real_value": 1, "real_unit": "ft" },
+    "display_label": "1/8\\" = 1\\'-0\\"",
     "confidence": "high|medium|low",
     "notes": ""
   },
   "demarcation": {
-    "found": true,
-    "label": "string",
+    "found": false,
+    "label": "string or null",
     "type": "MDF|IDF|NID|handhole|panel|backboard|off_sheet|other",
-    "x": 0.55,
-    "y": 0.67,
-    "description": "string",
-    "confidence": "high|medium|low"
+    "x": null,
+    "y": null,
+    "description": "string or null",
+    "confidence": "low"
   },
   "warnings": []
 }
-Coordinates x,y are normalized 0-1 (x=0 left, x=1 right, y=0 top, y=1 bottom).
-If demarcation is referenced but off-sheet, set found=false and type=off_sheet.`;
 
-  let result;
+Rules:
+- Coordinates x,y are normalized 0-1 (x=0 left, x=1 right, y=0 top, y=1 bottom)
+- If scale not found set type to "none"
+- If demarcation is on a different sheet set found=false and type="off_sheet"
+- Return ONLY the JSON object, nothing else`;
+
+  let msgText;
   try {
     const msg = await anthropic.messages.create({
       model:      "claude-sonnet-4-5",
@@ -60,32 +74,23 @@ If demarcation is referenced but off-sheet, set found=false and type=off_sheet.`
       messages: [{
         role: "user",
         content: [
-          { type: "image", source: { type: "base64", media_type: "image/jpeg", data: page_image_base64 } },
+          { type: "image", source: { type: "base64", media_type: mediaType, data: page_image_base64 } },
           { type: "text", text: prompt }
         ]
       }]
     });
-      let result;
-  try {
-    const msg = await anthropic.messages.create({
-      model:      "claude-sonnet-4-5",
-      max_tokens: 1024,
-      system:     SYSTEM_PROMPT,
-      messages: [{
-        role: "user",
-        content: [
-          { type: "image", source: { type: "base64", media_type: "image/jpeg", data: page_image_base64 } },
-          { type: "text", text: prompt }
-        ]
-      }]
-    });
-    const raw = msg.content[0].text.replace(/```json|```/g, "").trim();
-    result = JSON.parse(raw);
+    msgText = msg.content[0].text;
   } catch (e) {
     return err(`Anthropic error: ${e.message}`, 502);
   }
+
+  // ── Parse response ────────────────────────────────────────────
+  let result;
+  try {
+    const raw = msgText.replace(/```json|```/g, "").trim();
+    result = JSON.parse(raw);
   } catch (e) {
-    return err(`Anthropic error: ${e.message}`, 502);
+    return err(`JSON parse error: ${e.message} — raw: ${msgText.slice(0, 200)}`, 502);
   }
 
   // ── Upsert page record ────────────────────────────────────────
@@ -97,10 +102,10 @@ If demarcation is referenced but off-sheet, set found=false and type=off_sheet.`
     building:        result.building        ?? null,
     level:           result.level           ?? null,
     area:            result.area            ?? null,
-    scale_label:     result.scale?.display_label ?? null,
-    scale_paper_in:  result.scale?.text?.paper_value ?? null,
-    scale_real_ft:   result.scale?.text?.real_value  ?? null,
-    demarc_label:    result.demarcation?.label        ?? null,
+    scale_label:     result.scale?.display_label       ?? null,
+    scale_paper_in:  result.scale?.text?.paper_value   ?? null,
+    scale_real_ft:   result.scale?.text?.real_value    ?? null,
+    demarc_label:    result.demarcation?.label         ?? null,
     demarc_type:     result.demarcation?.found ? result.demarcation.type : "off_sheet",
     demarc_x:        result.demarcation?.found ? result.demarcation.x   : null,
     demarc_y:        result.demarcation?.found ? result.demarcation.y   : null,
