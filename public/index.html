@@ -469,6 +469,7 @@ function setEvalPage(n) {
 
 async function prerenderPage(pageNum, scale=2.0) {
   if (!pdfDoc || !pageNum) return;
+  if (pageNum > pdfDoc.numPages) return;  // guard against invalid page
   if (pages[pageNum]) return;       // already rendered
   const page = await pdfDoc.getPage(pageNum);
   const vp   = page.getViewport({ scale });
@@ -801,7 +802,8 @@ async function loadDevicesFromSupabase() {
   if (!projectId) { alert('Confirm project ID first (Step 0)'); return; }
   setStatus('load-devices-status', 'Fetching devices from Supabase…', 'running');
   try {
-    const r = await fetch(`${base()}/api/takeoff-summary?project_id=${projectId}`);
+    const r = await fetch(`${base()}/api/takeoff-summary?project_id=${projectId}&fields=slim`);
+    if (!r.ok) { setStatus('load-devices-status', 'HTTP ' + r.status, 'err'); return; }
     const j = await r.json();
     const devices = j.device_types ?? [];
     if (!devices.length) {
@@ -810,7 +812,7 @@ async function loadDevicesFromSupabase() {
     }
     passAResult = { devices };
     renderDevicePills(devices);
-    setStatus('load-devices-status', `✓ ${devices.length} devices loaded`, 'ok');
+    setStatus('load-devices-status', '✓ ' + devices.length + ' devices loaded', 'ok');
   } catch(e) {
     setStatus('load-devices-status', 'Error: ' + e.message, 'err');
   }

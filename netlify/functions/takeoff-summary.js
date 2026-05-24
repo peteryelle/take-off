@@ -18,8 +18,10 @@ export default async function handler(req) {
   // Run all queries in parallel
   const [devicesRes, pagesRes, rollupRes, pageSummaryRes, violationsRes, flaggedRes] =
     await Promise.all([
+      // Use slim fields by default to keep response small
+      // Pass C loads full description directly from DB when needed
       supabase.from("device_types")
-        .select("id, legend_id, name, description, discipline, category, notes")
+        .select("id, legend_id, name, discipline, category")
         .eq("project_id", project_id)
         .order("legend_id"),
       supabase.from("pages")
