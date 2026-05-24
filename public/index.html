@@ -450,9 +450,14 @@ async function runPassA() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ project_id: projectId, page_number: pg, page_image_base64: b64 })
     });
-    const j = await r.json();
+    const rawText = await r.text();
+    setOutput('pass-a-output', `HTTP ${r.status}\n\n${rawText}`);
+    let j;
+    try { j = JSON.parse(rawText); } catch(e) {
+      setStatus('pass-a-status', `HTTP ${r.status} — non-JSON response (see output box)`, 'err');
+      return;
+    }
     passAResult = j;
-    setOutput('pass-a-output', j);
 
     if (j.devices && j.devices.length > 0) {
       setStatus('pass-a-status', `✓ ${j.devices.length} device types extracted`, 'ok');
