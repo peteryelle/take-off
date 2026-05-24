@@ -416,7 +416,7 @@ function setEvalPage(n) {
   document.getElementById('thumb-popup')?.remove();
 }
 
-async function prerenderPage(pageNum, scale=2.0) {
+async function prerenderPage(pageNum, scale=1.2) {
   if (!pdfDoc || !pageNum) return;
   if (pages[pageNum]) return;       // already rendered
   const page = await pdfDoc.getPage(pageNum);
