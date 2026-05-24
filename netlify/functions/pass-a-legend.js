@@ -53,6 +53,16 @@ Return ONLY valid JSON — no markdown, no extra text:
 }
 If no devices found: { "legend_found": false, "devices": [], "confidence": "low", "warnings": ["No devices found"] }`;
 
+  // Auto-detect image type from base64 prefix
+  function detectMediaType(b64) {
+    if (b64.startsWith("/9j/"))  return "image/jpeg";
+    if (b64.startsWith("iVBOR")) return "image/png";
+    if (b64.startsWith("UklG"))  return "image/webp";
+    if (b64.startsWith("R0lG"))  return "image/gif";
+    return "image/png"; // safe default for Mac screenshots
+  }
+  const mediaType = detectMediaType(page_image_base64);
+
   let result;
   try {
     const msg = await anthropic.messages.create({
@@ -62,7 +72,7 @@ If no devices found: { "legend_found": false, "devices": [], "confidence": "low"
       messages: [{
         role: "user",
         content: [
-          { type: "image", source: { type: "base64", media_type: "image/jpeg", data: page_image_base64 } },
+          { type: "image", source: { type: "base64", media_type: mediaType, data: page_image_base64 } },
           { type: "text", text: prompt }
         ]
       }]
