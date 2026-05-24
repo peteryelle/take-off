@@ -265,6 +265,19 @@
   </div>
 </div>
 
+
+<!-- ── STEP 3b: PASS B2 — DEVICE PRE-SCAN ─────────────────────── -->
+<div class="section">
+  <div class="section-title">3b · Pass B2 — Device Pre-Scan</div>
+  <div style="font-size:11px; color:#666; margin-bottom:8px;">
+    Scans the page against all legend devices — returns only what is actually on this sheet.
+    Run after Pass B. Results auto-populate Pass C device pills.
+  </div>
+  <button onclick="runPassB2()">&#9654; Scan for devices on this page</button>
+  <div class="status" id="pass-b2-status">—</div>
+  <div class="output-area" id="pass-b2-output">Output will appear here…</div>
+</div>
+
 <!-- ── STEP 4: PASS C ───────────────────────────────────────────── -->
 <div class="section">
   <div class="section-title">4 · Pass C — Device Detection + Distances</div>
@@ -708,6 +721,81 @@ function applyScaleOverride(silent = false) {
   if (!silent) {
     setStatus('scale-override-status',
       `✓ Scale set: ${paperVal}${paperUnit} = ${realVal} ${realUnit}`, 'ok');
+  }
+}
+
+// ── Pass B2 — Device Pre-Scan ───────────────────────────────────────
+async function runPassB2() {
+  if (!projectId)     { alert('Confirm project first (Step 0)'); return; }
+  if (!passBResult?.page_id) { alert('Run Pass B first to get page_id'); return; }
+
+  const pg = evalPage || 1;
+  setStatus('pass-b2-status', `Rendering page ${pg} at low-res for pre-scan…`, 'running');
+  setOutput('pass-b2-output', 'Scanning…');
+
+  // Reuse low-res render (same 0.6x as Pass B)
+  const page = await pdfDoc.getPage(pg);
+  const vp   = page.getViewport({ scale: 0.6 });
+  const cv   = document.createElement('canvas');
+  cv.width   = vp.width;
+  cv.height  = vp.height;
+  await page.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+  const b64  = cv.toDataURL('image/jpeg', 0.82).split(',')[1];
+  const kb   = Math.round(b64.length * 0.75 / 1024);
+
+  setStatus('pass-b2-status', `Calling /api/pass-b2-scan… (${kb} KB)`, 'running');
+
+  try {
+    const r = await fetch(`${base()}/api/pass-b2-scan`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: projectId,
+        page_id:    passBResult.page_id,
+        page_image_base64: b64
+      })
+    });
+    const rawText = await r.text();
+    let j;
+    try { j = JSON.parse(rawText); } catch(e) {
+      setStatus('pass-b2-status', `HTTP ${r.status} — non-JSON response`, 'err');
+      setOutput('pass-b2-output', rawText);
+      return;
+    }
+
+    setOutput('pass-b2-output', j);
+
+    if (j.devices_present?.length) {
+      // Auto-populate Pass C pills with confirmed devices
+      passAResult = { devices: j.devices_present };
+      renderDevicePills(j.devices_present);
+
+      const counts = j.devices_present.map(d =>
+        `${d.legend_id} ${d.name} (~${d.estimated_count})`
+      ).join(', ');
+      setStatus('pass-b2-status',
+        `✓ ${j.devices_present.length} device types found on this page — pills populated`, 'ok');
+      document.getElementById('pass-b2-output').textContent =
+        `Devices on this sheet:
+
+` +
+        j.devices_present.map(d =>
+          `${d.legend_id}  ${d.name}  — est. ${d.estimated_count ?? '?'} instances  [${d.confidence}]${d.notes ? '
+       ' + d.notes : ''}`
+        ).join('
+') +
+        (j.scan_notes ? `
+
+Scan notes: ${j.scan_notes}` : '') +
+        (j.warnings?.length ? `
+
+Warnings: ${j.warnings.join('; ')}` : '');
+    } else {
+      setStatus('pass-b2-status', 'No devices detected on this page', 'err');
+    }
+  } catch(e) {
+    setStatus('pass-b2-status', 'Error: ' + e.message, 'err');
+    setOutput('pass-b2-output', e.message);
   }
 }
 
