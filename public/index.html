@@ -602,16 +602,27 @@ async function runPassB() {
     const r = await fetch(`${base()}/api/pass-b-page`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ project_id: projectId, page_number: pg, page_image_base64: b64 })
+      body: JSON.stringify({ project_id: projectId, pdf_page_number: pg, page_image_base64: b64 })
     });
     const j = await r.json();
+
+    // If demarc not found, default to center of image
+    if (j.demarcation && !j.demarcation.found) {
+      j.demarcation.x      = 0.5;
+      j.demarcation.y      = 0.5;
+      j.demarcation.source = 'default_center';
+      j.demarcation.label  = 'CENTER (demarc on separate sheet — defaulted to image center)';
+      j.warnings = j.warnings ?? [];
+      j.warnings.push('Demarcation not found on this sheet — defaulted to image center (0.5, 0.5). Update when demarc sheet is identified.');
+    }
+
     passBResult = j;
     setOutput('pass-b-output', j);
 
-    const scale  = j.scale?.display_label  || 'unknown';
-    const demarc = j.demarcation?.found
-      ? `${j.demarcation.label} @ (${j.demarcation.x}, ${j.demarcation.y})`
-      : 'NOT FOUND';
+    const scale  = j.scale?.display_label || 'unknown';
+    const demarc = j.demarcation?.found === false
+      ? `CENTER default (0.5, 0.5)`
+      : `${j.demarcation?.label ?? 'found'} @ (${j.demarcation?.x}, ${j.demarcation?.y})`;
     setStatus('pass-b-status', `✓ Scale: ${scale} · Demarc: ${demarc}`, 'ok');
   } catch(e) {
     setStatus('pass-b-status', 'Error: ' + e.message, 'err');
