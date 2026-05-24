@@ -235,8 +235,10 @@
 <!-- ── STEP 4: PASS C ───────────────────────────────────────────── -->
 <div class="section">
   <div class="section-title">4 · Pass C — Device Detection + Distances</div>
-  <div style="font-size:11px; color:#666; margin-bottom:6px;">Select device type from Pass A results:</div>
-  <div id="device-pills" style="margin-bottom:10px;">(run Pass A first)</div>
+  <div style="font-size:11px; color:#666; margin-bottom:6px;">Select a device type then run Pass C:</div>
+  <button class="info" onclick="loadDevicesFromSupabase()">↓ Load devices from Supabase</button>
+  <div class="status" id="load-devices-status">—</div>
+  <div id="device-pills" style="margin-bottom:10px; margin-top:8px;">(click Load devices above)</div>
   <button onclick="runPassC()">▶ Run Pass C</button>
   <div class="status" id="pass-c-status">—</div>
 
@@ -608,11 +610,34 @@ async function runPassB() {
   }
 }
 
+// ── Load devices from Supabase ──────────────────────────────────────
+async function loadDevicesFromSupabase() {
+  if (!projectId) { alert('Confirm project ID first (Step 0)'); return; }
+  setStatus('load-devices-status', 'Fetching devices from Supabase…', 'running');
+  try {
+    const r = await fetch(`${base()}/api/takeoff-summary?project_id=${projectId}`);
+    const j = await r.json();
+
+    // takeoff-summary returns devices array or device_types
+    const devices = j.device_types ?? j.devices ?? [];
+    if (!devices.length) {
+      setStatus('load-devices-status', 'No devices found for this project — run import-legend.js first', 'err');
+      return;
+    }
+
+    passAResult = { devices };
+    renderDevicePills(devices);
+    setStatus('load-devices-status', `✓ ${devices.length} devices loaded`, 'ok');
+  } catch(e) {
+    setStatus('load-devices-status', 'Error: ' + e.message, 'err');
+  }
+}
+
 // ── Pass C ───────────────────────────────────────────────────────────
 async function runPassC() {
   if (!projectId) { alert('Create/confirm project first (Step 0)'); return; }
-  if (!selectedDevice) { alert('Select a device type from the pills above'); return; }
-  if (!passBResult)    { alert('Run Pass B first'); return; }
+  if (!selectedDevice) { alert('Select a device type from the pills (click Load devices from Supabase first)'); return; }
+  if (!passBResult)    { alert('Run Pass B first to get scale and demarcation'); return; }
 
   const pg = evalPage || 28;
   setStatus('pass-c-status', `Rendering page ${pg}…`, 'running');
