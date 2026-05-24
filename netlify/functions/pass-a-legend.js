@@ -49,18 +49,20 @@ export default async function handler(req) {
   }
 
   const discoveryPrompt = `This is a legend page from an engineering drawing.
-Identify every major section group or header visible (examples: "GENERAL SYMBOL", "DIV 27 LEGEND", "DIV 28 LEGEND", "DATA/COMMUNICATION", "SECURITY ACCESS").
-For each group, estimate the horizontal x-position boundaries as fractions of the total image width.
+Identify every major section group or header text visible anywhere on this page.
+Use the exact text you see in the image — do not use assumed or example names.
+For each group found, estimate the horizontal x-position boundaries as fractions of the total image width.
   x_start = 0.0 means the left edge of the image.
   x_end   = 1.0 means the right edge of the image.
-Groups should be non-overlapping and together cover the full width (0.0 to 1.0).
+Groups should be non-overlapping and together span the full width (0.0 to 1.0).
+If there are no clear section headers, treat the entire image as one group called "LEGEND".
 
 Return ONLY valid JSON — no other text, no markdown fences:
 {
   "groups": [
-    { "group": "GENERAL SYMBOL", "x_start": 0.0,  "x_end": 0.32 },
-    { "group": "DIV 27 LEGEND",  "x_start": 0.32, "x_end": 0.65 },
-    { "group": "DIV 28 LEGEND",  "x_start": 0.65, "x_end": 1.0  }
+    { "group": "<exact header text from image>", "x_start": 0.0,  "x_end": 0.33 },
+    { "group": "<exact header text from image>", "x_start": 0.33, "x_end": 0.66 },
+    { "group": "<exact header text from image>", "x_start": 0.66, "x_end": 1.0  }
   ]
 }`;
 
