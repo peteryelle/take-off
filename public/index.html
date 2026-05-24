@@ -766,9 +766,10 @@ async function runPassB2() {
     setOutput('pass-b2-output', j);
 
     if (j.devices_present?.length) {
-      // Auto-populate Pass C pills with confirmed devices
-      passAResult = { devices: j.devices_present };
-      renderDevicePills(j.devices_present);
+      // Enrich detected devices with real Supabase IDs then populate pills
+      const enriched = await enrichPillsWithDBIds(j.devices_present);
+      passAResult = { devices: enriched };
+      renderDevicePills(enriched);
 
       const counts = j.devices_present.map(d =>
         `${d.legend_id} ${d.name} (~${d.estimated_count})`
@@ -792,19 +793,34 @@ async function loadDevicesFromSupabase() {
   try {
     const r = await fetch(`${base()}/api/takeoff-summary?project_id=${projectId}`);
     const j = await r.json();
-
-    // takeoff-summary returns devices array or device_types
-    const devices = j.device_types ?? j.devices ?? [];
+    const devices = j.device_types ?? [];
     if (!devices.length) {
       setStatus('load-devices-status', 'No devices found for this project — run import-legend.js first', 'err');
       return;
     }
-
     passAResult = { devices };
     renderDevicePills(devices);
     setStatus('load-devices-status', `✓ ${devices.length} devices loaded`, 'ok');
   } catch(e) {
     setStatus('load-devices-status', 'Error: ' + e.message, 'err');
+  }
+}
+
+// ── Helper: enrich B2 pills with real Supabase device IDs ────────────
+async function enrichPillsWithDBIds(detectedDevices) {
+  try {
+    const r = await fetch(`${base()}/api/takeoff-summary?project_id=${projectId}`);
+    const j = await r.json();
+    const dbDevices = j.device_types ?? [];
+    const dbMap = {};
+    dbDevices.forEach(d => { dbMap[d.legend_id] = d; });
+
+    return detectedDevices.map(d => {
+      const db = dbMap[d.legend_id];
+      return db ? { ...d, id: db.id, description: db.description ?? d.description } : d;
+    });
+  } catch(e) {
+    return detectedDevices;
   }
 }
 
@@ -827,13 +843,15 @@ async function runPassC() {
 
   const payload = {
     project_id:         projectId,
-    page_number:        pg,
-    image_base64:       b64,
-    device_id:          selectedDevice.id,
-    device_name:        selectedDevice.name,
-    device_description: selectedDevice.description,
-    demarcation:        passBResult.demarcation,
-    scale:              passBResult.scale
+    page_id:            passBResult.page_id,
+    device_type_id:     selectedDevice.id,
+    page_image_base64:  b64,
+    demarc_override:    passBResult.demarcation?.found ? {
+      x:      passBResult.demarcation.x,
+      y:      passBResult.demarcation.y,
+      label:  passBResult.demarcation.label,
+      source: passBResult.demarcation.source ?? 'claude'
+    } : { x: 0.5, y: 0.5, label: 'CENTER', source: 'default_center' }
   };
 
   try {
