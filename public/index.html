@@ -196,7 +196,7 @@
 <!-- ── STEP 1: LOAD PDF ─────────────────────────────────────────── -->
 <div class="section">
   <div class="section-title">1 · Load PDF</div>
-  <input type="file" id="pdf-file" accept=".pdf" onchange="loadPDF(this)">
+  <input type="file" id="pdf-file" accept=".pdf">
   <div class="status" id="pdf-status">No file loaded</div>
   <div class="thumbnails" id="thumbnails"></div>
   <div style="margin-top:8px; font-size:11px; color:#555;">
@@ -210,7 +210,7 @@
   <div style="font-size:11px; color:#666; margin-bottom:8px;">
     Upload 1–5 screenshots of the legend — one per column group. Tip: use <strong style="color:#e0e0e0;">Cmd+Shift+4</strong> to crop each column.
   </div>
-  <input type="file" id="legend-image-files" accept="image/*" multiple onchange="loadLegendImages(this)">
+  <input type="file" id="legend-image-files" accept="image/*" multiple>
   <div class="status" id="legend-image-status">No images loaded</div>
   <div id="legend-previews" style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;"></div>
   <br>
@@ -926,6 +926,8 @@ async function fetchSummary() {
 }
 
 // ── Init defaults ────────────────────────────────────────────────────
+document.getElementById('pdf-file').addEventListener('change', function() { loadPDF(this); });
+document.getElementById('legend-image-files').addEventListener('change', function() { loadLegendImages(this); });
 const evalLbl = document.getElementById('eval-page-label');
 if (evalLbl) evalLbl.textContent = `Page ${evalPage} (default — change by clicking thumbnail)`;
 </script>
