@@ -225,7 +225,7 @@
   <div class="section-title">3 · Pass B — Scale + Demarcation</div>
   <div style="font-size:11px; color:#666; margin-bottom:8px;">
     Eval page: <strong id="eval-page-label" style="color:#7af07a;">not selected</strong>
-    &nbsp;·&nbsp; Default: page 28
+    &nbsp;·&nbsp; Default: page 1 · click thumbnail to change
   </div>
   <button onclick="runPassB()">▶ Run Pass B</button>
   <div class="status" id="pass-b-status">—</div>
@@ -366,7 +366,7 @@ async function renderThumbnails() {
   }
   // Pre-render legend + eval pages at full res in background
   prerenderPage(legendPage);
-  prerenderPage(evalPage);
+  prerenderPage(evalPage);   // pre-renders page 1 by default
 }
 
 function handleThumbClick(n, wrap) {
@@ -452,30 +452,44 @@ function loadLegendImages(input) {
   files.forEach((file, i) => {
     const reader = new FileReader();
     reader.onload = (e) => {
-      const dataUrl = e.target.result;
-      legendImages[i] = {
-        name:    file.name,
-        base64:  dataUrl.split(',')[1],
-        sizeKb:  Math.round(file.size / 1024)
-      };
-      // Preview thumbnail
-      const wrap = document.createElement('div');
-      wrap.style.cssText = 'text-align:center; font-size:10px; color:#888;';
-      const img = document.createElement('img');
-      img.src = dataUrl;
-      img.style.cssText = 'max-height:120px; max-width:200px; border:1px solid #333; border-radius:3px; display:block;';
-      const lbl = document.createElement('div');
-      lbl.textContent = `Col ${i+1} · ${Math.round(file.size/1024)} KB`;
-      lbl.style.marginTop = '3px';
-      wrap.appendChild(img);
-      wrap.appendChild(lbl);
-      previews.appendChild(wrap);
+      const originalDataUrl = e.target.result;
+      // Convert any format to JPEG via canvas — reduces PNG screenshots 5-10x
+      const imgEl = new Image();
+      imgEl.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width  = imgEl.naturalWidth;
+        canvas.height = imgEl.naturalHeight;
+        canvas.getContext('2d').drawImage(imgEl, 0, 0);
+        const jpegDataUrl = canvas.toDataURL('image/jpeg', 0.88);
+        const jpegBase64  = jpegDataUrl.split(',')[1];
+        const jpegKb      = Math.round(jpegBase64.length * 0.75 / 1024);
 
-      loaded++;
-      if (loaded === files.length) {
-        setStatus('legend-image-status',
-          `✓ ${files.length} column screenshot(s) loaded — ${legendImages.map(l=>l.sizeKb+'KB').join(', ')}`, 'ok');
-      }
+        legendImages[i] = {
+          name:   file.name,
+          base64: jpegBase64,
+          sizeKb: jpegKb
+        };
+
+        // Preview thumbnail
+        const wrap = document.createElement('div');
+        wrap.style.cssText = 'text-align:center; font-size:10px; color:#888;';
+        const img = document.createElement('img');
+        img.src = jpegDataUrl;
+        img.style.cssText = 'max-height:120px; max-width:200px; border:1px solid #333; border-radius:3px; display:block;';
+        const lbl = document.createElement('div');
+        lbl.textContent = `Col ${i+1} · ${Math.round(file.size/1024)}KB → ${jpegKb}KB`;
+        lbl.style.marginTop = '3px';
+        wrap.appendChild(img);
+        wrap.appendChild(lbl);
+        previews.appendChild(wrap);
+
+        loaded++;
+        if (loaded === files.length) {
+          setStatus('legend-image-status',
+            `✓ ${files.length} column(s) compressed — ${legendImages.map(l=>l.sizeKb+'KB').join(', ')}`, 'ok');
+        }
+      };
+      imgEl.src = originalDataUrl;
     };
     reader.readAsDataURL(file);
   });
@@ -699,7 +713,7 @@ async function fetchSummary() {
 
 // ── Init defaults ────────────────────────────────────────────────────
 document.getElementById('legend-page-label').textContent = `Page ${legendPage} (default)`;
-document.getElementById('eval-page-label').textContent   = `Page ${evalPage} (default)`;
+document.getElementById('eval-page-label').textContent   = `Page ${evalPage} (default — change by clicking thumbnail)`;
 </script>
 </body>
 </html>
