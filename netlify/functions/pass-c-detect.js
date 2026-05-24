@@ -72,7 +72,8 @@ Return ONLY this JSON:
   ],
   "warnings": []
 }
-If none found return: { "devices_found": [], "warnings": [] }`;
+If none found return: { "devices_found": [], "warnings": [] }
+Return ONLY raw JSON — no markdown fences, no backticks, no extra text.`;
 
   // Run all strips in parallel
   const stripResults = await Promise.all(
@@ -90,7 +91,8 @@ If none found return: { "devices_found": [], "warnings": [] }`;
             ]
           }]
         });
-        const parsed = JSON.parse(msg.content[0].text);
+        const raw = msg.content[0].text.replace(/```json|```/g, "").trim();
+        const parsed = JSON.parse(raw);
         return { strip, found: parsed.devices_found ?? [], warnings: parsed.warnings ?? [] };
       } catch (e) {
         return { strip, found: [], warnings: [`Strip ${strip.index} error: ${e.message}`] };
