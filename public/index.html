@@ -178,7 +178,7 @@
 <body>
 
 <h1>⚡ Take-off — Pipeline Test</h1>
-<p class="subtitle">winquest-take-off.netlify.app · Supabase lpjpqmpjxtwsnakcwqvb · Crude test harness</p>
+<p class="subtitle">winquest-take-off.netlify.app · Supabase lpjpqmpjxtwsnakcwqvb · Legend pre-loaded · No Pass A</p>
 
 <!-- ── STEP 0: CONFIG ────────────────────────────────────────────── -->
 <div class="section">
@@ -204,25 +204,9 @@
   </div>
 </div>
 
-<!-- ── STEP 2: PASS A ───────────────────────────────────────────── -->
+<!-- ── STEP 2: PASS B ───────────────────────────────────────────── -->
 <div class="section">
-  <div class="section-title">2 · Pass A — Legend Extraction</div>
-  <div style="font-size:11px; color:#666; margin-bottom:8px;">
-    Upload 1–5 screenshots of the legend — one per column group. Tip: use <strong style="color:#e0e0e0;">Cmd+Shift+4</strong> to crop each column.
-  </div>
-  <input type="file" id="legend-image-files" accept="image/*" multiple>
-  <div class="status" id="legend-image-status">No images loaded</div>
-  <div id="legend-previews" style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;"></div>
-  <br>
-  <button id="btn-pass-a" style="margin-top:10px;">&#9654; Run Pass A on all columns</button>
-  <div class="status" id="pass-a-status">—</div>
-  <div class="output-area" id="pass-a-output">Output will appear here…</div>
-  <div id="device-list"></div>
-</div>
-
-<!-- ── STEP 3: PASS B ───────────────────────────────────────────── -->
-<div class="section">
-  <div class="section-title">3 · Pass B — Scale + Demarcation</div>
+  <div class="section-title">2 · PASS B — SCALE + DEMARCATION</div>
   <div style="font-size:11px; color:#666; margin-bottom:8px;">
     Eval page: <strong id="eval-page-label" style="color:#7af07a;">not selected</strong>
     &nbsp;·&nbsp; Default: page 1 · click thumbnail to change
@@ -268,7 +252,7 @@
 
 <!-- ── STEP 3b: PASS B2 — DEVICE PRE-SCAN ─────────────────────── -->
 <div class="section">
-  <div class="section-title">3b · Pass B2 — Device Pre-Scan</div>
+  <div class="section-title">3 · PASS B2 — DEVICE PRE-SCAN</div>
   <div style="font-size:11px; color:#666; margin-bottom:8px;">
     Scans the page against all legend devices — returns only what is actually on this sheet.
     Run after Pass B. Results auto-populate Pass C device pills.
@@ -280,7 +264,7 @@
 
 <!-- ── STEP 4: PASS C ───────────────────────────────────────────── -->
 <div class="section">
-  <div class="section-title">4 · Pass C — Device Detection + Distances</div>
+  <div class="section-title">4 · PASS C — DEVICE DETECTION + DISTANCES</div>
   <div style="font-size:11px; color:#666; margin-bottom:6px;">Select a device type then run Pass C:</div>
   <button class="info" id="btn-load-devices">↓ Load devices from Supabase</button>
   <div class="status" id="load-devices-status">—</div>
@@ -314,7 +298,7 @@
 
 <!-- ── STEP 5: SUMMARY ──────────────────────────────────────────── -->
 <div class="section">
-  <div class="section-title">5 · Supabase Summary</div>
+  <div class="section-title">5 · SUPABASE SUMMARY</div>
   <button class="info" id="btn-summary">▶ Fetch takeoff-summary</button>
   <div class="status" id="summary-status">—</div>
   <div class="output-area" id="summary-output">Output will appear here…</div>
