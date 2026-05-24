@@ -926,10 +926,19 @@ async function fetchSummary() {
 }
 
 // ── Init defaults ────────────────────────────────────────────────────
-document.getElementById('pdf-file').addEventListener('change', function() { loadPDF(this); });
-document.getElementById('legend-image-files').addEventListener('change', function() { loadLegendImages(this); });
-const evalLbl = document.getElementById('eval-page-label');
-if (evalLbl) evalLbl.textContent = `Page ${evalPage} (default — change by clicking thumbnail)`;
+document.addEventListener('DOMContentLoaded', function() {
+  const pdfInput = document.getElementById('pdf-file');
+  if (pdfInput) pdfInput.addEventListener('change', function() { loadPDF(this); });
+
+  const legendInput = document.getElementById('legend-image-files');
+  if (legendInput) legendInput.addEventListener('change', function() { loadLegendImages(this); });
+
+  const evalLbl = document.getElementById('eval-page-label');
+  if (evalLbl) evalLbl.textContent = `Page ${evalPage} (default — change by clicking thumbnail)`;
+
+  const projBtn = document.querySelector('button[onclick="createProject()"]');
+  // createProject uses onclick so no listener needed — just confirm DOM is ready
+});
 </script>
 </body>
 </html>
