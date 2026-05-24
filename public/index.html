@@ -612,16 +612,26 @@ function renderDevicePills(devices) {
   devices.forEach(dev => {
     const pill = document.createElement('span');
     pill.className = 'pill';
-    pill.textContent = `${dev.legend_id || dev.id} · ${dev.name}`;
-    pill.title = dev.description || '';
-    pill.dataset.deviceId = dev.legend_id || dev.id;
-    pill.dataset.deviceName = dev.name;
-    pill.dataset.deviceDesc = dev.description || '';
-    pill.onclick = () => {
+    pill.textContent = (dev.legend_id || '') + ' · ' + dev.name;
+    pill.title = dev.description || 'no description';
+
+    // Store full device data on the element
+    pill.dataset.dbId      = dev.id          || '';   // numeric Supabase id
+    pill.dataset.legendId  = dev.legend_id   || '';
+    pill.dataset.name      = dev.name        || '';
+    pill.dataset.desc      = dev.description || '';
+
+    pill.addEventListener('click', function() {
       document.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
       pill.classList.add('active');
-      selectedDevice = { id: dev.legend_id || dev.id, name: dev.name, description: dev.description || '' };
-    };
+      selectedDevice = {
+        id:          parseInt(pill.dataset.dbId) || null,
+        legend_id:   pill.dataset.legendId,
+        name:        pill.dataset.name,
+        description: pill.dataset.desc
+      };
+      console.log('Selected device:', selectedDevice);
+    });
     container.appendChild(pill);
   });
 }
