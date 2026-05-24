@@ -65,7 +65,9 @@ If demarcation is referenced but off-sheet, set found=false and type=off_sheet.`
         ]
       }]
     });
-    result = JSON.parse(msg.content[0].text);
+#    result = JSON.parse(msg.content[0].text);
+    const raw = msg.content[0].text.replace(/```json|```/g, "").trim();
+    const result = JSON.parse(raw);
   } catch (e) {
     return err(`Anthropic error: ${e.message}`, 502);
   }
