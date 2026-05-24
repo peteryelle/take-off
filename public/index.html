@@ -926,7 +926,10 @@ async function fetchSummary() {
 }
 
 // ── Init defaults ────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', function() {
+// Wire everything — script is at bottom of body so DOM is ready
+(function init() {
+  const wire = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener('click', fn); };
+
   // File inputs
   const pdfInput = document.getElementById('pdf-file');
   if (pdfInput) pdfInput.addEventListener('change', function() { loadPDF(this); });
@@ -935,7 +938,6 @@ document.addEventListener('DOMContentLoaded', function() {
   if (legendInput) legendInput.addEventListener('change', function() { loadLegendImages(this); });
 
   // Buttons
-  const wire = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener('click', fn); };
   wire('btn-create-project', createProject);
   wire('btn-pass-a',         runPassA);
   wire('btn-pass-b',         runPassB);
@@ -948,7 +950,7 @@ document.addEventListener('DOMContentLoaded', function() {
   // Init label
   const evalLbl = document.getElementById('eval-page-label');
   if (evalLbl) evalLbl.textContent = `Page ${evalPage} (default — change by clicking thumbnail)`;
-});
+})();
 </script>
 </body>
 </html>
