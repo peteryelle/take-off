@@ -1220,7 +1220,7 @@ function calcScalePtsPerFt(passBResult) {
   const s = passBResult?.scale?.text ?? passBResult?.scale?.graphic;
   if (!s) return null;
   if (s.paper_value && s.real_value && s.paper_unit === 'in')
-    return (72 / s.paper_value) / s.real_value;
+    return (72 * s.paper_value) / s.real_value;  // pts per real foot: paper_inches × 72 / real_feet
   return null;
 }
 

@@ -156,8 +156,8 @@ export default async function handler(req) {
     const { anchor, device_type: dt, items } = cluster;
     const anchors = dt.text_anchors ?? {};
 
-    // Collect unique labels
-    const labels      = [...new Set(items.map(t => t.str.trim()))];
+    // Collect unique labels — anchor first, then associated items
+    const labels      = [...new Set([anchor.str.trim(), ...items.map(t => t.str.trim())])];
     const dataLabels  = labels.filter(l => (anchors.primary ?? []).includes(l));
     const voiceLabels = labels.filter(l => (anchors.associated ?? []).some(a => /^DV/.test(a) && l === a));
     const nodeLabels  = labels.filter(l => (anchors.associated ?? []).some(a => /^N\d/.test(a) && l === a));
