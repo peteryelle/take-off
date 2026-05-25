@@ -111,21 +111,28 @@ export default async function handler(req) {
 
   for (let i = 0; i < primaryItems.length; i++) {
     const anchor = primaryItems[i];
-    if (usedIndices.has(anchor._idx)) continue;  // already claimed by another cluster
 
-    const dt         = anchorIndex[anchor.str.trim()];
-    const allAnchors = [...(dt.text_anchors?.primary ?? []), ...(dt.text_anchors?.associated ?? [])];
+    // Skip only if this exact item was already claimed as an ASSOCIATED label
+    // by a prior cluster. Primary anchors are never claimed — each DD2/WAP
+    // is always its own device regardless of proximity.
+    if (usedIndices.has(anchor._idx)) continue;
 
-    // Collect all indexed items within radius of this anchor
+    const dt             = anchorIndex[anchor.str.trim()];
+    const primaryAnchors = dt.text_anchors?.primary    ?? [];
+    const assocAnchors   = dt.text_anchors?.associated ?? [];
+
+    // Collect nearby ASSOCIATED labels only (DV1, N2, etc.)
+    // Do NOT include other primary anchors — each primary = one device
     const clusterItems = indexedItems.filter(t => {
       const dx   = t.cx_norm - anchor.cx_norm;
       const dy   = t.cy_norm - anchor.cy_norm;
       const dist = Math.sqrt(dx * dx + dy * dy);
       return dist <= CLUSTER_RADIUS_NORM
-        && allAnchors.includes(t.str.trim());
+        && assocAnchors.includes(t.str.trim());
     });
 
-    // Mark all cluster members as used — prevents duplicate clusters
+    // Mark only ASSOCIATED items as used — prevents them attaching to two devices.
+    // Primary anchors are never marked used, so each one always anchors its own device.
     clusterItems.forEach(t => usedIndices.add(t._idx));
 
     clusters.push({ anchor, device_type: dt, items: clusterItems });
