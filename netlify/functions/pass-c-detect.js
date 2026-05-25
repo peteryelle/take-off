@@ -41,6 +41,14 @@ export default async function handler(req) {
     label:  page.demarc_label
   };
 
+  // ── Auto-detect image type ────────────────────────────────────
+  function detectMediaType(b64) {
+    if (b64.startsWith("/9j/"))  return "image/jpeg";
+    if (b64.startsWith("iVBOR")) return "image/png";
+    if (b64.startsWith("UklG"))  return "image/webp";
+    return "image/jpeg";
+  }
+
   // ── Slice into strips ─────────────────────────────────────────
   let strips;
   try {
@@ -53,8 +61,7 @@ export default async function handler(req) {
   const imageH = strips[0].full_height;
 
   // ── Detect in each strip ──────────────────────────────────────
-  const stripPrompt = (strip) => `
-You are scanning strip ${strip.index + 1} of ${N_STRIPS} (y=${strip.y_norm_start.toFixed(3)}–${strip.y_norm_end.toFixed(3)} of full image).
+  const stripPrompt = (strip) => `You are scanning strip ${strip.index + 1} of ${N_STRIPS} (y=${strip.y_norm_start.toFixed(3)}–${strip.y_norm_end.toFixed(3)} of full image).
 
 Find every instance of this device:
 Name: ${device.name}
@@ -62,46 +69,57 @@ Visual description: ${device.description}
 
 Rules:
 - Do NOT count legend entries, keynote callouts, or detail insets
-- Match shape, fill, border exactly — not just label text
+- Match the visual description exactly
 - x_frac and y_frac_in_strip are 0–1 relative to THIS strip (0,0 = top-left of strip)
+- Return ALL instances you find — do not skip any
+- Return ONLY raw JSON — no markdown fences, no backticks, no extra text
 
-Return ONLY this JSON:
+Return this exact JSON structure:
 {
   "devices_found": [
     { "x_frac": 0.25, "y_frac_in_strip": 0.60, "label": "brief location description", "confidence": "high|medium|low" }
   ],
   "warnings": []
 }
-If none found return: { "devices_found": [], "warnings": [] }
-Return ONLY raw JSON — no markdown fences, no backticks, no extra text.`;
+If none found: { "devices_found": [], "warnings": [] }`;
 
   // Run all strips in parallel
   const stripResults = await Promise.all(
     strips.map(async (strip) => {
+      let rawText = "";
       try {
         const msg = await anthropic.messages.create({
           model:      "claude-sonnet-4-5",
-          max_tokens: 512,
+          max_tokens: 4096,
           system:     SYSTEM_PROMPT,
           messages: [{
             role: "user",
             content: [
-              { type: "image", source: { type: "base64", media_type: "image/jpeg", data: strip.base64 } },
+              { type: "image", source: { type: "base64", media_type: detectMediaType(strip.base64), data: strip.base64 } },
               { type: "text", text: stripPrompt(strip) }
             ]
           }]
         });
-        const raw = msg.content[0].text.replace(/```json|```/g, "").trim();
-        const parsed = JSON.parse(raw);
-        return { strip, found: parsed.devices_found ?? [], warnings: parsed.warnings ?? [] };
+        rawText = msg.content[0].text;
+        const clean = rawText.replace(/```json|```/g, "").trim();
+        const parsed = JSON.parse(clean);
+        return {
+          strip,
+          found:    parsed.devices_found ?? [],
+          warnings: parsed.warnings      ?? []
+        };
       } catch (e) {
-        return { strip, found: [], warnings: [`Strip ${strip.index} error: ${e.message}`] };
+        return {
+          strip,
+          found:    [],
+          warnings: [`Strip ${strip.index} error: ${e.message} | raw: ${rawText.slice(0, 300)}`]
+        };
       }
     })
   );
 
   // ── Convert to full-image coordinates ─────────────────────────
-  const allWarnings = [];
+  const allWarnings   = [];
   const rawDetections = [];
 
   for (const { strip, found, warnings } of stripResults) {
@@ -137,7 +155,7 @@ Return ONLY raw JSON — no markdown fences, no backticks, no extra text.`;
     allWarnings.push(`Annotation failed: ${e.message}`);
   }
 
-  // ── Upload annotated image to Supabase Storage ─────────────────
+  // ── Upload annotated image to Supabase Storage ────────────────
   let annotatedPath = null;
   if (annotatedBase64) {
     const filename  = `annotated/page_${page.pdf_page_number}_dev_${device_type_id}_${Date.now()}.jpg`;
@@ -166,17 +184,17 @@ Return ONLY raw JSON — no markdown fences, no backticks, no extra text.`;
     .insert({
       page_id,
       device_type_id,
-      total_count:         detections.length,
-      duplicates_removed:  removed.length,
-      strip_count:         N_STRIPS,
-      dedup_threshold:     DEDUP_THRESHOLD,
-      longest_run_ft:      longestFt,
-      shortest_run_ft:     shortestFt,
+      total_count:          detections.length,
+      duplicates_removed:   removed.length,
+      strip_count:          N_STRIPS,
+      dedup_threshold:      DEDUP_THRESHOLD,
+      longest_run_ft:       longestFt,
+      shortest_run_ft:      shortestFt,
       annotated_image_path: annotatedPath,
-      started_at:          startedAt.toISOString(),
-      finished_at:         finishedAt.toISOString(),
-      elapsed_sec:         elapsedSec,
-      notes:               allWarnings.join(" | ") || null
+      started_at:           startedAt.toISOString(),
+      finished_at:          finishedAt.toISOString(),
+      elapsed_sec:          elapsedSec,
+      notes:                allWarnings.join(" | ") || null
     })
     .select("id")
     .single();
@@ -186,21 +204,21 @@ Return ONLY raw JSON — no markdown fences, no backticks, no extra text.`;
   // ── Write individual detections ───────────────────────────────
   if (detections.length > 0) {
     const detRows = detections.map(d => ({
-      run_id:            run.id,
+      run_id:           run.id,
       page_id,
       device_type_id,
-      detection_label:   d.detection_label,
-      location_label:    d.label,
-      x:                 d.x,
-      y:                 d.y,
-      source_strip:      d.source_strip,
-      path_length_norm:  d.path_length_norm,
-      path_length_ft:    d.path_length_ft,
-      confidence:        d.confidence,
-      flagged:           d.path_length_ft > 295,
-      flag_reason:       d.path_length_ft > 295 ? "Exceeds TIA 295ft permanent link limit" : null
+      detection_label:  d.detection_label,
+      location_label:   d.label,
+      x:                d.x,
+      y:                d.y,
+      source_strip:     d.source_strip,
+      path_length_norm: d.path_length_norm,
+      path_length_ft:   d.path_length_ft,
+      confidence:       d.confidence,
+      flagged:          d.path_length_ft != null && d.path_length_ft > 295,
+      flag_reason:      d.path_length_ft != null && d.path_length_ft > 295
+                          ? "Exceeds TIA 295ft permanent link limit" : null
     }));
-
     const { error: detErr } = await supabase.from("detections").insert(detRows);
     if (detErr) allWarnings.push(`Detection insert error: ${detErr.message}`);
   }
@@ -216,9 +234,9 @@ Return ONLY raw JSON — no markdown fences, no backticks, no extra text.`;
     longest_run_ft:     longestFt,
     shortest_run_ft:    shortestFt,
     elapsed_sec:        elapsedSec,
-    annotated_image:    annotatedBase64,   // return to frontend for display
+    annotated_image:    annotatedBase64,
     annotated_path:     annotatedPath,
-    tia_violations:     detections.filter(d => d.path_length_ft > 295).length,
+    tia_violations:     detections.filter(d => d.path_length_ft != null && d.path_length_ft > 295).length,
     warnings:           allWarnings,
     detections
   });
