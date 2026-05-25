@@ -227,7 +227,7 @@ button.amber:hover { background: #332800; }
 
 <h1>⚡ Device Types</h1>
 <p class="subtitle">
-  <a href="index.html">← Back to Pipeline</a>
+  <a id="back-link" href="index.html">← Back to Pipeline</a>
   &nbsp;·&nbsp; Manage device symbols per project
 </p>
 
@@ -713,12 +713,23 @@ async function copyFromProject() {
 // ── Auto-load if project_id in URL ─────────────────────────────────
 (function init() {
   const params = new URLSearchParams(window.location.search);
-  const pid = params.get('project_id');
+  const pid = params.get('project_id')
+    ?? sessionStorage.getItem('to_project_id')
+    ?? '';
+
   if (pid) {
     document.getElementById('project-id').value = pid;
+    const nurl = sessionStorage.getItem('to_netlify_url');
+    if (nurl) document.getElementById('netlify-url').value = nurl;
+    updateBackLink(pid);
     loadDeviceTypes();
   }
 })();
+
+function updateBackLink(pid) {
+  const link = document.getElementById('back-link');
+  if (link && pid) link.href = `index.html?project_id=${pid}`;
+}
 </script>
 </body>
 </html>

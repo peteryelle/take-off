@@ -67,6 +67,7 @@ export default async function handler(req) {
         : null);
 
   // ── Load primary demarc for this page ─────────────────────────
+  // Priority: demarcs table (user-set) → pages table (auto-detected by Pass B)
   const { data: demarcs } = await supabase
     .from("demarcs")
     .select("*")
@@ -74,7 +75,19 @@ export default async function handler(req) {
     .eq("page_id", page_id)
     .order("created_at");
 
-  const primaryDemarc = demarcs?.[0] ?? null;
+  let primaryDemarc = demarcs?.[0] ?? null;
+
+  // Fall back to Pass B auto-detected demarc stored in pages table
+  if (!primaryDemarc && page?.demarc_x != null) {
+    primaryDemarc = {
+      id:      null,
+      name:    page.demarc_label ?? "auto",
+      x_norm:  page.demarc_x,
+      y_norm:  page.demarc_y,
+      stub_ft: 0,
+      source:  "pass_b_auto"
+    };
+  }
 
   // ── Build index: primary anchor → device type ─────────────────
   // Each device type specifies primary label strings; we build a fast lookup.
@@ -213,6 +226,12 @@ export default async function handler(req) {
       confidence:      "high"
     };
   });
+
+  // ── Clear previous results for this page (idempotent) ───────────
+  await supabase
+    .from("device_instances")
+    .delete()
+    .eq("page_id", page_id);
 
   // ── Write to device_instances ─────────────────────────────────
   const dbRows = instances.map(({ _cluster_id, device_name, legend_id, ...row }) => row);

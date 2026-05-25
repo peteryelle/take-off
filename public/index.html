@@ -258,7 +258,7 @@
   <div style="font-size:11px; color:#666; margin-bottom:8px;">
     Reads device labels directly from the PDF text layer using device type anchors.
     Run after Step 3. Requires device types to have text anchors set —
-    <a href="device-types.html" style="color:#7ac0f0;">manage device types ↗</a>
+    <a id="device-types-link" href="device-types.html" style="color:#7ac0f0;">manage device types ↗</a>
   </div>
   <button id="btn-pass-extract">▶ Detect Devices</button>
   <div class="status" id="pass-extract-status">—</div>
@@ -300,13 +300,62 @@ pdfjsLib.GlobalWorkerOptions.workerSrc =
 let pdfDoc      = null;
 let pages       = {};        // pageNum → { canvas, base64 }
 let legendPage  = 2;         // default
-let evalPage    = 28;        // default
+let evalPage    = 1;          // default
 let passAResult = null;
 let passBResult = null;
 let selectedDevice = null;
 let projectId   = null;
 
 function base() { return document.getElementById('netlify-url').value.replace(/\/$/, ''); }
+
+// ── Session persistence ───────────────────────────────────────────────
+function saveSession() {
+  try {
+    sessionStorage.setItem('to_project_id',   projectId ?? '');
+    sessionStorage.setItem('to_eval_page',    evalPage ?? 1);
+    sessionStorage.setItem('to_pass_b',       passBResult ? JSON.stringify(passBResult) : '');
+    sessionStorage.setItem('to_netlify_url',  base());
+  } catch(e) {}
+}
+
+function restoreSession() {
+  try {
+    const pid  = sessionStorage.getItem('to_project_id');
+    const pg   = sessionStorage.getItem('to_eval_page');
+    const pb   = sessionStorage.getItem('to_pass_b');
+    const nurl = sessionStorage.getItem('to_netlify_url');
+
+    if (nurl) document.getElementById('netlify-url').value = nurl;
+
+    if (pid) {
+      projectId = parseInt(pid);
+      document.getElementById('project-id').value = pid;
+      setStatus('project-status', `Project ${pid} restored`, 'ok');
+      updateDeviceTypesLink();
+    }
+    if (pg)  {
+      evalPage = parseInt(pg);
+      const lbl = document.getElementById('eval-page-label');
+      if (lbl) lbl.textContent = `Page ${evalPage}`;
+    }
+    if (pb) {
+      try {
+        passBResult = JSON.parse(pb);
+        const scaleLbl = passBResult?.scale?.display_label ?? '';
+        const demarcLbl = passBResult?.demarcation?.label ?? '';
+        if (scaleLbl || demarcLbl) {
+          setStatus('pass-b-status', `Restored: Scale ${scaleLbl} · Demarc ${demarcLbl}`, 'ok');
+          document.getElementById('scale-override-section').style.display = 'block';
+        }
+      } catch(e) {}
+    }
+  } catch(e) {}
+}
+
+function updateDeviceTypesLink() {
+  const link = document.getElementById('device-types-link');
+  if (link && projectId) link.href = `device-types.html?project_id=${projectId}`;
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────
 function setStatus(id, msg, type='') {
@@ -325,6 +374,8 @@ async function createProject() {
   if (pid) {
     projectId = parseInt(pid);
     setStatus('project-status', `Using existing project ID: ${projectId}`, 'ok');
+    updateDeviceTypesLink();
+    saveSession();
     return;
   }
   const name = document.getElementById('project-name').value.trim() || 'Test Project';
@@ -340,6 +391,8 @@ async function createProject() {
       projectId = j.id;
       document.getElementById('project-id').value = j.id;
       setStatus('project-status', `✓ Project created — ID: ${j.id}`, 'ok');
+      updateDeviceTypesLink();
+      saveSession();
     } else {
       setStatus('project-status', 'Error: ' + JSON.stringify(j), 'err');
     }
@@ -434,6 +487,7 @@ function setEvalPage(n) {
   if (wrap) wrap.classList.add('eval-page');
   evalPage = n;
   document.getElementById('eval-page-label').textContent = `Page ${n}`;
+  saveSession();
   prerenderPage(n);
   document.getElementById('thumb-popup')?.remove();
 }
@@ -645,6 +699,7 @@ async function runPassB() {
     }
 
     passBResult = j;
+    saveSession();
     setOutput('pass-b-output', j);
 
     const scale  = j.scale?.display_label || 'unknown';
@@ -1233,9 +1288,14 @@ async function runPassExtract() {
   wire('btn-summary',        fetchSummary);
   wire('btn-scale-apply',    () => applyScaleOverride(false));
 
-  // Init label
-  const evalLbl = document.getElementById('eval-page-label');
-  if (evalLbl) evalLbl.textContent = `Page ${evalPage} (default — click thumbnail to change)`;
+  // Restore from URL params first (coming back from device-types.html)
+  const _params = new URLSearchParams(window.location.search);
+  const _pid = _params.get('project_id');
+  if (_pid) {
+    sessionStorage.setItem('to_project_id', _pid);
+  }
+  // Then restore full session
+  restoreSession();
 })();
 </script>
 </body>
