@@ -155,9 +155,10 @@ export default async function handler(req) {
       : dataLabels.length;
     const portCountVoice = voiceLabels.length;
 
-    // Centroid: average of all items in cluster
-    const cx = items.reduce((s, t) => s + t.cx_norm, 0) / items.length;
-    const cy = items.reduce((s, t) => s + t.cy_norm, 0) / items.length;
+    // Device position = primary anchor position.
+    // Associated items (DV1, N2) provide metadata only — not used for centroid.
+    const cx = anchor.cx_norm;
+    const cy = anchor.cy_norm;
 
     // Real-world coordinates
     const xFt = ptsPerFt && page_width_pts  ? parseFloat((cx * page_width_pts  / ptsPerFt).toFixed(1)) : null;
