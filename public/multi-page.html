@@ -6,30 +6,30 @@
 <title>Multi-Page Takeoff</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: monospace; background: #0d0d0d; color: #e0e0e0; padding: 20px; font-size: 13px; }
+body { font-family: monospace; background: #0d0d0d; color: #e8e8e8; padding: 20px; font-size: 15px; }
 h1 { color: #f0c040; font-size: 16px; margin-bottom: 4px; letter-spacing: 2px; text-transform: uppercase; }
 .subtitle { color: #666; font-size: 11px; margin-bottom: 20px; }
 a { color: #7ac0f0; text-decoration: none; }
 
 /* ── Sections ── */
 .section { background: #111; border: 1px solid #1e1e1e; border-radius: 4px; padding: 16px; margin-bottom: 12px; }
-.section-title { color: #f0c040; font-size: 11px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 10px; border-bottom: 1px solid #1e1e1e; padding-bottom: 6px; }
+.section-title { color: #f0c040; font-size: 13px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 10px; border-bottom: 1px solid #2e2e2e; padding-bottom: 6px; }
 
 /* ── Inputs / buttons ── */
 input[type="text"], input[type="file"], input[type="number"] {
-  background: #1a1a1a; border: 1px solid #333; color: #e0e0e0;
-  padding: 6px 8px; border-radius: 3px; font-family: monospace; font-size: 12px;
+  background: #1a1a1a; border: 1px solid #444; color: #e8e8e8;
+  padding: 7px 10px; border-radius: 3px; font-family: monospace; font-size: 14px;
 }
 input[type="text"] { width: 200px; }
-label { color: #888; font-size: 11px; display: block; margin-bottom: 3px; margin-top: 8px; }
-button { background: #1e3a1e; border: 1px solid #3a7a3a; color: #7af07a; padding: 6px 14px; border-radius: 3px; cursor: pointer; font-family: monospace; font-size: 12px; white-space: nowrap; }
+label { color: #aaa; font-size: 13px; display: block; margin-bottom: 3px; margin-top: 8px; }
+button { background: #1e3a1e; border: 1px solid #3a7a3a; color: #7af07a; padding: 8px 16px; border-radius: 3px; cursor: pointer; font-family: monospace; font-size: 13px; white-space: nowrap; }
 button:hover { background: #2a4a2a; }
 button:disabled { opacity: 0.3; cursor: not-allowed; }
 button.info  { background: #1e2d3a; border-color: #3a6a8a; color: #7ac0f0; }
 button.amber { background: #2a2000; border-color: #7a6000; color: #f0c040; }
 button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
 
-.status { font-size: 11px; color: #aaa; min-height: 16px; margin-top: 4px; }
+.status { font-size: 13px; color: #bbb; min-height: 18px; margin-top: 4px; }
 .status.ok  { color: #7af07a; }
 .status.err { color: #f07a7a; }
 .status.running { color: #f0c040; }
@@ -40,15 +40,15 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
 .thumb canvas { display: block; width: 72px; height: 52px; }
 .thumb.selected { border-color: #7af07a; }
 .thumb.selected::after { content: '✓'; position: absolute; top: 2px; right: 3px; color: #7af07a; font-size: 10px; font-weight: bold; }
-.thumb .pg-num { position: absolute; bottom: 0; left: 0; right: 0; background: rgba(0,0,0,0.7); color: #aaa; font-size: 9px; text-align: center; padding: 1px; }
+.thumb .pg-num { position: absolute; bottom: 0; left: 0; right: 0; background: rgba(0,0,0,0.75); color: #ccc; font-size: 11px; text-align: center; padding: 2px; }
 .thumb.demarc-page { border-color: #f0c040; }
 .thumb.demarc-page::before { content: '★'; position: absolute; top: 2px; left: 3px; color: #f0c040; font-size: 10px; }
 
 /* ── TR Map table ── */
-.tr-table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 8px; }
-.tr-table th { padding: 5px 8px; text-align: left; color: #666; font-weight: normal; border-bottom: 1px solid #1e1e1e; }
-.tr-table td { padding: 6px 8px; border-bottom: 1px solid #0d0d0d; vertical-align: top; }
-.badge { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; }
+.tr-table { width: 100%; border-collapse: collapse; font-size: 14px; margin-top: 8px; }
+.tr-table th { padding: 7px 10px; text-align: left; color: #999; font-weight: normal; border-bottom: 1px solid #2e2e2e; }
+.tr-table td { padding: 8px 10px; border-bottom: 1px solid #1a1a1a; vertical-align: top; }
+.badge { display: inline-block; padding: 3px 8px; border-radius: 3px; font-size: 12px; }
 .badge.on  { background: #001a00; border: 1px solid #007a00; color: #7af07a; }
 .badge.off { background: #2a1a00; border: 1px solid #7a5000; color: #f0c040; }
 
@@ -62,18 +62,18 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
 .pin-controls { margin-top: 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
 /* ── Progress bar ── */
-.progress-wrap { background: #0a0a0a; border: 1px solid #222; border-radius: 3px; height: 8px; margin-top: 6px; overflow: hidden; }
+.progress-wrap { background: #0a0a0a; border: 1px solid #222; border-radius: 3px; height: 10px; margin-top: 8px; overflow: hidden; }
 .progress-bar  { height: 100%; background: #3a7a3a; transition: width 0.3s; }
 
 /* ── Results ── */
 .results-tabs { display: flex; gap: 2px; margin-bottom: 0; }
-.tab { padding: 5px 14px; border: 1px solid #222; border-bottom: none; border-radius: 3px 3px 0 0; cursor: pointer; font-size: 11px; color: #888; background: #0a0a0a; }
-.tab.active { background: #111; color: #f0c040; border-color: #333; }
+.tab { padding: 7px 18px; border: 1px solid #333; border-bottom: none; border-radius: 3px 3px 0 0; cursor: pointer; font-size: 13px; color: #aaa; background: #0a0a0a; }
+.tab.active { background: #111; color: #f0c040; border-color: #444; }
 .tab-content { display: none; border: 1px solid #222; border-radius: 0 3px 3px 3px; padding: 12px; }
 .tab-content.active { display: block; }
-.res-table { width: 100%; border-collapse: collapse; font-size: 11px; }
-.res-table th { padding: 5px 8px; color: #666; font-weight: normal; text-align: left; border-bottom: 1px solid #1e1e1e; }
-.res-table td { padding: 5px 8px; border-bottom: 1px solid #0d0d0d; }
+.res-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.res-table th { padding: 7px 10px; color: #999; font-weight: normal; text-align: left; border-bottom: 1px solid #2e2e2e; }
+.res-table td { padding: 7px 10px; border-bottom: 1px solid #1a1a1a; }
 </style>
 </head>
 <body>
@@ -157,14 +157,17 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
 
   <!-- TR Map -->
   <div id="tr-map-section" style="display:none; margin-top:12px;">
-    <div style="font-size:11px; color:#888; margin-bottom:8px;">
-    TR Room Map — confirm on-sheet, configure off-sheet.
-    <br><span style="color:#666;">If the detected page is wrong, use the dropdown to correct it.
-    Pages served by a TR on another floor need an exit pin (where cables leave that floor) + backbone distance.</span>
-  </div>
+    <!-- Summary bar -->
+    <div id="tr-summary-bar" style="display:flex; gap:24px; padding:8px 12px; background:#0a0a0a; border:1px solid #2a2a2a; border-radius:4px; margin-bottom:10px; font-size:13px; align-items:center; flex-wrap:wrap;">
+      <span id="tr-summary-text" style="color:#aaa; flex:1;">—</span>
+      <span id="tr-warnings-text" style="color:#f0c040;"></span>
+    </div>
+    <div style="font-size:12px; color:#888; margin-bottom:8px;">
+      Use dropdown to correct demarc page if wrong. Pages served by a cross-floor TR need an exit pin + backbone distance.
+    </div>
     <table class="tr-table">
       <thead><tr>
-        <th>TR Room</th><th>Location</th><th>Demarc Page</th><th>Serves</th><th>Status</th><th>Jumper (ft)</th><th>Pin</th>
+        <th>TR Room</th><th>Location (of TR)</th><th>Demarc Page</th><th>Serves</th><th>Status</th><th>Backbone (ft)</th><th>Actions</th>
       </tr></thead>
       <tbody id="tr-tbody"></tbody>
     </table>
@@ -181,7 +184,7 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
     <div class="progress-bar" id="batch-progress" style="width:0%"></div>
   </div>
   <div class="status" id="batch-status">—</div>
-  <div id="batch-log" style="margin-top:8px; font-size:10px; color:#555; max-height:120px; overflow-y:auto;"></div>
+  <div id="batch-log" style="margin-top:8px; font-size:13px; color:#888; max-height:160px; overflow-y:auto; line-height:1.6;"></div>
 </div>
 
 <!-- ── STEP 5: RESULTS ───────────────────────────────────────────── -->
@@ -290,16 +293,30 @@ function updateDemarcPage(trName, newPageNum) {
   tr.status          = pageNum ? 'on_sheet' : 'off_sheet';
 
   if (pageNum) {
-    // Use auto-detected pin from Pass B for this page if available
+    // Update location from page cache
     const cache = pageCache[pageNum];
+    const pb    = cache?.passBResult;
+    if (pb) {
+      // Parse building/floor from sheet title of the selected page
+      const t = (pb.sheet_title ?? '').toUpperCase();
+      const bldg  = t.match(/BLDG\s+([\w\d]+)/)?.[1];
+      const level = t.match(/LEVEL\s+([\w\d.]+)/)?.[1];
+      const area  = t.match(/AREA\s+([\w\d.]+)/)?.[1];
+      tr.building = bldg  ? `BLDG ${bldg}`  : tr.building;
+      tr.floor    = level ? `LEVEL ${level}` : tr.floor;
+      tr.area     = area  ? `AREA ${area}`   : null;
+    }
+    // Auto-detect pin from Pass B for the newly selected page
     const d = cache?.passBResult?.demarcation;
     if (d?.found) {
       tr.demarc_x = d.x;
       tr.demarc_y = d.y;
-      tr.demarc_page_id = cache.pageId;
+      tr.demarc_page_id = cache?.pageId;
+      tr.pin_x = d.x;
+      tr.pin_y = d.y;
+      tr.demarc_id = null;  // will be saved on confirm
     }
   }
-  // Refresh sub-row pin requirements
   renderTRMap(Object.values(trMap));
 }
 
@@ -525,10 +542,22 @@ function renderTRMap(trs) {
   tbody.innerHTML = '';
   document.getElementById('tr-map-section').style.display = 'block';
 
+  // Update summary bar
+  const onSheet  = trs.filter(t => t.status === 'on_sheet' || t.on_sheet);
+  const offSheet = trs.filter(t => t.status !== 'on_sheet' && !t.on_sheet);
+  const needPins = trs.filter(t => t.on_sheet && (t.pages ?? []).some(p =>
+    p.eval_page_num !== t.demarc_page_num && !t.extra_pins?.[p.eval_page_num]
+  ));
+  document.getElementById('tr-summary-text').textContent =
+    `${trs.length} TR room${trs.length !== 1 ? 's' : ''} · ${onSheet.length} on-sheet · ${offSheet.length} off-sheet`;
+  document.getElementById('tr-warnings-text').textContent =
+    needPins.length > 0 ? `⚠ ${needPins.length} TR${needPins.length > 1 ? 's' : ''} need cross-floor exit pins` : '';
+
   for (const tr of trs) {
     const isOn = tr.status === 'on_sheet';
     const serves = (tr.pages ?? []).map(p => `pg${p.eval_page_num}`).join(', ');
-    const location = [tr.building, tr.floor, tr.area].filter(Boolean).join(' · ') || '—';
+    const location = [tr.building, tr.floor, tr.area].filter(Boolean).join(' · ')
+      || (tr.demarc_page_num ? `pg${tr.demarc_page_num} (detecting…)` : '— off sheet —');
     const demarcPage = tr.demarc_page_num ? `pg ${tr.demarc_page_num}` : '—';
 
     const tr_el = document.createElement('tr');
@@ -537,7 +566,7 @@ function renderTRMap(trs) {
       <td style="color:#888;">${location}</td>
       <td><select id="demarc-page-sel-${tr.name}"
           onchange="updateDemarcPage('${tr.name}', this.value)"
-          style="background:#1a1a1a; border:1px solid #${isOn ? '3a7a3a' : '7a5000'}; color:${isOn ? '#7af07a' : '#f0c040'}; padding:2px 4px; border-radius:3px; font-size:11px; font-family:monospace;">
+          style="background:#1a1a1a; border:1px solid #${isOn ? '3a7a3a' : '7a5000'}; color:${isOn ? '#7af07a' : '#f0c040'}; padding:5px 8px; border-radius:3px; font-size:13px; font-family:monospace;">
         </select></td>
       <td style="color:#888;">${serves}</td>
       <td><span class="badge ${isOn ? 'on' : 'off'}">${isOn ? '✓ on sheet' : '⚠ off sheet'}</span></td>
@@ -575,17 +604,16 @@ function renderTRMap(trs) {
         const pinKey = `${tr.name}_pg${pg.eval_page_num}`;
         const hasPin = trMap[tr.name]?.extra_pins?.[pg.eval_page_num];
         subRow.innerHTML = `
-          <td colspan="3" style="padding:4px 8px 4px 24px; color:#888; font-size:10px;">
+          <td colspan="3" style="padding:6px 10px 6px 28px; color:#aaa; font-size:13px;">
             ↳ <strong style="color:#f0c040;">pg${pg.eval_page_num}</strong>
             ${pg.building ?? ''} ${pg.floor ?? ''} —
-            <span style="color:#666;">place exit pin on this floor + backbone distance to ${tr.name}</span>
+            <span style="color:#999;">place exit pin on this floor + enter backbone distance to ${tr.name}</span>
           </td>
           <td><span class="badge ${hasPin ? 'on' : 'off'}" style="font-size:9px;">${hasPin ? '✓ pin set' : '⚠ needs pin'}</span></td>
           <td style="padding:4px 6px;">
-            <div style="font-size:9px; color:#555; margin-bottom:2px;">backbone to ${tr.name} (ft)</div>
-            <input type="number" id="jumper-${pinKey}" value="${hasPin?.stub_ft ?? 0}" min="0" step="5"
-               style="width:80px; background:#1a1a1a; border:1px solid #333; color:#e0e0e0; padding:3px 6px; border-radius:3px; font-size:11px;"
-               placeholder="e.g. 45">
+            <input type="number" id="jumper-${pinKey}" value="${hasPin?.stub_ft ?? 0}" min="0" step="10"
+               style="width:80px; background:#1a1a1a; border:1px solid ${hasPin?.stub_ft > 0 ? '#3a7a3a' : '#7a5000'}; color:#e0e0e0; padding:5px 8px; border-radius:3px; font-size:13px;"
+               placeholder="ft" title="Backbone cable from this floor to ${tr.name}">
           </td>
           <td><button class="amber" onclick="openPinModal('${tr.name}', ${pg.eval_page_num})" 
                style="padding:2px 8px; font-size:10px;">${hasPin ? 'Move' : 'Place Pin'} pg${pg.eval_page_num}</button></td>`;
