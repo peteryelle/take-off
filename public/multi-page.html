@@ -105,6 +105,21 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
     </div>
   </div>
   <div class="status" id="project-status">—</div>
+  <div id="device-type-bar" style="margin-top:10px; padding:8px 12px; background:#1a1a00; border:1px solid #5a5000; border-radius:3px; font-size:11px; display:none;">
+    <span style="color:#f0c040;">⚠ Device types needed for detection.</span>
+    &nbsp;
+    <button class="amber" onclick="openCopyDevices()" style="padding:2px 10px; font-size:10px;">Copy from another project</button>
+    &nbsp;or&nbsp;
+    <a id="dt-link2" href="device-types.html" style="color:#7ac0f0;">Set up device types ↗</a>
+  </div>
+  <div id="copy-devices-bar" style="margin-top:8px; display:none; padding:8px; background:#111; border:1px solid #333; border-radius:3px;">
+    <label>Source Project ID (copy device types from)</label>
+    <div style="display:flex; gap:8px; margin-top:4px; align-items:center;">
+      <input type="text" id="copy-from-id" placeholder="e.g. 1" style="width:80px;">
+      <button onclick="copyDeviceTypes()">Copy Device Types</button>
+      <div class="status" id="copy-dt-status"></div>
+    </div>
+  </div>
 </div>
 
 <!-- ── STEP 2: LOAD PDF + SELECT PAGES ──────────────────────────── -->
@@ -237,8 +252,42 @@ function setStatus(id, msg, cls='') {
 })();
 
 function updateLinks() {
-  const link = document.getElementById('dt-link');
-  if (link && projectId) link.href = `device-types.html?project_id=${projectId}`;
+  const link  = document.getElementById('dt-link');
+  const link2 = document.getElementById('dt-link2');
+  if (link  && projectId) link.href  = `device-types.html?project_id=${projectId}`;
+  if (link2 && projectId) link2.href = `device-types.html?project_id=${projectId}`;
+}
+
+function openCopyDevices() {
+  const bar = document.getElementById('copy-devices-bar');
+  bar.style.display = bar.style.display === 'none' ? 'block' : 'none';
+}
+
+async function copyDeviceTypes() {
+  const sourceId = document.getElementById('copy-from-id').value.trim();
+  if (!sourceId) { setStatus('copy-dt-status', 'Enter source project ID', 'err'); return; }
+  setStatus('copy-dt-status', 'Copying…', 'running');
+  try {
+    const r = await fetch(`${base()}/api/projects`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'copy_device_types',
+        source_project_id: parseInt(sourceId),
+        target_project_id: projectId
+      })
+    });
+    const j = await r.json();
+    if (r.ok) {
+      setStatus('copy-dt-status', `✓ Copied ${j.copied} device types`, 'ok');
+      document.getElementById('copy-devices-bar').style.display = 'none';
+      document.getElementById('device-type-bar').style.background = '#001a00';
+      document.getElementById('device-type-bar').style.borderColor = '#007a00';
+      document.getElementById('device-type-bar').innerHTML =
+        `<span style="color:#7af07a;">✓ Device types ready — ${j.copied} types copied from project ${sourceId}</span>`;
+    } else {
+      setStatus('copy-dt-status', 'Error: ' + (j.error ?? r.status), 'err');
+    }
+  } catch(e) { setStatus('copy-dt-status', 'Error: ' + e.message, 'err'); }
 }
 
 // ── Step 1: Project ───────────────────────────────────────────────
@@ -252,6 +301,7 @@ async function confirmProject() {
       sessionStorage.setItem('to_project_id',  id);
       sessionStorage.setItem('to_netlify_url', base());
       setStatus('project-status', `✓ Project ${id} confirmed`, 'ok');
+      document.getElementById('device-type-bar').style.display = 'block';
     } else {
       const r = await fetch(`${base()}/api/projects`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -262,6 +312,7 @@ async function confirmProject() {
       document.getElementById('project-id').value = j.id;
       sessionStorage.setItem('to_project_id', j.id);
       setStatus('project-status', `✓ Created project ${j.id}`, 'ok');
+      document.getElementById('device-type-bar').style.display = 'block';
     }
     updateLinks();
   } catch(e) { setStatus('project-status', 'Error: ' + e.message, 'err'); }
@@ -444,18 +495,44 @@ function renderTRMap(trs) {
         : `<input type="number" id="jumper-${tr.name}" value="${tr.stub_ft ?? 0}" min="0" step="5" style="width:70px; background:#1a1a1a; border:1px solid #333; color:#e0e0e0; padding:3px 6px; border-radius:3px; font-size:11px;">`
       }</td>
       <td>${isOn
-        ? `<button class="info" onclick="movePinModal('${tr.name}', ${tr.demarc_page_num})" style="padding:2px 8px; font-size:10px;">Move</button>`
+        ? `<button class="info" onclick="movePinModal('${tr.name}', ${tr.demarc_page_num})" style="padding:2px 8px; font-size:10px;">Move pin pg${tr.demarc_page_num}</button>`
         : `<button class="amber" onclick="openPinModal('${tr.name}')" style="padding:2px 8px; font-size:10px;">Place Pin</button>`
       }</td>`;
     tbody.appendChild(tr_el);
+
+    // For each served page that is NOT the demarc page, add a sub-row for exit pin
+    if (isOn && tr.pages?.length > 1) {
+      for (const pg of tr.pages) {
+        if (pg.eval_page_num === tr.demarc_page_num) continue;
+        const subRow = document.createElement('tr');
+        subRow.style.background = '#0a0a0a';
+        const pinKey = `${tr.name}_pg${pg.eval_page_num}`;
+        const hasPin = trMap[tr.name]?.extra_pins?.[pg.eval_page_num];
+        subRow.innerHTML = `
+          <td colspan="4" style="padding:4px 8px 4px 24px; color:#666; font-size:10px;">
+            ↳ pg${pg.eval_page_num} (${pg.building ?? ''} ${pg.floor ?? ''}) — exit pin needed for this floor
+          </td>
+          <td><span class="badge ${hasPin ? 'on' : 'off'}" style="font-size:9px;">${hasPin ? '✓ pin set' : '⚠ needs pin'}</span></td>
+          <td><input type="number" id="jumper-${pinKey}" value="${hasPin?.stub_ft ?? 0}" min="0" step="5"
+               style="width:70px; background:#1a1a1a; border:1px solid #333; color:#e0e0e0; padding:3px 6px; border-radius:3px; font-size:11px;"
+               placeholder="jumper ft"></td>
+          <td><button class="amber" onclick="openPinModal('${tr.name}', ${pg.eval_page_num})" 
+               style="padding:2px 8px; font-size:10px;">${hasPin ? 'Move' : 'Place Pin'} pg${pg.eval_page_num}</button></td>`;
+        tbody.appendChild(subRow);
+      }
+    }
   }
 }
 
 // ── Pin placement modal ───────────────────────────────────────────
-async function openPinModal(trName, pageNum) {
-  pinTarget = { trName, pageNum: pageNum ?? [...selectedPages].sort((a,b)=>a-b)[0] };
-  document.getElementById('pin-modal-title').textContent =
-    `Place exit pin for TR ${trName} on page ${pinTarget.pageNum}`;
+async function openPinModal(trName, targetPageNum) {
+  // targetPageNum: if provided, place an exit pin for this page (not the demarc page)
+  const isExtraPin = targetPageNum && targetPageNum !== trMap[trName]?.demarc_page_num;
+  const pageNum = targetPageNum ?? trMap[trName]?.demarc_page_num ?? [...selectedPages].sort((a,b)=>a-b)[0];
+  pinTarget = { trName, pageNum, isExtraPin };
+  document.getElementById('pin-modal-title').textContent = isExtraPin
+    ? `Place EXIT pin for TR ${trName} — page ${pageNum} (cables from this floor route to here)`
+    : `Place/move demarc pin for TR ${trName} — page ${pageNum}`;
 
   const modal = document.getElementById('pin-modal');
   const cv    = document.getElementById('pin-canvas');
@@ -520,12 +597,17 @@ async function confirmPin() {
   const pageId = pageCache[pageNum]?.pageId;
 
   try {
+    // For extra pins (exit points on served pages), store with page-scoped name
+    const pinName = pinTarget.isExtraPin
+      ? `${trName}_exit_pg${pinTarget.pageNum}`
+      : trName;
+
     const r = await fetch(`${base()}/api/pass-demarc`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         project_id: projectId,
         page_id:    pageId ?? null,
-        name:       trName,
+        name:       pinName,
         source:     'user_pin',
         x_norm:     xNorm,
         y_norm:     yNorm,
@@ -534,8 +616,16 @@ async function confirmPin() {
     });
     const j = await r.json();
     if (r.ok) {
-      trMap[trName] = { ...trMap[trName], pin_x: xNorm, pin_y: yNorm, stub_ft: jumperFt, demarc_id: j.id };
-      setStatus('pin-status', `✓ Pin saved for ${trName}`, 'ok');
+      if (pinTarget.isExtraPin) {
+        // Store exit pin under extra_pins keyed by page number
+        if (!trMap[trName].extra_pins) trMap[trName].extra_pins = {};
+        trMap[trName].extra_pins[pinTarget.pageNum] = {
+          x_norm: xNorm, y_norm: yNorm, stub_ft: jumperFt, demarc_id: j.id
+        };
+        renderTRMap(Object.values(trMap));  // refresh to show pin set
+      } else {
+        trMap[trName] = { ...trMap[trName], pin_x: xNorm, pin_y: yNorm, stub_ft: jumperFt, demarc_id: j.id };
+      setStatus('pin-status', `✓ Pin saved`, 'ok');
       setTimeout(closePinModal, 800);
     } else {
       setStatus('pin-status', 'Save error: ' + j.error, 'err');
@@ -663,21 +753,36 @@ async function runBatch() {
 function buildPinsForPage(pageNum, passBRes, pageW, pageH) {
   const pins = [];
   for (const [trName, tr] of Object.entries(trMap)) {
-    // Does this TR serve this page?
     const servesThisPage = (tr.pages ?? []).some(p => p.eval_page_num === pageNum);
     if (!servesThisPage) continue;
 
-    const xNorm = tr.pin_x ?? tr.demarc_x ?? null;
-    const yNorm = tr.pin_y ?? tr.demarc_y ?? null;
-    if (xNorm == null) continue;   // No pin placed — skip
+    // Priority 1: page has a dedicated exit pin
+    const extraPin = tr.extra_pins?.[pageNum];
+    if (extraPin) {
+      pins.push({
+        demarc_id: extraPin.demarc_id ?? tr.demarc_id ?? null,
+        name:      trName,
+        x_norm:    extraPin.x_norm,
+        y_norm:    extraPin.y_norm,
+        stub_ft:   extraPin.stub_ft ?? 0
+      });
+      continue;
+    }
 
-    pins.push({
-      demarc_id: tr.demarc_id ?? null,
-      name:      trName,
-      x_norm:    xNorm,
-      y_norm:    yNorm,
-      stub_ft:   tr.stub_ft ?? 0
-    });
+    // Priority 2: this IS the demarc page — use main pin
+    if (pageNum === tr.demarc_page_num) {
+      const xNorm = tr.pin_x ?? tr.demarc_x ?? null;
+      const yNorm = tr.pin_y ?? tr.demarc_y ?? null;
+      if (xNorm == null) continue;
+      pins.push({
+        demarc_id: tr.demarc_id ?? null,
+        name:      trName,
+        x_norm:    xNorm,
+        y_norm:    yNorm,
+        stub_ft:   tr.stub_ft ?? 0
+      });
+    }
+    // Served but not demarc page + no exit pin = skip (no dist calculated)
   }
   return pins;
 }
