@@ -39,6 +39,70 @@ export async function makeStrips(base64Image, n = 6) {
 }
 
 /**
+ * Crop image to drawing bounds, then slice into N horizontal strips.
+ * bounds = { x0, y0, x1, y1 } normalized 0-1
+ * Returns strips with coord-mapping info to convert back to full-image coords.
+ */
+export async function makeCroppedStrips(base64Image, bounds, n = 6) {
+  const buffer = Buffer.from(base64Image, "base64");
+  const meta   = await sharp(buffer).metadata();
+  const W      = meta.width;
+  const H      = meta.height;
+
+  // Convert bounds to pixels
+  const left   = Math.max(0, Math.round((bounds.x0 ?? 0)   * W));
+  const top    = Math.max(0, Math.round((bounds.y0 ?? 0)   * H));
+  const right  = Math.min(W, Math.round((bounds.x1 ?? 1.0) * W));
+  const bottom = Math.min(H, Math.round((bounds.y1 ?? 1.0) * H));
+  const cropW  = right  - left;
+  const cropH  = bottom - top;
+
+  if (cropW < 50 || cropH < 50) {
+    // Bounds degenerate — fall back to full image
+    return makeStrips(base64Image, n);
+  }
+
+  // Crop to drawing area
+  const cropBuf = await sharp(buffer)
+    .extract({ left, top, width: cropW, height: cropH })
+    .jpeg({ quality: 92 })
+    .toBuffer();
+
+  // Slice cropped image into horizontal strips
+  const stripH = Math.floor(cropH / n);
+  const strips = [];
+
+  for (let i = 0; i < n; i++) {
+    const stripTop    = i * stripH;
+    const stripHeight = i === n - 1 ? cropH - stripTop : stripH;
+
+    const stripBuf = await sharp(cropBuf)
+      .extract({ left: 0, top: stripTop, width: cropW, height: stripHeight })
+      .jpeg({ quality: 90 })
+      .toBuffer();
+
+    // y_norm relative to FULL image
+    const fullYStart = (top  + stripTop)            / H;
+    const fullYEnd   = (top  + stripTop + stripHeight) / H;
+
+    strips.push({
+      index:        i,
+      base64:       stripBuf.toString("base64"),
+      y_norm_start: fullYStart,
+      y_norm_end:   fullYEnd,
+      // x offset for coordinate mapping back to full image
+      x_offset:     left  / W,
+      x_scale:      cropW / W,
+      width:        cropW,
+      height:       stripHeight,
+      full_width:   W,
+      full_height:  H
+    });
+  }
+  return strips;
+}
+
+/**
  * Slice a base64 image into vertical column strips using x-boundary fractions.
  * boundaries = [{ group, x_start, x_end }]
  * Returns array of { index, base64, group, x_start, x_end, width, height }

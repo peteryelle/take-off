@@ -4,7 +4,7 @@
 // ─────────────────────────────────────────────────────────────────
 
 import { getSupabase, getAnthropic, SYSTEM_PROMPT, ok, err, CORS } from "./utils/clients.js";
-import { makeStrips, toFullCoords, dedup, annotate, calcPath } from "./utils/strips.js";
+import { makeStrips, makeCroppedStrips, toFullCoords, dedup, annotate, calcPath } from "./utils/strips.js";
 
 const DEDUP_THRESHOLD = 0.02;
 const N_STRIPS        = 6;
@@ -49,15 +49,24 @@ export default async function handler(req) {
     return "image/jpeg";
   }
 
-  // ── Slice into strips ─────────────────────────────────────────
+  // ── Slice into strips (crop to drawing area first if bounds available) ──
   let strips;
+  const drawingBounds = (page.drawing_x0 != null) ? {
+    x0: page.drawing_x0,
+    y0: page.drawing_y0 ?? 0,
+    x1: page.drawing_x1,
+    y1: page.drawing_y1 ?? 1
+  } : null;
+
   try {
-    strips = await makeStrips(page_image_base64, N_STRIPS);
+    strips = drawingBounds
+      ? await makeCroppedStrips(page_image_base64, drawingBounds, N_STRIPS)
+      : await makeStrips(page_image_base64, N_STRIPS);
   } catch (e) {
     return err(`Strip generation failed: ${e.message}`, 500);
   }
 
-  const imageW = strips[0].width;
+  const imageW = strips[0].full_width  ?? strips[0].width;
   const imageH = strips[0].full_height;
 
   // ── Detect in each strip ──────────────────────────────────────
@@ -125,7 +134,12 @@ If none found: { "devices_found": [], "warnings": [] }`;
   for (const { strip, found, warnings } of stripResults) {
     allWarnings.push(...warnings);
     for (const d of found) {
-      const { x, y } = toFullCoords(strip, d.x_frac, d.y_frac_in_strip);
+      // Map x back to full image coords if strip has x_offset (cropped strip)
+      const xOffset = strip.x_offset ?? 0;
+      const xScale  = strip.x_scale  ?? 1;
+      const rawCoords = toFullCoords(strip, d.x_frac, d.y_frac_in_strip);
+      const fullX = xOffset + d.x_frac * xScale;
+      const { x, y } = { x: Math.round(fullX * 1000) / 1000, y: rawCoords.y };
       rawDetections.push({ x, y, label: d.label, confidence: d.confidence, source_strip: strip.index });
     }
   }

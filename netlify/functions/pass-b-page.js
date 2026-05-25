@@ -56,6 +56,14 @@ Return exactly this structure:
     "description": "string or null",
     "confidence": "low"
   },
+  "drawing_bounds": {
+    "x0": 0.0,
+    "y0": 0.0,
+    "x1": 0.65,
+    "y1": 0.85,
+    "confidence": "high|medium|low",
+    "notes": "floor plan occupies left portion, notes columns on right"
+  },
   "warnings": []
 }
 
@@ -63,6 +71,7 @@ Rules:
 - Coordinates x,y are normalized 0-1 (x=0 left, x=1 right, y=0 top, y=1 bottom)
 - If scale not found set type to "none"
 - If demarcation is on a different sheet set found=false and type="off_sheet"
+- drawing_bounds: identify the bounding box of the actual floor plan drawing area only — exclude notes columns, title block, key plan, legend boxes, and general notes text. This is the region containing walls, rooms, and device symbols.
 - Return ONLY the JSON object, nothing else`;
 
   let msgText;
@@ -110,6 +119,10 @@ Rules:
     demarc_x:        result.demarcation?.found ? result.demarcation.x   : null,
     demarc_y:        result.demarcation?.found ? result.demarcation.y   : null,
     demarc_source:   result.demarcation?.found ? "claude" : "off_sheet",
+    drawing_x0:      result.drawing_bounds?.x0 ?? null,
+    drawing_y0:      result.drawing_bounds?.y0 ?? null,
+    drawing_x1:      result.drawing_bounds?.x1 ?? null,
+    drawing_y1:      result.drawing_bounds?.y1 ?? null,
     pass_b_complete: true
   };
 
@@ -122,12 +135,13 @@ Rules:
   if (pageErr) return err(`DB error: ${pageErr.message}`, 500);
 
   return ok({
-    pass:        "scale_and_demarc",
-    page_id:     page.id,
-    sheet_title: result.sheet_title,
-    scale:       result.scale,
-    demarcation: result.demarcation,
-    warnings:    result.warnings ?? []
+    pass:           "scale_and_demarc",
+    page_id:        page.id,
+    sheet_title:    result.sheet_title,
+    scale:          result.scale,
+    demarcation:    result.demarcation,
+    drawing_bounds: result.drawing_bounds ?? null,
+    warnings:       result.warnings ?? []
   });
 }
 

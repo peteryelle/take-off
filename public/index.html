@@ -662,9 +662,12 @@ async function runPassB() {
 
     const scale  = j.scale?.display_label || 'unknown';
     const demarc = j.demarcation?.found === false
-      ? `CENTER default (0.5, 0.5)`
-      : `${j.demarcation?.label ?? 'found'} @ (${j.demarcation?.x}, ${j.demarcation?.y})`;
-    setStatus('pass-b-status', `✓ Scale: ${scale} · Demarc: ${demarc}`, 'ok');
+      ? 'CENTER default (0.5, 0.5)'
+      : (j.demarcation?.label ?? 'found') + ' @ (' + j.demarcation?.x + ', ' + j.demarcation?.y + ')';
+    const bounds = j.drawing_bounds
+      ? 'Drawing crop: x(' + j.drawing_bounds.x0?.toFixed(2) + '-' + j.drawing_bounds.x1?.toFixed(2) + ') y(' + j.drawing_bounds.y0?.toFixed(2) + '-' + j.drawing_bounds.y1?.toFixed(2) + ')'
+      : 'No drawing bounds detected';
+    setStatus('pass-b-status', '✓ Scale: ' + scale + ' · Demarc: ' + demarc + ' · ' + bounds, 'ok');
 
     // Always show scale section — pre-fill if Claude found it
     document.getElementById('scale-override-section').style.display = 'block';
