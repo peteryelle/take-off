@@ -1085,8 +1085,7 @@ async function loadAnchorPatterns() {
   }
 }
 
-// Extract ALL text items from a PDF page, filter to known anchor strings only.
-// No color filtering — anchor string matching is the reliable discriminator.
+// Extract ALL text from page and log raw output for debugging
 async function getDeviceTextItems(pdfPage) {
   const viewport = pdfPage.getViewport({ scale: 1.0 });
   const W = viewport.width;
@@ -1094,13 +1093,28 @@ async function getDeviceTextItems(pdfPage) {
 
   const textContent = await pdfPage.getTextContent({ includeMarkedContent: false });
 
+  // ── DEBUG: log every unique string in the PDF text layer ──────
+  const allStrings = {};
+  for (const item of textContent.items) {
+    const s = item.str;
+    if (!s) continue;
+    allStrings[s] = (allStrings[s] ?? 0) + 1;
+  }
+  console.log('=== ALL UNIQUE PDF TEXT STRINGS ===');
+  // Log strings that look device-related (short, uppercase/numeric)
+  const deviceLike = Object.entries(allStrings)
+    .filter(([s]) => s.trim().length > 0 && s.trim().length <= 6)
+    .sort((a,b) => a[0].localeCompare(b[0]));
+  console.table(deviceLike.map(([str, count]) => ({ str, count })));
+  console.log('Total unique strings (all):', Object.keys(allStrings).length);
+  console.log('Anchor pattern set:', [...anchorPatternSet]);
+  // ── END DEBUG ──────────────────────────────────────────────────
+
   const items = [];
 
   for (const item of textContent.items) {
     const str = item.str?.trim();
     if (!str) continue;
-
-    // Only keep items that match a known anchor label exactly
     if (!anchorPatternSet.has(str)) continue;
 
     const tx = item.transform[4];
@@ -1113,10 +1127,13 @@ async function getDeviceTextItems(pdfPage) {
       str,
       cx_norm:   parseFloat(((tx + tw / 2) / W).toFixed(4)),
       cy_norm:   parseFloat((1 - (ty + th / 2) / H).toFixed(4)),
-      color_hex: '#999999',   // color not used server-side, placeholder
+      color_hex: '#999999',
       font_size: parseFloat(fs.toFixed(1))
     });
   }
+
+  console.log(`=== MATCHED ITEMS (sent to server): ${items.length} ===`);
+  console.table(items.slice(0, 20));
 
   return { items, page_width_pts: W, page_height_pts: H };
 }
