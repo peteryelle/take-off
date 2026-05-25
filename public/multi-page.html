@@ -208,24 +208,39 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
 
 <!-- ── PIN PLACEMENT MODAL ───────────────────────────────────────── -->
 <div class="pin-modal" id="pin-modal">
-  <div style="color:#f0c040; font-size:13px; margin-bottom:8px;" id="pin-modal-title">
+  <div style="color:#f0c040; font-size:14px; font-weight:bold; margin-bottom:4px;" id="pin-modal-title">
     Place pin for TR —
   </div>
-  <div style="color:#888; font-size:11px; margin-bottom:10px;">
-    Click on the drawing to place the demarc exit point
+  <div style="color:#aaa; font-size:13px; margin-bottom:8px;">
+    Click to place pin · Scroll to zoom · Drag to pan
   </div>
-  <div class="pin-canvas-wrap" id="pin-canvas-wrap">
-    <canvas id="pin-canvas"></canvas>
+
+  <!-- Zoom controls -->
+  <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+    <button onclick="pinZoom(1.5)" style="padding:3px 12px; font-size:13px;">＋ Zoom In</button>
+    <button onclick="pinZoom(1/1.5)" style="padding:3px 12px; font-size:13px;">－ Zoom Out</button>
+    <button onclick="pinResetZoom()" style="padding:3px 10px; font-size:11px;" class="info">Reset</button>
+    <span id="pin-zoom-level" style="color:#888; font-size:12px;">100%</span>
   </div>
+
+  <div class="pin-canvas-wrap" id="pin-canvas-wrap"
+       style="overflow:hidden; width:88vw; height:62vh; position:relative; cursor:crosshair; border:1px solid #333;">
+    <canvas id="pin-canvas" style="position:absolute; top:0; left:0; transform-origin:0 0;"></canvas>
+  </div>
+
   <div class="pin-controls">
     <div>
-      <label>Jumper length (ft) — distance from this point to actual TR</label>
-      <input type="number" id="pin-jumper-ft" value="0" min="0" step="5" style="width:80px;">
+      <label style="color:#aaa; font-size:13px;">Jumper length (ft) — distance from this exit point to actual TR room</label>
+      <input type="number" id="pin-jumper-ft" value="0" min="0" step="5"
+             style="width:100px; font-size:14px; padding:6px 8px; margin-top:4px;">
     </div>
-    <button onclick="confirmPin()">✓ Confirm Pin</button>
-    <button class="danger" onclick="closePinModal()">✗ Cancel</button>
+    <button onclick="confirmPin()" style="padding:8px 20px; font-size:14px;">✓ Confirm Pin</button>
+    <button class="danger" onclick="closePinModal()" style="padding:8px 16px; font-size:14px;">✗ Cancel</button>
   </div>
-  <div class="status" id="pin-status"></div>
+  <div style="margin-top:6px; display:flex; gap:16px; align-items:center;">
+    <div class="status" id="pin-status"></div>
+    <span id="pin-coords" style="color:#555; font-size:12px; font-family:monospace;"></span>
+  </div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -612,8 +627,10 @@ function renderTRMap(trs) {
           <td><span class="badge ${hasPin ? 'on' : 'off'}" style="font-size:9px;">${hasPin ? '✓ pin set' : '⚠ needs pin'}</span></td>
           <td style="padding:4px 6px;">
             <input type="number" id="jumper-${pinKey}" value="${hasPin?.stub_ft ?? 0}" min="0" step="10"
-               style="width:80px; background:#1a1a1a; border:1px solid ${hasPin?.stub_ft > 0 ? '#3a7a3a' : '#7a5000'}; color:#e0e0e0; padding:5px 8px; border-radius:3px; font-size:13px;"
-               placeholder="ft" title="Backbone cable from this floor to ${tr.name}">
+               style="width:80px; background:#1a1a1a; border:1px solid ${(hasPin?.stub_ft ?? 0) > 0 ? '#3a7a3a' : '#7a5000'}; color:${(hasPin?.stub_ft ?? 0) > 0 ? '#7af07a' : '#f0c040'}; padding:5px 8px; border-radius:3px; font-size:14px; font-weight:bold;"
+               placeholder="ft" title="Backbone cable from this floor to ${tr.name}"
+               onchange="this.style.borderColor=(this.value>0?'#3a7a3a':'#7a5000'); this.style.color=(this.value>0?'#7af07a':'#f0c040')">
+            <div style="font-size:11px; color:#666; margin-top:2px;">${(hasPin?.stub_ft ?? 0) > 0 ? hasPin.stub_ft + 'ft set' : 'enter distance'}</div>
           </td>
           <td><button class="amber" onclick="openPinModal('${tr.name}', ${pg.eval_page_num})" 
                style="padding:2px 8px; font-size:10px;">${hasPin ? 'Move' : 'Place Pin'} pg${pg.eval_page_num}</button></td>`;
@@ -624,46 +641,147 @@ function renderTRMap(trs) {
 }
 
 // ── Pin placement modal ───────────────────────────────────────────
+// ── Pin modal zoom/pan state ─────────────────────────────────────
+let pinZoomLevel = 1.0;
+let pinPanX = 0, pinPanY = 0;
+let pinIsDragging = false;
+let pinDragStart = { x: 0, y: 0, panX: 0, panY: 0 };
+let pinCanvasNativeW = 0, pinCanvasNativeH = 0;
+
+function applyPinTransform() {
+  const cv = document.getElementById('pin-canvas');
+  cv.style.transform = `translate(${pinPanX}px, ${pinPanY}px) scale(${pinZoomLevel})`;
+  document.getElementById('pin-zoom-level').textContent = Math.round(pinZoomLevel * 100) + '%';
+  redrawPinDot();
+}
+
+function pinZoom(factor) {
+  const wrap = document.getElementById('pin-canvas-wrap');
+  const wRect = wrap.getBoundingClientRect();
+  // Zoom toward center of viewport
+  const cx = wRect.width / 2, cy = wRect.height / 2;
+  pinPanX = cx - (cx - pinPanX) * factor;
+  pinPanY = cy - (cy - pinPanY) * factor;
+  pinZoomLevel = Math.min(10, Math.max(0.5, pinZoomLevel * factor));
+  applyPinTransform();
+}
+
+function pinResetZoom() {
+  pinZoomLevel = 1.0; pinPanX = 0; pinPanY = 0;
+  applyPinTransform();
+}
+
+function redrawPinDot() {
+  const wrap = document.getElementById('pin-canvas-wrap');
+  wrap.querySelectorAll('.placed-pin').forEach(el => el.remove());
+  if (pinTarget?.xNorm != null) {
+    const scaledX = pinTarget.xNorm * pinCanvasNativeW * pinZoomLevel + pinPanX;
+    const scaledY = pinTarget.yNorm * pinCanvasNativeH * pinZoomLevel + pinPanY;
+    const dot = document.createElement('div');
+    dot.className = 'placed-pin';
+    dot.style.left = scaledX + 'px';
+    dot.style.top  = scaledY + 'px';
+    wrap.appendChild(dot);
+  }
+}
+
 async function openPinModal(trName, targetPageNum) {
-  // targetPageNum: if provided, place an exit pin for this page (not the demarc page)
   const isExtraPin = targetPageNum && targetPageNum !== trMap[trName]?.demarc_page_num;
   const pageNum = targetPageNum ?? trMap[trName]?.demarc_page_num ?? [...selectedPages].sort((a,b)=>a-b)[0];
-  pinTarget = { trName, pageNum, isExtraPin };
+  pinTarget = { trName, pageNum, isExtraPin, xNorm: null, yNorm: null };
+  pinZoomLevel = 1.0; pinPanX = 0; pinPanY = 0;
+
   document.getElementById('pin-modal-title').textContent = isExtraPin
-    ? `Place EXIT pin for TR ${trName} — page ${pageNum} (cables from this floor route to here)`
-    : `Place/move demarc pin for TR ${trName} — page ${pageNum}`;
+    ? `Place EXIT pin for TR ${trName} — pg${pageNum} (cables leave this floor here)`
+    : `Place/move demarc pin for TR ${trName} — pg${pageNum}`;
 
   const modal = document.getElementById('pin-modal');
   const cv    = document.getElementById('pin-canvas');
   const wrap  = document.getElementById('pin-canvas-wrap');
 
-  // Render page
-  const pdfPage = await pdfDoc.getPage(pinTarget.pageNum);
-  const vp      = pdfPage.getViewport({ scale: 1.8 });
+  // Render at 2.5x for sharp zoom
+  const pdfPage = await pdfDoc.getPage(pageNum);
+  const vp      = pdfPage.getViewport({ scale: 2.5 });
   cv.width      = vp.width;
   cv.height     = vp.height;
+  pinCanvasNativeW = vp.width;
+  pinCanvasNativeH = vp.height;
   await pdfPage.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
-  cv.style.maxWidth  = '88vw';
-  cv.style.maxHeight = '68vh';
 
-  // Remove old pin dots
-  wrap.querySelectorAll('.placed-pin').forEach(el => el.remove());
+  // Scale canvas to fit wrap initially
+  const wrapW = wrap.offsetWidth || window.innerWidth * 0.88;
+  const initScale = Math.min(wrapW / vp.width, 1.0);
+  pinZoomLevel = initScale;
+  applyPinTransform();
 
-  // If existing pin, draw it
-  const existing = trMap[trName];
-  if (existing?.pin_x != null) drawPinDot(wrap, cv, existing.pin_x, existing.pin_y);
+  // Set up existing pin if any
+  const existing = isExtraPin
+    ? trMap[trName]?.extra_pins?.[pageNum]
+    : trMap[trName];
+  if (existing?.pin_x != null || existing?.x_norm != null) {
+    pinTarget.xNorm = existing.pin_x ?? existing.x_norm;
+    pinTarget.yNorm = existing.pin_y ?? existing.y_norm;
+    redrawPinDot();
+  }
 
+  // Pre-fill jumper
+  const existingJumper = isExtraPin
+    ? (trMap[trName]?.extra_pins?.[pageNum]?.stub_ft ?? 0)
+    : (trMap[trName]?.stub_ft ?? 0);
+  document.getElementById('pin-jumper-ft').value = existingJumper;
+
+  // ── Click to place pin ──
   cv.onclick = (e) => {
-    const rect    = cv.getBoundingClientRect();
-    const scaleX  = cv.width  / rect.width;
-    const scaleY  = cv.height / rect.height;
-    const xNorm   = (e.clientX - rect.left) * scaleX / cv.width;
-    const yNorm   = (e.clientY - rect.top)  * scaleY / cv.height;
-    wrap.querySelectorAll('.placed-pin').forEach(el => el.remove());
-    drawPinDot(wrap, cv, xNorm, yNorm);
-    pinTarget.xNorm = xNorm;
-    pinTarget.yNorm = yNorm;
-    setStatus('pin-status', `Pin at (${xNorm.toFixed(3)}, ${yNorm.toFixed(3)})`, 'ok');
+    const cvRect = cv.getBoundingClientRect();
+    // Account for zoom+pan transform: canvas element is transformed
+    const xInCanvas = (e.clientX - cvRect.left) / pinZoomLevel;
+    const yInCanvas = (e.clientY - cvRect.top)  / pinZoomLevel;
+    pinTarget.xNorm = xInCanvas / pinCanvasNativeW;
+    pinTarget.yNorm = yInCanvas / pinCanvasNativeH;
+    document.getElementById('pin-coords').textContent =
+      `Pin at (${pinTarget.xNorm.toFixed(3)}, ${pinTarget.yNorm.toFixed(3)})`;
+    setStatus('pin-status', '✓ Pin placed — adjust zoom to confirm position', 'ok');
+    redrawPinDot();
+  };
+
+  // ── Scroll to zoom ──
+  wrap.onwheel = (e) => {
+    e.preventDefault();
+    const factor = e.deltaY < 0 ? 1.15 : 1/1.15;
+    const wRect  = wrap.getBoundingClientRect();
+    const mx = e.clientX - wRect.left;
+    const my = e.clientY - wRect.top;
+    pinPanX = mx - (mx - pinPanX) * factor;
+    pinPanY = my - (my - pinPanY) * factor;
+    pinZoomLevel = Math.min(10, Math.max(0.3, pinZoomLevel * factor));
+    applyPinTransform();
+  };
+
+  // ── Drag to pan ──
+  wrap.onmousedown = (e) => {
+    if (e.target === cv) {
+      pinIsDragging = false;  // will become drag if mouse moves
+      pinDragStart  = { x: e.clientX, y: e.clientY, panX: pinPanX, panY: pinPanY, moved: false };
+      wrap.style.cursor = 'grabbing';
+    }
+  };
+  wrap.onmousemove = (e) => {
+    if (!pinDragStart || e.buttons !== 1) return;
+    const dx = e.clientX - pinDragStart.x;
+    const dy = e.clientY - pinDragStart.y;
+    if (Math.abs(dx) + Math.abs(dy) > 5) pinDragStart.moved = true;
+    if (pinDragStart.moved) {
+      pinPanX = pinDragStart.panX + dx;
+      pinPanY = pinDragStart.panY + dy;
+      applyPinTransform();
+    }
+  };
+  wrap.onmouseup = (e) => {
+    if (pinDragStart?.moved) {
+      e.stopPropagation();  // prevent click when dragging
+    }
+    pinDragStart = null;
+    wrap.style.cursor = 'crosshair';
   };
 
   modal.classList.add('open');
@@ -673,19 +791,7 @@ function movePinModal(trName, pageNum) {
   openPinModal(trName, pageNum);
 }
 
-function drawPinDot(wrap, cv, xNorm, yNorm) {
-  const dot = document.createElement('div');
-  dot.className = 'placed-pin';
-  const rect   = cv.getBoundingClientRect();
-  const dispW  = parseFloat(cv.style.maxWidth)  || cv.width;
-  const dispH  = parseFloat(cv.style.maxHeight) || cv.height;
-  const scaleX = Math.min(dispW, cv.width)  / cv.width;
-  const scaleY = Math.min(dispH, cv.height) / cv.height;
-  const scale  = Math.min(scaleX, scaleY);
-  dot.style.left = `${xNorm * cv.width  * scale}px`;
-  dot.style.top  = `${yNorm * cv.height * scale}px`;
-  wrap.appendChild(dot);
-}
+// drawPinDot replaced by redrawPinDot (supports zoom/pan)
 
 async function confirmPin() {
   if (pinTarget?.xNorm == null) {
@@ -933,10 +1039,21 @@ function renderByPage() {
     if (!res) continue;
 
     html += `<div style="margin-bottom:16px; border-bottom:1px solid #1a1a1a; padding-bottom:12px;">`;
-    html += `<div style="color:#f0c040; font-size:12px; margin-bottom:6px;">
-      <strong>pg${pageNum}</strong> — ${sheet}
-      <span style="color:#888; margin-left:8px;">${res.device_count} devices</span>
-      ${res.tia_violations ? `<span style="color:#f07a7a; margin-left:8px;">⚠ ${res.tia_violations} TIA</span>` : ''}
+    // Find demarc info for this page
+    let demarcInfo = '';
+    for (const [trName, tr] of Object.entries(trMap)) {
+      const servesThis = (tr.pages ?? []).some(p => p.eval_page_num === pageNum);
+      if (!servesThis) continue;
+      const extraPin = tr.extra_pins?.[pageNum];
+      const backbone = extraPin?.stub_ft ?? tr.stub_ft ?? 0;
+      demarcInfo = `<span style="color:#555; margin-left:12px; font-size:11px;">TR: ${trName}${backbone > 0 ? ' + ' + backbone + 'ft backbone' : ''}</span>`;
+    }
+    html += `<div style="color:#f0c040; font-size:13px; margin-bottom:6px; display:flex; align-items:baseline; flex-wrap:wrap; gap:8px;">
+      <strong>pg${pageNum}</strong>
+      <span style="color:#e0e0e0;">${sheet}</span>
+      <span style="color:#888;">${res.device_count} devices</span>
+      ${res.tia_violations ? `<span style="color:#f07a7a;">⚠ ${res.tia_violations} TIA</span>` : ''}
+      ${demarcInfo}
     </div>`;
 
     // By-type summary
@@ -997,15 +1114,25 @@ function renderByTR() {
     const tia   = grp.devices.filter(d => d.tia_flag).length;
     const maxFt = Math.max(0, ...grp.devices.map(d => d.total_ft ?? 0));
 
+    // Build per-page backbone summary for this TR
+    const backboneSummary = [];
+    for (const pgNum of [...grp.pages].sort((a,b)=>a-b)) {
+      const trInfo = trMap[tr.name];
+      if (!trInfo) continue;
+      const extraPin = trInfo.extra_pins?.[pgNum];
+      const bb = extraPin?.stub_ft ?? (pgNum === trInfo.demarc_page_num ? 0 : trInfo.stub_ft ?? 0);
+      if (bb > 0) backboneSummary.push(`pg${pgNum}: +${bb}ft`);
+    }
     html += `<div style="margin-bottom:16px; border-bottom:1px solid #1a1a1a; padding-bottom:12px;">
-      <div style="color:#f0c040; font-size:12px; margin-bottom:4px;">
+      <div style="color:#f0c040; font-size:14px; margin-bottom:4px; font-weight:bold;">
         TR ${tr.name}
-        ${tr.stub_ft ? `<span style="color:#888;"> + ${tr.stub_ft}ft stub</span>` : ''}
+        <span style="color:#888; font-size:12px; font-weight:normal; margin-left:8px;">${tr.name ? (trMap[tr.name]?.building ?? '') + ' ' + (trMap[tr.name]?.floor ?? '') : ''}</span>
       </div>
-      <div style="font-size:11px; color:#888;">
+      <div style="font-size:13px; color:#aaa; margin-bottom:4px;">
         Pages: ${pages} · ${grp.devices.length} devices · longest: ${maxFt}ft
         ${tia ? `· <span style="color:#f07a7a;">⚠ ${tia} TIA</span>` : ''}
       </div>
+      ${backboneSummary.length > 0 ? `<div style="font-size:12px; color:#7ac0f0;">Backbone: ${backboneSummary.join(' · ')}</div>` : ''}
     </div>`;
   }
 
