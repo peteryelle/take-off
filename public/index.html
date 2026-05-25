@@ -262,6 +262,18 @@
   <div class="output-area" id="pass-b2-output">Output will appear here…</div>
 </div>
 
+<!-- ── STEP 3b: PASS EXTRACT — TEXT-LAYER DETECTION ────────────── -->
+<div class="section">
+  <div class="section-title">3b · PASS EXTRACT — TEXT-LAYER DEVICE DETECTION</div>
+  <div style="font-size:11px; color:#666; margin-bottom:8px;">
+    Reads device labels directly from the PDF text layer — no vision required.
+    Run after Pass B. Requires device types to have <code>text_anchors</code> set in Supabase.
+  </div>
+  <button id="btn-pass-extract">▶ Run Pass Extract</button>
+  <div class="status" id="pass-extract-status">—</div>
+  <div class="output-area" id="pass-extract-output">Output will appear here…</div>
+</div>
+
 <!-- ── STEP 4: PASS C ───────────────────────────────────────────── -->
 <div class="section">
   <div class="section-title">4 · PASS C — DEVICE DETECTION + DISTANCES</div>
@@ -1044,6 +1056,174 @@ async function fetchSummary() {
   }
 }
 
+// ── Pass Extract — text-layer device detection ────────────────────────
+// Device colors in VA telecom drawings (#999999 / #888888 gray)
+const DEVICE_COLORS_HEX = new Set(["#999999","#888888","#9a9a9a","#898989"]);
+
+function colorToHex(arr) {
+  if (!arr || arr.length < 3) return null;
+  return '#' + arr.map(c => Math.round(c*255).toString(16).padStart(2,'0')).join('');
+}
+
+// Extract device-layer text items from a PDF page using operator list for color
+async function getColoredTextItems(pdfPage) {
+  const viewport = pdfPage.getViewport({ scale: 1.0 });
+  const W = viewport.width;
+  const H = viewport.height;
+
+  const [textContent, opList] = await Promise.all([
+    pdfPage.getTextContent({ includeMarkedContent: false }),
+    pdfPage.getOperatorList()
+  ]);
+
+  // Walk operator list to track fill color per text op
+  const OPS = pdfjsLib.OPS;
+  let currentColor = '#000000';
+  let textOpIdx = 0;
+  const textItemColors = [];
+
+  for (let i = 0; i < opList.fnArray.length; i++) {
+    const fn   = opList.fnArray[i];
+    const args = opList.argsArray[i];
+    if (fn === OPS.setFillRGBColor) {
+      currentColor = colorToHex(args);
+    } else if (fn === OPS.setFillGray) {
+      const v = Math.round(args[0] * 255);
+      const h = v.toString(16).padStart(2,'0');
+      currentColor = `#${h}${h}${h}`;
+    } else if (fn === OPS.showText || fn === OPS.showSpacedText) {
+      textItemColors.push(currentColor);
+    }
+  }
+
+  const items = [];
+  let colorIdx = 0;
+
+  for (const item of textContent.items) {
+    if (!item.str?.trim()) continue;
+    const color = textItemColors[colorIdx++] ?? '#000000';
+
+    // Only keep device-colored text
+    if (!DEVICE_COLORS_HEX.has(color)) continue;
+
+    const tx = item.transform[4];
+    const ty = item.transform[5];
+    const fs = Math.abs(item.transform[3]);
+    const tw = item.width  ?? 0;
+    const th = item.height ?? fs;
+
+    items.push({
+      str:       item.str.trim(),
+      cx_norm:   parseFloat(((tx + tw / 2) / W).toFixed(4)),
+      cy_norm:   parseFloat((1 - (ty + th / 2) / H).toFixed(4)),
+      color_hex: color,
+      font_size: parseFloat(fs.toFixed(1))
+    });
+  }
+
+  // Fallback: if color filtering returned nothing, use known label patterns
+  if (!items.length) {
+    let allIdx = 0;
+    for (const item of textContent.items) {
+      if (!item.str?.trim()) continue;
+      if (!/^(DD[123]|DV[12]|N\d+|WAP)$/.test(item.str.trim())) continue;
+      const tx = item.transform[4];
+      const ty = item.transform[5];
+      const fs = Math.abs(item.transform[3]);
+      const tw = item.width ?? 0;
+      const th = item.height ?? fs;
+      items.push({
+        str:       item.str.trim(),
+        cx_norm:   parseFloat(((tx + tw / 2) / W).toFixed(4)),
+        cy_norm:   parseFloat((1 - (ty + th / 2) / H).toFixed(4)),
+        color_hex: '#999999',
+        font_size: parseFloat(fs.toFixed(1))
+      });
+    }
+  }
+
+  return { items, page_width_pts: W, page_height_pts: H };
+}
+
+// Derive pts-per-foot from passBResult scale
+function calcScalePtsPerFt(passBResult) {
+  const s = passBResult?.scale?.text ?? passBResult?.scale?.graphic;
+  if (!s) return null;
+  if (s.paper_value && s.real_value && s.paper_unit === 'in')
+    return (72 / s.paper_value) / s.real_value;
+  return null;
+}
+
+// Main Pass Extract runner — called from button
+async function runPassExtract() {
+  if (!projectId)            { alert('Confirm project first (Step 0)'); return; }
+  if (!passBResult?.page_id) { alert('Run Pass B first to get page_id'); return; }
+  if (!pdfDoc)               { alert('Load a PDF first (Step 1)'); return; }
+
+  const pg = evalPage || 1;
+  setStatus('pass-extract-status', `Extracting text layer from page ${pg}…`, 'running');
+
+  try {
+    const pdfPage  = await pdfDoc.getPage(pg);
+    const textData = await getColoredTextItems(pdfPage);
+    const { items, page_width_pts, page_height_pts } = textData;
+
+    setStatus('pass-extract-status',
+      `Found ${items.length} device-layer items — calling API…`, 'running');
+
+    const scalePtsPerFt = calcScalePtsPerFt(passBResult);
+
+    const r = await fetch(`${base()}/api/pass-extract`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id:      projectId,
+        page_id:         passBResult.page_id,
+        text_items:      items,
+        page_width_pts,
+        page_height_pts,
+        scale_pts_per_ft: scalePtsPerFt
+      })
+    });
+
+    const j = await r.json();
+
+    if (!r.ok) {
+      setStatus('pass-extract-status', 'Error: ' + (j.error ?? r.status), 'err');
+      setOutput('pass-extract-output', j);
+      return;
+    }
+
+    // Show results
+    const byType = j.by_type ?? [];
+    let summary = `✓ ${j.device_count} devices found`;
+    if (j.tia_violations) summary += ` · ⚠ ${j.tia_violations} TIA violations`;
+    if (j.max_run_ft)     summary += ` · longest: ${j.max_run_ft}ft`;
+    setStatus('pass-extract-status', summary, j.tia_violations > 0 ? '' : 'ok');
+
+    setOutput('pass-extract-output', {
+      device_count: j.device_count,
+      by_type:      byType,
+      max_run_ft:   j.max_run_ft,
+      tia_violations: j.tia_violations,
+      demarc_used:  j.demarc_used,
+      warnings:     j.warnings,
+      sample_devices: j.devices?.slice(0, 8)
+    });
+
+    // Update the main device count display
+    document.getElementById('device-count').textContent = j.device_count;
+    document.getElementById('results-summary').style.display = 'block';
+    const badge = document.getElementById('tia-badge-container');
+    badge.innerHTML = j.tia_violations > 0
+      ? `<span class="tia-badge">⚠ ${j.tia_violations} TIA &gt;295 ft</span>` : '';
+
+  } catch(e) {
+    setStatus('pass-extract-status', 'Error: ' + e.message, 'err');
+    setOutput('pass-extract-output', e.message);
+  }
+}
+
 // ── Init defaults ────────────────────────────────────────────────────
 // Wire everything — script is at bottom of body so DOM is ready
 (function init() {
@@ -1061,6 +1241,7 @@ async function fetchSummary() {
   wire('btn-pass-a',         runPassA);
   wire('btn-pass-b',         runPassB);
   wire('btn-pass-b2',        runPassB2);
+  wire('btn-pass-extract',   runPassExtract);
   wire('btn-load-devices',   loadDevicesFromSupabase);
   wire('btn-pass-c',         runPassC);
   wire('btn-summary',        fetchSummary);
