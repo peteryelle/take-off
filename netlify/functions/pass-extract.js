@@ -88,8 +88,11 @@ export default async function handler(req) {
     }
   }
 
+  // ── Assign server-side indices (_idx not sent by browser) ───────
+  const indexedItems = text_items.map((t, i) => ({ ...t, _idx: i }));
+
   // ── Find all items matching a primary anchor ──────────────────
-  const primaryItems = text_items.filter(t => anchorIndex[t.str.trim()]);
+  const primaryItems = indexedItems.filter(t => anchorIndex[t.str.trim()]);
 
   if (!primaryItems.length) {
     return ok({
@@ -108,21 +111,21 @@ export default async function handler(req) {
 
   for (let i = 0; i < primaryItems.length; i++) {
     const anchor = primaryItems[i];
-    if (usedIndices.has(anchor._idx)) continue;  // already claimed
+    if (usedIndices.has(anchor._idx)) continue;  // already claimed by another cluster
 
-    const dt      = anchorIndex[anchor.str.trim()];
+    const dt         = anchorIndex[anchor.str.trim()];
     const allAnchors = [...(dt.text_anchors?.primary ?? []), ...(dt.text_anchors?.associated ?? [])];
 
-    // Collect all text items within radius of this anchor
-    const clusterItems = text_items.filter(t => {
-      const dx = t.cx_norm - anchor.cx_norm;
-      const dy = t.cy_norm - anchor.cy_norm;
+    // Collect all indexed items within radius of this anchor
+    const clusterItems = indexedItems.filter(t => {
+      const dx   = t.cx_norm - anchor.cx_norm;
+      const dy   = t.cy_norm - anchor.cy_norm;
       const dist = Math.sqrt(dx * dx + dy * dy);
       return dist <= CLUSTER_RADIUS_NORM
         && allAnchors.includes(t.str.trim());
     });
 
-    // Mark all cluster members as used so they don't form duplicate clusters
+    // Mark all cluster members as used — prevents duplicate clusters
     clusterItems.forEach(t => usedIndices.add(t._idx));
 
     clusters.push({ anchor, device_type: dt, items: clusterItems });
