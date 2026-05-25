@@ -403,7 +403,10 @@ function restoreSession() {
 
 function updateDeviceTypesLink() {
   const link = document.getElementById('device-types-link');
-  if (link && projectId) link.href = `device-types.html?project_id=${projectId}`;
+  if (link && projectId) {
+    link.href = `device-types.html?project_id=${projectId}`;
+    link.onclick = () => sessionStorage.setItem('to_origin_page', 'index.html');
+  }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────

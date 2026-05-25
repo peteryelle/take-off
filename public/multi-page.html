@@ -245,17 +245,36 @@ function setStatus(id, msg, cls='') {
 
 // ── Session restore ───────────────────────────────────────────────
 (function init() {
-  const stored = sessionStorage.getItem('to_project_id');
+  // Restore from URL params first (returning from device-types.html)
+  const params = new URLSearchParams(window.location.search);
+  const urlPid = params.get('project_id');
+  if (urlPid) sessionStorage.setItem('to_project_id', urlPid);
+
+  const stored = urlPid ?? sessionStorage.getItem('to_project_id');
   const nurl   = sessionStorage.getItem('to_netlify_url');
-  if (stored) { document.getElementById('project-id').value = stored; projectId = parseInt(stored); updateLinks(); }
-  if (nurl)   document.getElementById('netlify-url').value = nurl;
+  if (stored) {
+    document.getElementById('project-id').value = stored;
+    projectId = parseInt(stored);
+    updateLinks();
+    // Auto-confirm project if restored
+    setStatus('project-status', `Project ${stored} restored`, 'ok');
+    document.getElementById('device-type-bar').style.display = 'block';
+  }
+  if (nurl) document.getElementById('netlify-url').value = nurl;
+  sessionStorage.setItem('to_origin_page', 'multi-page.html');
 })();
 
 function updateLinks() {
   const link  = document.getElementById('dt-link');
   const link2 = document.getElementById('dt-link2');
-  if (link  && projectId) link.href  = `device-types.html?project_id=${projectId}`;
-  if (link2 && projectId) link2.href = `device-types.html?project_id=${projectId}`;
+  if (link  && projectId) {
+    link.href  = `device-types.html?project_id=${projectId}`;
+    link.onclick  = () => sessionStorage.setItem('to_origin_page', 'multi-page.html');
+  }
+  if (link2 && projectId) {
+    link2.href = `device-types.html?project_id=${projectId}`;
+    link2.onclick = () => sessionStorage.setItem('to_origin_page', 'multi-page.html');
+  }
 }
 
 function openCopyDevices() {
@@ -617,14 +636,14 @@ async function confirmPin() {
     const j = await r.json();
     if (r.ok) {
       if (pinTarget.isExtraPin) {
-        // Store exit pin under extra_pins keyed by page number
         if (!trMap[trName].extra_pins) trMap[trName].extra_pins = {};
         trMap[trName].extra_pins[pinTarget.pageNum] = {
           x_norm: xNorm, y_norm: yNorm, stub_ft: jumperFt, demarc_id: j.id
         };
-        renderTRMap(Object.values(trMap));  // refresh to show pin set
+        renderTRMap(Object.values(trMap));
       } else {
         trMap[trName] = { ...trMap[trName], pin_x: xNorm, pin_y: yNorm, stub_ft: jumperFt, demarc_id: j.id };
+      }
       setStatus('pin-status', `✓ Pin saved`, 'ok');
       setTimeout(closePinModal, 800);
     } else {

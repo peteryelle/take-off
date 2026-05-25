@@ -728,7 +728,11 @@ async function copyFromProject() {
 
 function updateBackLink(pid) {
   const link = document.getElementById('back-link');
-  if (link && pid) link.href = `index.html?project_id=${pid}`;
+  if (!link) return;
+  // Return to whichever page the user came from
+  const origin = sessionStorage.getItem('to_origin_page') ?? 'index.html';
+  link.href  = `${origin}?project_id=${pid}`;
+  link.textContent = origin.includes('multi') ? '← Back to Multi-Page' : '← Back to Pipeline';
 }
 </script>
 </body>
