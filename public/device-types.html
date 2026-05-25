@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Device Types — Take-off</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: monospace;
+  background: #0d0d0d;
+  color: #e0e0e0;
+  padding: 20px;
+  font-size: 13px;
+}
+h1 { color: #f0c040; font-size: 16px; margin-bottom: 4px; letter-spacing: 2px; text-transform: uppercase; }
+.subtitle { color: #666; font-size: 11px; margin-bottom: 20px; }
+a { color: #7ac0f0; text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ── Config bar ── */
+.config-bar {
+  display: flex; gap: 10px; align-items: center;
+  background: #111; border: 1px solid #2a2a2a;
+  border-radius: 4px; padding: 10px 14px;
+  margin-bottom: 16px; flex-wrap: wrap;
+}
+.config-bar label { color: #888; font-size: 11px; margin-right: 4px; }
+input[type="text"], input[type="number"], select {
+  background: #1a1a1a; border: 1px solid #333;
+  color: #e0e0e0; padding: 5px 8px;
+  border-radius: 3px; font-family: monospace; font-size: 12px;
+}
+input[type="text"] { width: 160px; }
+
+/* ── Buttons ── */
+button {
+  background: #1e3a1e; border: 1px solid #3a7a3a;
+  color: #7af07a; padding: 6px 12px;
+  border-radius: 3px; cursor: pointer;
+  font-family: monospace; font-size: 12px;
+  transition: background 0.15s; white-space: nowrap;
+}
+button:hover { background: #2a4a2a; }
+button:disabled { opacity: 0.3; cursor: not-allowed; }
+button.info  { background: #1e2d3a; border-color: #3a6a8a; color: #7ac0f0; }
+button.info:hover { background: #253545; }
+button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
+button.danger:hover { background: #4a2020; }
+button.amber { background: #2a2000; border-color: #7a6000; color: #f0c040; }
+button.amber:hover { background: #332800; }
+
+/* ── Status ── */
+.status { font-size: 11px; color: #aaa; padding: 3px 0; min-height: 16px; }
+.status.ok  { color: #7af07a; }
+.status.err { color: #f07a7a; }
+.status.running { color: #f0c040; }
+
+/* ── Toolbar ── */
+.toolbar {
+  display: flex; gap: 8px; align-items: center;
+  margin-bottom: 12px; flex-wrap: wrap;
+}
+.toolbar .status { flex: 1; }
+
+/* ── Device grid ── */
+#device-grid { display: flex; flex-direction: column; gap: 2px; }
+
+.device-row {
+  display: grid;
+  grid-template-columns: 72px 90px 1fr 1fr 140px 100px;
+  gap: 0;
+  background: #111;
+  border: 1px solid #1e1e1e;
+  border-radius: 4px;
+  overflow: hidden;
+  align-items: stretch;
+}
+.device-row:hover { border-color: #333; }
+
+.device-row.header {
+  background: #0a0a0a;
+  border-color: #2a2a2a;
+  border-radius: 4px 4px 0 0;
+}
+.device-row.header .cell {
+  color: #666; font-size: 10px; text-transform: uppercase;
+  letter-spacing: 1px; padding: 6px 10px;
+  border-right: 1px solid #1a1a1a;
+}
+
+.cell {
+  padding: 10px;
+  border-right: 1px solid #0d0d0d;
+  display: flex; flex-direction: column;
+  justify-content: center;
+  font-size: 11px;
+}
+.cell:last-child { border-right: none; }
+
+/* Image cell */
+.cell-image {
+  padding: 6px; align-items: center;
+}
+.device-thumb {
+  width: 60px; height: 52px;
+  object-fit: contain;
+  background: #0a0a0a;
+  border: 1px solid #222;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.no-image {
+  width: 60px; height: 52px;
+  background: #0a0a0a; border: 1px dashed #333;
+  border-radius: 3px; display: flex;
+  align-items: center; justify-content: center;
+  font-size: 9px; color: #444; cursor: pointer;
+}
+
+/* Legend ID */
+.cell-id { font-size: 10px; color: #888; }
+.cell-id strong { color: #f0c040; font-size: 11px; display: block; }
+
+/* Name + human desc */
+.cell-name strong { color: #e0e0e0; display: block; margin-bottom: 3px; }
+.cell-name .human { color: #666; font-size: 10px; line-height: 1.4; }
+
+/* LLM desc */
+.cell-llm { color: #aaa; font-size: 10px; line-height: 1.4; }
+.cell-llm .expand-btn {
+  color: #7ac0f0; cursor: pointer; font-size: 10px;
+  background: none; border: none; padding: 0; margin-top: 3px;
+  display: inline; text-align: left;
+}
+.cell-llm .full { display: none; white-space: pre-wrap; }
+.cell-llm.expanded .preview { display: none; }
+.cell-llm.expanded .full { display: block; }
+
+/* Anchors */
+.anchor-pill {
+  display: inline-block;
+  background: #1a2a1a; border: 1px solid #2a4a2a;
+  color: #7af07a; border-radius: 3px;
+  padding: 1px 5px; font-size: 10px; margin: 1px;
+}
+.cell-anchors { flex-wrap: wrap; flex-direction: row; align-content: center; }
+
+/* Actions */
+.cell-actions { gap: 4px; }
+.cell-actions button {
+  padding: 3px 8px; font-size: 10px;
+  margin: 0; display: block; width: 100%;
+}
+
+/* ── Add form ── */
+.add-section {
+  background: #111; border: 1px solid #2a2a2a;
+  border-radius: 4px; padding: 16px;
+  margin-top: 16px;
+}
+.add-section .section-title {
+  color: #f0c040; font-size: 11px;
+  text-transform: uppercase; letter-spacing: 1px;
+  margin-bottom: 12px; border-bottom: 1px solid #222;
+  padding-bottom: 6px;
+}
+.form-row { display: flex; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
+.form-col { display: flex; flex-direction: column; gap: 4px; }
+.form-col label { color: #888; font-size: 10px; }
+.form-col input[type="text"] { width: 220px; }
+.form-col textarea {
+  background: #1a1a1a; border: 1px solid #333;
+  color: #e0e0e0; padding: 6px 8px;
+  border-radius: 3px; font-family: monospace; font-size: 11px;
+  width: 320px; height: 70px; resize: vertical;
+}
+
+/* Image upload zone */
+.image-zone {
+  width: 180px; height: 80px;
+  border: 1px dashed #444; border-radius: 4px;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  cursor: pointer; color: #666; font-size: 10px;
+  gap: 4px; transition: border-color 0.15s;
+}
+.image-zone:hover { border-color: #888; }
+.image-zone.has-image { border-color: #3a7a3a; }
+.image-zone img { max-height: 60px; max-width: 160px; object-fit: contain; }
+
+/* LLM desc textarea */
+#new-llm-desc {
+  width: 100%; height: 120px;
+  background: #1a1a1a; border: 1px solid #333;
+  color: #e0e0e0; padding: 8px;
+  border-radius: 3px; font-family: monospace; font-size: 11px;
+  resize: vertical;
+}
+
+/* ── Copy from project modal ── */
+.modal-overlay {
+  display: none; position: fixed;
+  inset: 0; background: rgba(0,0,0,0.7);
+  z-index: 100; align-items: center; justify-content: center;
+}
+.modal-overlay.open { display: flex; }
+.modal {
+  background: #111; border: 1px solid #333;
+  border-radius: 6px; padding: 20px;
+  width: 420px; max-width: 90vw;
+}
+.modal h2 { color: #f0c040; font-size: 13px; margin-bottom: 12px; }
+.modal .actions { display: flex; gap: 8px; margin-top: 14px; justify-content: flex-end; }
+
+/* ── Output area ── */
+.output-area {
+  background: #0a0a0a; border: 1px solid #222;
+  border-radius: 3px; padding: 8px;
+  max-height: 180px; overflow-y: auto;
+  white-space: pre-wrap; font-size: 10px; color: #aaa;
+  margin-top: 8px;
+}
+</style>
+</head>
+<body>
+
+<h1>⚡ Device Types</h1>
+<p class="subtitle">
+  <a href="index.html">← Back to Pipeline</a>
+  &nbsp;·&nbsp; Manage device symbols per project
+</p>
+
+<!-- ── Config bar ── -->
+<div class="config-bar">
+  <label>Netlify URL</label>
+  <input type="text" id="netlify-url" value="https://winquest-take-off.netlify.app">
+  <label>Project ID</label>
+  <input type="text" id="project-id" placeholder="e.g. 42" style="width:80px;">
+  <button class="info" onclick="loadDeviceTypes()">↓ Load</button>
+  <div class="status" id="load-status">—</div>
+</div>
+
+<!-- ── Toolbar ── -->
+<div class="toolbar">
+  <button onclick="openAddForm()">+ Add Device Type</button>
+  <button class="info" onclick="openCopyModal()">⎘ Copy from Project</button>
+  <div class="status" id="toolbar-status"></div>
+</div>
+
+<!-- ── Device grid ── -->
+<div id="device-grid">
+  <div class="device-row header">
+    <div class="cell">Image</div>
+    <div class="cell">Legend ID</div>
+    <div class="cell">Name + Human Desc</div>
+    <div class="cell">LLM Description</div>
+    <div class="cell">Anchors</div>
+    <div class="cell">Actions</div>
+  </div>
+  <div style="color:#555; font-size:11px; padding:20px; text-align:center;">
+    Enter a Project ID and click Load
+  </div>
+</div>
+
+<!-- ── Add / Edit form ── -->
+<div class="add-section" id="add-form" style="display:none;">
+  <div class="section-title" id="form-title">Add New Device Type</div>
+
+  <div class="form-row">
+    <!-- Image upload -->
+    <div class="form-col">
+      <label>Example images (upload 2–4)</label>
+      <div class="image-zone" id="image-zone" onclick="document.getElementById('image-input').click()">
+        <span>📁 Click to upload</span>
+        <span>images (PNG/JPG)</span>
+      </div>
+      <input type="file" id="image-input" multiple accept="image/*" style="display:none"
+             onchange="handleImageUpload(this)">
+      <div style="font-size:10px; color:#555; margin-top:3px;" id="image-count">No images selected</div>
+    </div>
+
+    <!-- Name + human desc -->
+    <div class="form-col">
+      <label>Legend ID (e.g. DEV_014)</label>
+      <input type="text" id="new-legend-id" placeholder="DEV_014">
+      <label style="margin-top:6px;">Device name</label>
+      <input type="text" id="new-name" placeholder="e.g. Dome Camera">
+      <label style="margin-top:6px;">Human description (from legend)</label>
+      <textarea id="new-human-desc" placeholder="Description as written in the drawing legend…"></textarea>
+    </div>
+
+    <!-- LLM desc -->
+    <div class="form-col" style="flex:1;">
+      <div style="display:flex; gap:6px; align-items:center; margin-bottom:4px;">
+        <label>LLM description (drives detection)</label>
+        <button class="amber" onclick="generateLLMDesc()" style="padding:2px 8px; font-size:10px;">
+          ✦ Generate from images
+        </button>
+      </div>
+      <textarea id="new-llm-desc"
+        placeholder="SHAPE: …&#10;SIZE: …&#10;TEXT ANCHORS: …&#10;TEXT ORIENTATION: …&#10;LABEL PATTERN: …&#10;ORIENTATION: …&#10;EXCLUSIONS: …&#10;LOOK-ALIKES: …"></textarea>
+      <div class="status" id="generate-status"></div>
+    </div>
+  </div>
+
+  <div style="display:flex; gap:8px; margin-top:8px;">
+    <button onclick="saveDeviceType()">✓ Save Device Type</button>
+    <button class="danger" onclick="closeAddForm()">✗ Cancel</button>
+  </div>
+  <div class="status" id="save-status"></div>
+  <div class="output-area" id="save-output" style="display:none;"></div>
+</div>
+
+<!-- ── Copy from project modal ── -->
+<div class="modal-overlay" id="copy-modal">
+  <div class="modal">
+    <h2>⎘ Copy Device Types from Another Project</h2>
+    <label style="color:#888; font-size:11px;">Source Project ID</label>
+    <input type="text" id="copy-source-id" placeholder="e.g. 41" style="width:100%; margin-top:4px;">
+    <div style="font-size:10px; color:#666; margin-top:8px;">
+      All device types from the source project will be copied to the current project.
+      Existing device types with the same legend_id will be skipped.
+    </div>
+    <div class="status" id="copy-status" style="margin-top:8px;">—</div>
+    <div class="actions">
+      <button class="danger" onclick="closeCopyModal()">Cancel</button>
+      <button onclick="copyFromProject()">⎘ Copy</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── State ────────────────────────────────────────────────────────
+let deviceTypes   = [];
+let editingId     = null;   // device_type DB id being edited
+let uploadedImages = [];    // [{ name, base64, thumb }]
+
+function base() { return document.getElementById('netlify-url').value.replace(/\/$/, ''); }
+function projId() { return document.getElementById('project-id').value.trim(); }
+
+function setStatus(id, msg, type='') {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = msg;
+  el.className   = 'status ' + type;
+}
+
+// ── Load device types ─────────────────────────────────────────────
+async function loadDeviceTypes() {
+  if (!projId()) { setStatus('load-status', 'Enter a Project ID', 'err'); return; }
+  setStatus('load-status', 'Loading…', 'running');
+  try {
+    const r = await fetch(`${base()}/api/takeoff-summary?project_id=${projId()}`);
+    const j = await r.json();
+    deviceTypes = j.device_types ?? [];
+    renderGrid(deviceTypes);
+    setStatus('load-status', `✓ ${deviceTypes.length} device types`, 'ok');
+  } catch(e) {
+    setStatus('load-status', 'Error: ' + e.message, 'err');
+  }
+}
+
+// ── Render grid ───────────────────────────────────────────────────
+function renderGrid(types) {
+  const grid = document.getElementById('device-grid');
+  // Keep header row
+  grid.innerHTML = `
+    <div class="device-row header">
+      <div class="cell">Image</div>
+      <div class="cell">Legend ID</div>
+      <div class="cell">Name + Human Desc</div>
+      <div class="cell">LLM Description</div>
+      <div class="cell">Anchors</div>
+      <div class="cell">Actions</div>
+    </div>`;
+
+  if (!types.length) {
+    grid.innerHTML += `<div style="color:#555; font-size:11px; padding:20px; text-align:center;">
+      No device types yet — click Add Device Type to create one</div>`;
+    return;
+  }
+
+  for (const dt of types) {
+    const row = document.createElement('div');
+    row.className = 'device-row';
+    row.dataset.id = dt.id;
+
+    // Image cell
+    const imgHtml = dt.example_image_base64
+      ? `<img class="device-thumb" src="data:image/jpeg;base64,${dt.example_image_base64}"
+              title="Click to enlarge" onclick="enlargeImage(this)">`
+      : `<div class="no-image" onclick="editDevice(${dt.id})" title="Click to add image">+ img</div>`;
+
+    // LLM desc — truncated with expand
+    const llm     = dt.llm_description ?? '';
+    const preview = llm.slice(0, 120) + (llm.length > 120 ? '…' : '');
+    const llmHtml = llm
+      ? `<span class="preview">${escHtml(preview)}</span>
+         <button class="expand-btn" onclick="toggleLLM(this)">▼ show</button>
+         <span class="full">${escHtml(llm)}</span>`
+      : `<span style="color:#444;">— not set —</span>`;
+
+    // Anchors
+    const anchors  = dt.text_anchors ?? {};
+    const primary  = (anchors.primary  ?? []).map(a => `<span class="anchor-pill">${a}</span>`).join('');
+    const assoc    = (anchors.associated ?? []).map(a =>
+      `<span class="anchor-pill" style="background:#1a1a2a;border-color:#2a2a5a;color:#aaaaff;">${a}</span>`
+    ).join('');
+
+    row.innerHTML = `
+      <div class="cell cell-image">${imgHtml}</div>
+      <div class="cell cell-id"><strong>${escHtml(dt.legend_id ?? '')}</strong>${escHtml(dt.name ?? '').slice(0,4)}</div>
+      <div class="cell cell-name">
+        <strong>${escHtml(dt.name ?? '')}</strong>
+        <span class="human">${escHtml((dt.human_description ?? dt.description ?? '').slice(0, 120))}</span>
+      </div>
+      <div class="cell cell-llm" id="llm-cell-${dt.id}">${llmHtml}</div>
+      <div class="cell cell-anchors">${primary}${assoc}</div>
+      <div class="cell cell-actions">
+        <button class="info" onclick="editDevice(${dt.id})">Edit</button>
+        <button class="amber" onclick="regenDevice(${dt.id})">✦ Re-gen</button>
+        <button class="danger" onclick="deleteDevice(${dt.id})">Delete</button>
+      </div>`;
+
+    grid.appendChild(row);
+  }
+}
+
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;');
+}
+
+function toggleLLM(btn) {
+  const cell = btn.closest('.cell-llm');
+  cell.classList.toggle('expanded');
+  btn.textContent = cell.classList.contains('expanded') ? '▲ hide' : '▼ show';
+}
+
+function enlargeImage(img) {
+  window.open(img.src, '_blank');
+}
+
+// ── Add form ──────────────────────────────────────────────────────
+function openAddForm() {
+  editingId = null;
+  document.getElementById('form-title').textContent = 'Add New Device Type';
+  document.getElementById('new-legend-id').value  = '';
+  document.getElementById('new-name').value        = '';
+  document.getElementById('new-human-desc').value  = '';
+  document.getElementById('new-llm-desc').value    = '';
+  uploadedImages = [];
+  updateImageZone();
+  document.getElementById('add-form').style.display = 'block';
+  document.getElementById('save-output').style.display = 'none';
+  document.getElementById('add-form').scrollIntoView({ behavior: 'smooth' });
+}
+
+function closeAddForm() {
+  document.getElementById('add-form').style.display = 'none';
+  editingId = null;
+}
+
+function editDevice(id) {
+  const dt = deviceTypes.find(d => d.id === id);
+  if (!dt) return;
+  editingId = id;
+  document.getElementById('form-title').textContent = `Edit — ${dt.legend_id ?? ''} · ${dt.name ?? ''}`;
+  document.getElementById('new-legend-id').value   = dt.legend_id  ?? '';
+  document.getElementById('new-name').value         = dt.name       ?? '';
+  document.getElementById('new-human-desc').value   = dt.human_description ?? dt.description ?? '';
+  document.getElementById('new-llm-desc').value     = dt.llm_description ?? '';
+  uploadedImages = dt.example_image_base64
+    ? [{ base64: dt.example_image_base64 }] : [];
+  updateImageZone();
+  document.getElementById('add-form').style.display = 'block';
+  document.getElementById('add-form').scrollIntoView({ behavior: 'smooth' });
+}
+
+// ── Image upload ──────────────────────────────────────────────────
+function handleImageUpload(input) {
+  const files = Array.from(input.files);
+  if (!files.length) return;
+  uploadedImages = [];
+  document.getElementById('image-count').textContent = `Loading ${files.length} image(s)…`;
+
+  let loaded = 0;
+  files.forEach((file, i) => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      const img = new Image();
+      img.onload = () => {
+        // Compress to JPEG thumbnail max 200px
+        const cv  = document.createElement('canvas');
+        const MAX = 200;
+        const scale = Math.min(MAX / img.width, MAX / img.height, 1);
+        cv.width  = Math.round(img.width  * scale);
+        cv.height = Math.round(img.height * scale);
+        cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+        uploadedImages[i] = {
+          name:   file.name,
+          base64: cv.toDataURL('image/jpeg', 0.85).split(',')[1]
+        };
+        loaded++;
+        if (loaded === files.length) {
+          document.getElementById('image-count').textContent =
+            `${files.length} image(s) ready`;
+          updateImageZone();
+        }
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function updateImageZone() {
+  const zone = document.getElementById('image-zone');
+  if (uploadedImages.length && uploadedImages[0]?.base64) {
+    zone.classList.add('has-image');
+    zone.innerHTML = `<img src="data:image/jpeg;base64,${uploadedImages[0].base64}"
+                           style="max-height:70px; max-width:170px; object-fit:contain;">`;
+  } else {
+    zone.classList.remove('has-image');
+    zone.innerHTML = `<span>📁 Click to upload</span><span>images (PNG/JPG)</span>`;
+  }
+}
+
+// ── Generate LLM description ──────────────────────────────────────
+async function generateLLMDesc() {
+  const name = document.getElementById('new-name').value.trim();
+  if (!name) { setStatus('generate-status', 'Enter device name first', 'err'); return; }
+  if (!uploadedImages.length || !uploadedImages[0]?.base64) {
+    setStatus('generate-status', 'Upload at least one example image first', 'err'); return;
+  }
+  if (!projId()) { setStatus('generate-status', 'Enter Project ID', 'err'); return; }
+
+  setStatus('generate-status', '✦ Asking Claude to describe the symbol…', 'running');
+
+  // We need a device_type_id to save to — use a temp one or create device first
+  // For generate-only, call pass-describe with the images directly via Anthropic API
+  // (pass-describe generate mode)
+  try {
+    const r = await fetch(`${base()}/api/pass-describe`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        project_id:     parseInt(projId()),
+        device_type_id: editingId ?? -1,   // -1 = generate only, don't save yet
+        device_name:    name,
+        example_images: uploadedImages.map(i => i.base64)
+      })
+    });
+    const j = await r.json();
+
+    if (!r.ok) {
+      setStatus('generate-status', 'Error: ' + (j.error ?? r.status), 'err');
+      return;
+    }
+
+    if (j.llm_description) {
+      document.getElementById('new-llm-desc').value = j.llm_description;
+      setStatus('generate-status', '✓ Description generated — review and edit before saving', 'ok');
+    }
+  } catch(e) {
+    setStatus('generate-status', 'Error: ' + e.message, 'err');
+  }
+}
+
+// ── Re-generate for existing device ──────────────────────────────
+async function regenDevice(id) {
+  const dt = deviceTypes.find(d => d.id === id);
+  if (!dt) return;
+  editDevice(id);
+  setStatus('generate-status', 'Upload new example images then click ✦ Generate', '');
+}
+
+// ── Save device type ──────────────────────────────────────────────
+async function saveDeviceType() {
+  if (!projId()) { setStatus('save-status', 'Enter Project ID', 'err'); return; }
+
+  const legendId    = document.getElementById('new-legend-id').value.trim();
+  const name        = document.getElementById('new-name').value.trim();
+  const humanDesc   = document.getElementById('new-human-desc').value.trim();
+  const llmDesc     = document.getElementById('new-llm-desc').value.trim();
+  const imageBase64 = uploadedImages[0]?.base64 ?? null;
+
+  if (!name || !legendId) {
+    setStatus('save-status', 'Legend ID and Name are required', 'err'); return;
+  }
+
+  setStatus('save-status', 'Saving…', 'running');
+
+  try {
+    // Step 1: upsert device_type via projects endpoint (or direct supabase)
+    const upsertR = await fetch(`${base()}/api/projects`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        action:              'upsert_device_type',
+        project_id:          parseInt(projId()),
+        id:                  editingId ?? undefined,
+        legend_id:           legendId,
+        name,
+        human_description:   humanDesc,
+        example_image_base64: imageBase64
+      })
+    });
+    const upsertJ = await upsertR.json();
+
+    if (!upsertR.ok && !upsertJ.id) {
+      // Fallback: try pass-describe parse mode to save llm_description + text_anchors
+      setStatus('save-status', 'Device type save requires upsert_device_type support in projects.js', 'err');
+      showOutput(upsertJ);
+      return;
+    }
+
+    const deviceTypeId = upsertJ.id ?? editingId;
+
+    // Step 2: if llm_description provided, parse + save text_anchors
+    if (llmDesc && deviceTypeId && deviceTypeId > 0) {
+      const descR = await fetch(`${base()}/api/pass-describe`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          project_id:    parseInt(projId()),
+          device_type_id: deviceTypeId,
+          llm_description: llmDesc
+        })
+      });
+      const descJ = await descR.json();
+      if (!descR.ok) {
+        setStatus('save-status', '⚠ Saved but text_anchors parse failed: ' + descJ.error, '');
+      } else {
+        setStatus('save-status', '✓ Saved with text_anchors', 'ok');
+      }
+    } else {
+      setStatus('save-status', '✓ Saved (no LLM description to parse)', 'ok');
+    }
+
+    closeAddForm();
+    await loadDeviceTypes();
+
+  } catch(e) {
+    setStatus('save-status', 'Error: ' + e.message, 'err');
+  }
+}
+
+function showOutput(obj) {
+  const el = document.getElementById('save-output');
+  el.style.display = 'block';
+  el.textContent = JSON.stringify(obj, null, 2);
+}
+
+// ── Delete device ──────────────────────────────────────────────────
+async function deleteDevice(id) {
+  const dt = deviceTypes.find(d => d.id === id);
+  if (!dt) return;
+  if (!confirm(`Delete "${dt.name}"?\nThis cannot be undone.`)) return;
+
+  try {
+    const r = await fetch(`${base()}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'delete_device_type',
+        project_id: parseInt(projId()),
+        id
+      })
+    });
+    setStatus('toolbar-status', r.ok ? `✓ Deleted ${dt.name}` : 'Delete failed', r.ok ? 'ok' : 'err');
+    if (r.ok) await loadDeviceTypes();
+  } catch(e) {
+    setStatus('toolbar-status', 'Error: ' + e.message, 'err');
+  }
+}
+
+// ── Copy from project ──────────────────────────────────────────────
+function openCopyModal()  { document.getElementById('copy-modal').classList.add('open'); }
+function closeCopyModal() { document.getElementById('copy-modal').classList.remove('open'); }
+
+async function copyFromProject() {
+  const sourceId = document.getElementById('copy-source-id').value.trim();
+  if (!sourceId) { setStatus('copy-status', 'Enter source project ID', 'err'); return; }
+  if (!projId()) { setStatus('copy-status', 'Load a project first', 'err'); return; }
+
+  setStatus('copy-status', 'Copying…', 'running');
+  try {
+    const r = await fetch(`${base()}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action:            'copy_device_types',
+        source_project_id: parseInt(sourceId),
+        target_project_id: parseInt(projId())
+      })
+    });
+    const j = await r.json();
+    if (r.ok) {
+      setStatus('copy-status', `✓ Copied ${j.copied ?? 0} device types`, 'ok');
+      closeCopyModal();
+      await loadDeviceTypes();
+    } else {
+      setStatus('copy-status', 'Error: ' + (j.error ?? r.status), 'err');
+    }
+  } catch(e) {
+    setStatus('copy-status', 'Error: ' + e.message, 'err');
+  }
+}
+
+// ── Auto-load if project_id in URL ─────────────────────────────────
+(function init() {
+  const params = new URLSearchParams(window.location.search);
+  const pid = params.get('project_id');
+  if (pid) {
+    document.getElementById('project-id').value = pid;
+    loadDeviceTypes();
+  }
+})();
+</script>
+</body>
+</html>

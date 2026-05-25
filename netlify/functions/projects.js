@@ -1,6 +1,10 @@
 // netlify/functions/projects.js
-// GET  /api/projects          — list all projects
-// POST /api/projects          — create a new project
+// GET  /api/projects                     — list all projects
+// POST /api/projects { name, ... }       — create a new project
+// POST /api/projects { action: ... }     — device type management actions:
+//   action: upsert_device_type           — create or update a device type
+//   action: delete_device_type           — delete a device type
+//   action: copy_device_types            — copy device types between projects
 // ─────────────────────────────────────────────────────────────────
 
 import { getSupabase, ok, err, CORS } from "./utils/clients.js";
@@ -21,11 +25,120 @@ export default async function handler(req) {
     return ok(data);
   }
 
-  // ── POST — create project ─────────────────────────────────────
+  // ── POST ──────────────────────────────────────────────────────
   if (req.method === "POST") {
     let body;
     try { body = await req.json(); } catch { return err("Invalid JSON"); }
 
+    const { action } = body;
+
+    // ── Action: upsert device type ─────────────────────────────
+    if (action === "upsert_device_type") {
+      const {
+        project_id, id,
+        legend_id, name,
+        human_description,
+        example_image_base64
+      } = body;
+
+      if (!project_id || !legend_id || !name)
+        return err("project_id, legend_id and name required");
+
+      const row = {
+        project_id,
+        legend_id,
+        name,
+        human_description:    human_description    ?? null,
+        example_image_base64: example_image_base64 ?? null,
+        updated_at:           new Date()
+      };
+
+      let result;
+      if (id && id > 0) {
+        // Update existing
+        const { data, error } = await supabase
+          .from("device_types")
+          .update(row)
+          .eq("id", id)
+          .eq("project_id", project_id)
+          .select("id, legend_id, name")
+          .single();
+        if (error) return err(error.message, 500);
+        result = data;
+      } else {
+        // Insert new
+        const { data, error } = await supabase
+          .from("device_types")
+          .insert(row)
+          .select("id, legend_id, name")
+          .single();
+        if (error) return err(error.message, 500);
+        result = data;
+      }
+
+      return ok(result, id ? 200 : 201);
+    }
+
+    // ── Action: delete device type ─────────────────────────────
+    if (action === "delete_device_type") {
+      const { project_id, id } = body;
+      if (!project_id || !id) return err("project_id and id required");
+
+      const { error } = await supabase
+        .from("device_types")
+        .delete()
+        .eq("id", id)
+        .eq("project_id", project_id);
+
+      if (error) return err(error.message, 500);
+      return ok({ deleted: true, id });
+    }
+
+    // ── Action: copy device types between projects ──────────────
+    if (action === "copy_device_types") {
+      const { source_project_id, target_project_id } = body;
+      if (!source_project_id || !target_project_id)
+        return err("source_project_id and target_project_id required");
+
+      // Load source device types
+      const { data: sourceDTs, error: srcErr } = await supabase
+        .from("device_types")
+        .select("*")
+        .eq("project_id", source_project_id);
+
+      if (srcErr) return err(srcErr.message, 500);
+      if (!sourceDTs?.length) return ok({ copied: 0, message: "No device types in source project" });
+
+      // Load existing legend_ids in target to avoid dupes
+      const { data: existing } = await supabase
+        .from("device_types")
+        .select("legend_id")
+        .eq("project_id", target_project_id);
+
+      const existingIds = new Set((existing ?? []).map(d => d.legend_id));
+
+      // Copy rows that don't already exist in target
+      const toInsert = sourceDTs
+        .filter(dt => !existingIds.has(dt.legend_id))
+        .map(({ id, project_id, created_at, updated_at, ...rest }) => ({
+          ...rest,
+          project_id:       target_project_id,
+          source_project_id: source_project_id
+        }));
+
+      if (!toInsert.length)
+        return ok({ copied: 0, message: "All device types already exist in target project" });
+
+      const { data: inserted, error: insErr } = await supabase
+        .from("device_types")
+        .insert(toInsert)
+        .select("id, legend_id, name");
+
+      if (insErr) return err(insErr.message, 500);
+      return ok({ copied: inserted.length, device_types: inserted });
+    }
+
+    // ── Default: create project ────────────────────────────────
     const { name, number, client, pdf_filename } = body;
     if (!name) return err("name required");
 
