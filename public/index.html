@@ -216,7 +216,40 @@
   </div>
   <button onclick="runPassB()">▶ Detect Scale + Demarc</button>
   <div class="status" id="pass-b-status">—</div>
-  <div class="output-area" id="pass-b-output">Output will appear here…</div>
+
+  <!-- Clean summary card — shown after Pass B runs -->
+  <div id="pass-b-summary" style="display:none; margin-top:10px;">
+
+    <!-- Scale row -->
+    <div style="display:flex; gap:24px; padding:10px 0; border-bottom:1px solid #1e1e1e; flex-wrap:wrap;">
+      <div>
+        <div style="font-size:10px; color:#666; text-transform:uppercase; letter-spacing:1px;">Scale</div>
+        <div style="color:#f0c040; font-size:14px; font-weight:bold;" id="b-scale-label">—</div>
+      </div>
+      <div>
+        <div style="font-size:10px; color:#666; text-transform:uppercase; letter-spacing:1px;">Sheet</div>
+        <div style="color:#e0e0e0; font-size:12px;" id="b-sheet-title">—</div>
+      </div>
+    </div>
+
+    <!-- Demarc row -->
+    <div style="padding:10px 0; border-bottom:1px solid #1e1e1e;">
+      <div style="font-size:10px; color:#666; text-transform:uppercase; letter-spacing:1px; margin-bottom:6px;">
+        Demarcation Point
+      </div>
+      <div id="b-demarc-card" style="padding:8px 12px; border-radius:4px; font-size:12px; line-height:1.8;">
+        —
+      </div>
+    </div>
+
+    <!-- Raw detail toggle -->
+    <div style="margin-top:6px;">
+      <button class="info" onclick="togglePassBDetail()" 
+              style="padding:2px 10px; font-size:10px;">▼ Show raw detail</button>
+    </div>
+  </div>
+
+  <div class="output-area" id="pass-b-output" style="display:none; margin-top:6px;">Output will appear here…</div>
 
   <div id="scale-override-section" style="margin-top:12px; display:none;">
     <hr class="divider">
@@ -700,6 +733,7 @@ async function runPassB() {
 
     passBResult = j;
     saveSession();
+    renderPassBSummary(j);
     setOutput('pass-b-output', j);
 
     const scale  = j.scale?.display_label || 'unknown';
@@ -1199,17 +1233,20 @@ async function runPassExtract() {
 
     const scalePtsPerFt = calcScalePtsPerFt(passBResult);
 
+    const payload = {
+      project_id:      projectId,
+      page_id:         passBResult.page_id,
+      text_items:      items,
+      page_width_pts,
+      page_height_pts,
+      scale_pts_per_ft: scalePtsPerFt
+    };
+    console.log(`[pass-extract] project_id=${payload.project_id} page_id=${payload.page_id} items=${items.length}`);
+
     const r = await fetch(`${base()}/api/pass-extract`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        project_id:      projectId,
-        page_id:         passBResult.page_id,
-        text_items:      items,
-        page_width_pts,
-        page_height_pts,
-        scale_pts_per_ft: scalePtsPerFt
-      })
+      body: JSON.stringify(payload)
     });
 
     const j = await r.json();
@@ -1270,6 +1307,94 @@ async function runPassExtract() {
   }
 }
 
+// ── Pass B summary renderer ──────────────────────────────────────────
+function renderPassBSummary(j) {
+  const summary = document.getElementById('pass-b-summary');
+  if (!summary) return;
+  summary.style.display = 'block';
+
+  // Scale
+  const scaleLbl = j.scale?.display_label ?? j.scale?.text?.paper_value
+    ? `${j.scale.text.paper_value}" = ${j.scale.text.real_value}'`
+    : 'Not detected';
+  document.getElementById('b-scale-label').textContent = scaleLbl;
+
+  // Sheet title
+  const sheet = j.sheet_title ?? 'Unknown';
+  document.getElementById('b-sheet-title').textContent = sheet;
+
+  // Demarc card
+  const card = document.getElementById('b-demarc-card');
+  const d = j.demarcation;
+
+  if (!d || !d.found) {
+    // Off-sheet demarc
+    card.style.background = '#2a1a00';
+    card.style.border = '1px solid #7a5000';
+    card.innerHTML = `
+      <div style="color:#f0c040; font-weight:bold; margin-bottom:4px;">
+        ⚠ Demarc is off this sheet
+      </div>
+      <div style="color:#aaa;">
+        The telecommunications room serving this area is not shown on this drawing.
+        Check the general note — it will name the TR (e.g. "DATA OUTLETS IN THIS AREA
+        SHALL BE SERVED FROM TR SL06 ON LEVEL 00B").
+      </div>
+      <div style="margin-top:8px; color:#888; font-size:11px;">
+        Use the stub length field in device-types to add the fixed distance from this
+        sheet's boundary to the actual TR.
+      </div>`;
+  } else {
+    // On-sheet demarc — determine if same building/floor/area
+    const type  = d.type  ?? 'unknown';
+    const label = d.label ?? 'unknown';
+
+    // Read context from sheet title to determine location description
+    const sheetLower = (j.sheet_title ?? '').toLowerCase();
+    let locationNote = '';
+    if (sheetLower.includes('level') || sheetLower.includes('floor')) {
+      const lvl = j.level ?? '';
+      const bldg = j.building ?? '';
+      locationNote = [bldg, lvl].filter(Boolean).join(' · ') || 'this floor';
+    }
+
+    card.style.background = '#001a00';
+    card.style.border = '1px solid #007a00';
+    card.innerHTML = `
+      <div style="color:#7af07a; font-weight:bold; margin-bottom:4px;">
+        ✓ Demarc on this sheet — ${label}
+      </div>
+      <div style="color:#e0e0e0;">
+        Type: <strong style="color:#f0c040;">${type.toUpperCase()}</strong>
+        &nbsp;·&nbsp; Location: ${locationNote || 'see drawing'}
+        &nbsp;·&nbsp; Position: (${d.x?.toFixed(2) ?? '?'}, ${d.y?.toFixed(2) ?? '?'})
+      </div>
+      <div style="color:#666; font-size:10px; margin-top:4px;">
+        Normalized coordinates · x=0 left, x=1 right · y=0 top, y=1 bottom
+      </div>`;
+  }
+
+  // Store raw detail for toggle
+  document.getElementById('pass-b-output').textContent = JSON.stringify(j, null, 2);
+}
+
+function togglePassBDetail() {
+  const out = document.getElementById('pass-b-output');
+  const btn = event.target;
+  if (out.style.display === 'none') {
+    out.style.display = 'block';
+    btn.textContent = '▲ Hide raw detail';
+  } else {
+    out.style.display = 'none';
+    btn.textContent = '▼ Show raw detail';
+  }
+}
+
+// Also restore summary from sessionStorage on page load
+function restorePassBSummaryIfAvailable() {
+  if (passBResult) renderPassBSummary(passBResult);
+}
+
 // ── Init defaults ────────────────────────────────────────────────────
 // Wire everything — script is at bottom of body so DOM is ready
 (function init() {
@@ -1296,6 +1421,7 @@ async function runPassExtract() {
   }
   // Then restore full session
   restoreSession();
+  restorePassBSummaryIfAvailable();
 })();
 </script>
 </body>
