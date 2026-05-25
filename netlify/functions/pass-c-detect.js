@@ -134,18 +134,27 @@ If none found: { "devices_found": [], "warnings": [] }`;
   for (const { strip, found, warnings } of stripResults) {
     allWarnings.push(...warnings);
     for (const d of found) {
-      // Map x back to full image coords if strip has x_offset (cropped strip)
-      const xOffset = strip.x_offset ?? 0;
-      const xScale  = strip.x_scale  ?? 1;
-      const rawCoords = toFullCoords(strip, d.x_frac, d.y_frac_in_strip);
-      const fullX = xOffset + d.x_frac * xScale;
-      const { x, y } = { x: Math.round(fullX * 1000) / 1000, y: rawCoords.y };
+      // Map coords back to full image space
+      // x: offset into crop + fraction within crop * crop width, all normalized to full image
+      const xOffset   = strip.x_offset ?? 0;
+      const xScale    = strip.x_scale  ?? 1;
+      const fullX     = Math.round((xOffset + d.x_frac * xScale) * 1000) / 1000;
+      const { y }     = toFullCoords(strip, d.x_frac, d.y_frac_in_strip);
+      const { x }     = { x: fullX };
       rawDetections.push({ x, y, label: d.label, confidence: d.confidence, source_strip: strip.index });
     }
   }
 
-  // ── Dedup ─────────────────────────────────────────────────────
+  // ── Dedup — flag candidates, keep ALL, mark duplicates for human review ──
   const { kept, removed } = dedup(rawDetections, DEDUP_THRESHOLD);
+  // Note: removed items are logged in warnings for human review
+  // They are NOT counted but ARE visible in output so user can decide
+  if (removed.length > 0) {
+    allWarnings.push(
+      `Dedup removed ${removed.length} candidate(s) within ${DEDUP_THRESHOLD} normalized radius of a kept detection. ` +
+      `Review: ` + removed.map(d => `(${d.x},${d.y}) strip${d.source_strip} ${d.confidence}`).join(' | ')
+    );
+  }
 
   // ── Calculate path lengths ────────────────────────────────────
   const detections = kept.map((d, i) => {

@@ -1,11 +1,14 @@
 // netlify/functions/pass-b2-scan.js
-// Pass B2 — Device Pre-Scan
-// Sends the full page at low-res + full device list to Claude.
-// Claude returns which device types are actually visible on this page.
+// Pass B2 — Strip-based Device Pre-Scan (drawing-bounded, high accuracy)
+// Scans the drawing area only, 6 strips in parallel, all device types per strip.
+// Returns a confident device list that drives Pass C auto-execution.
 // POST { project_id, page_id, page_image_base64 }
 // ─────────────────────────────────────────────────────────────────
 
 import { getSupabase, getAnthropic, SYSTEM_PROMPT, ok, err, CORS } from "./utils/clients.js";
+import { makeCroppedStrips } from "./utils/strips.js";
+
+const N_STRIPS = 6;
 
 export default async function handler(req) {
   if (req.method === "OPTIONS") return new Response("", { headers: CORS });
@@ -21,100 +24,166 @@ export default async function handler(req) {
   const supabase  = getSupabase();
   const anthropic = getAnthropic();
 
-  // ── Load all device types for this project ────────────────────
-  const { data: devices, error: devErr } = await supabase
-    .from("device_types")
-    .select("id, legend_id, name, description, discipline")
-    .eq("project_id", project_id)
-    .order("legend_id");
+  // ── Load page (for drawing bounds) + all device types ────────
+  const [{ data: page, error: pageErr }, { data: devices, error: devErr }] = await Promise.all([
+    supabase.from("pages").select("*").eq("id", page_id).single(),
+    supabase.from("device_types")
+      .select("id, legend_id, name, description, discipline, category")
+      .eq("project_id", project_id)
+      .order("legend_id")
+  ]);
 
-  if (devErr || !devices?.length)
-    return err("No device types found for project — run Pass A or import legend first", 404);
+  if (pageErr || !page)         return err("Page not found", 404);
+  if (devErr  || !devices?.length) return err("No devices found for project", 404);
 
-  // ── Detect image type ─────────────────────────────────────────
+  // ── Resolve drawing bounds ────────────────────────────────────
+  const drawingBounds = (page.drawing_x0 != null) ? {
+    x0: page.drawing_x0,
+    y0: page.drawing_y0 ?? 0,
+    x1: page.drawing_x1,
+    y1: page.drawing_y1 ?? 1
+  } : null;
+
+  // ── Slice drawing area into strips ────────────────────────────
+  let strips;
+  try {
+    strips = drawingBounds
+      ? await makeCroppedStrips(page_image_base64, drawingBounds, N_STRIPS, 0.10)
+      : await makeCroppedStrips(page_image_base64,
+          { x0: 0, y0: 0, x1: 1, y1: 1 }, N_STRIPS, 0.10);
+  } catch (e) {
+    return err(`Strip generation failed: ${e.message}`, 500);
+  }
+
+  // ── Build device reference list for prompt ────────────────────
+  const deviceLines = devices.map(d =>
+    `${d.legend_id} | ${d.name} | ${(d.description ?? '').slice(0, 150)}`
+  ).join("\n");
+
+  // ── Auto-detect image type ────────────────────────────────────
   function detectMediaType(b64) {
     if (b64.startsWith("/9j/"))  return "image/jpeg";
     if (b64.startsWith("iVBOR")) return "image/png";
     return "image/jpeg";
   }
-  const mediaType = detectMediaType(page_image_base64);
 
-  // ── Build device list for prompt ──────────────────────────────
-  const deviceLines = devices.map(d =>
-    `${d.legend_id} | ${d.name} | ${d.description?.slice(0, 120) ?? "no description"}`
-  ).join("\n");
+  // ── Scan each strip in parallel ───────────────────────────────
+  const stripResults = await Promise.all(
+    strips.map(async (strip, i) => {
+      const prompt = `You are scanning strip ${i + 1} of ${N_STRIPS} of an engineering drawing floor plan.
+This strip covers y=${strip.y_norm_start.toFixed(3)}–${strip.y_norm_end.toFixed(3)} of the drawing area.
 
-  const prompt = `You are scanning an engineering drawing page to identify which device types are present.
-
-Below is the complete device legend for this project. Each line is:
-LEGEND_ID | NAME | VISUAL DESCRIPTION
-
+Below is the complete device legend. Each line: LEGEND_ID | NAME | VISUAL DESCRIPTION
 ${deviceLines}
 
 Your task:
-- Carefully scan the full drawing image
-- Identify which of the above devices appear at least once on this page
-- Do NOT include devices from the legend box itself — only devices placed on the drawing
-- Do NOT include devices you are uncertain about — only include confirmed sightings
-- Estimate the count for each device you find (approximate is fine)
+- Carefully examine this strip for any device symbols
+- Only report devices you can clearly identify — do NOT guess
+- Do NOT include devices from title blocks, notes columns, or keynote callouts
+- Estimate count per device type visible in this strip only
+- Use confidence: high = clearly matches description, medium = likely match, low = possible but uncertain
 
 Return ONLY valid JSON — no markdown, no extra text:
 {
-  "devices_present": [
+  "devices_found": [
     {
       "legend_id": "DEV_001",
-      "name": "Combination Telephone/Data Outlet",
-      "estimated_count": 12,
+      "name": "device name",
+      "estimated_count": 3,
       "confidence": "high|medium|low",
-      "notes": "clustered along corridor walls"
+      "notes": "brief observation"
     }
   ],
-  "devices_absent": ["DEV_002", "DEV_003"],
-  "scan_notes": "brief notes on drawing density or anything unusual",
-  "warnings": []
-}`;
+  "strip_notes": "brief description of what this strip contains"
+}
+If no devices found: { "devices_found": [], "strip_notes": "description of strip content" }`;
 
-  // ── Call Claude ───────────────────────────────────────────────
-  let msgText;
-  try {
-    const msg = await anthropic.messages.create({
-      model:      "claude-sonnet-4-5",
-      max_tokens: 2048,
-      system:     SYSTEM_PROMPT,
-      messages: [{
-        role: "user",
-        content: [
-          { type: "image", source: { type: "base64", media_type: mediaType, data: page_image_base64 } },
-          { type: "text", text: prompt }
-        ]
-      }]
-    });
-    msgText = msg.content[0].text;
-  } catch (e) {
-    return err(`Anthropic error: ${e.message}`, 502);
-  }
+      let rawText = "";
+      try {
+        const msg = await anthropic.messages.create({
+          model:      "claude-sonnet-4-5",
+          max_tokens: 8096,
+          system:     SYSTEM_PROMPT,
+          messages: [{
+            role: "user",
+            content: [
+              { type: "image", source: { type: "base64", media_type: detectMediaType(strip.base64), data: strip.base64 } },
+              { type: "text", text: prompt }
+            ]
+          }]
+        });
+        rawText = msg.content[0].text;
+        const clean  = rawText.replace(/```json|```/g, "").trim();
+        const parsed = JSON.parse(clean);
+        return {
+          strip_index:  i,
+          devices_found: parsed.devices_found ?? [],
+          strip_notes:  parsed.strip_notes ?? "",
+          error:        null
+        };
+      } catch (e) {
+        return {
+          strip_index:   i,
+          devices_found: [],
+          strip_notes:   "",
+          error:         `Strip ${i} error: ${e.message} | raw: ${rawText.slice(0, 200)}`
+        };
+      }
+    })
+  );
 
-  // ── Parse ─────────────────────────────────────────────────────
-  let result;
-  try {
-    const raw = msgText.replace(/```json|```/g, "").trim();
-    result = JSON.parse(raw);
-  } catch (e) {
-    return err(`JSON parse error: ${e.message} — raw: ${msgText.slice(0, 300)}`, 502);
+  // ── Merge results across strips ───────────────────────────────
+  const deviceMap   = {};  // legend_id → merged result
+  const stripNotes  = [];
+  const errors      = [];
+
+  for (const result of stripResults) {
+    if (result.error) errors.push(result.error);
+    if (result.strip_notes) stripNotes.push(`Strip ${result.strip_index + 1}: ${result.strip_notes}`);
+
+    for (const d of result.devices_found) {
+      if (!deviceMap[d.legend_id]) {
+        deviceMap[d.legend_id] = {
+          legend_id:       d.legend_id,
+          name:            d.name,
+          estimated_count: 0,
+          confidence:      d.confidence,
+          strips_found_in: [],
+          notes:           []
+        };
+      }
+      const existing = deviceMap[d.legend_id];
+      existing.estimated_count += (d.estimated_count ?? 1);
+      existing.strips_found_in.push(result.strip_index + 1);
+      if (d.notes) existing.notes.push(d.notes);
+
+      // Upgrade confidence: high > medium > low
+      const rank = { high: 3, medium: 2, low: 1 };
+      if ((rank[d.confidence] ?? 0) > (rank[existing.confidence] ?? 0)) {
+        existing.confidence = d.confidence;
+      }
+    }
   }
 
   // ── Enrich with DB ids ────────────────────────────────────────
-  const deviceMap = Object.fromEntries(devices.map(d => [d.legend_id, d]));
-  const enriched  = (result.devices_present ?? []).map(d => ({
-    ...d,
-    id:          deviceMap[d.legend_id]?.id          ?? null,
-    discipline:  deviceMap[d.legend_id]?.discipline  ?? null,
-    description: deviceMap[d.legend_id]?.description ?? null
-  }));
+  const dbMap = Object.fromEntries(devices.map(d => [d.legend_id, d]));
+  const confirmed = Object.values(deviceMap)
+    .filter(d => d.confidence !== "low")   // exclude low confidence
+    .map(d => ({
+      ...d,
+      id:          dbMap[d.legend_id]?.id          ?? null,
+      discipline:  dbMap[d.legend_id]?.discipline  ?? null,
+      description: dbMap[d.legend_id]?.description ?? null,
+      notes:       d.notes.join("; ")
+    }))
+    .sort((a, b) => b.estimated_count - a.estimated_count);
 
-  // ── Update page record with scan results ──────────────────────
-  await supabase
-    .from("pages")
+  const lowConfidence = Object.values(deviceMap)
+    .filter(d => d.confidence === "low")
+    .map(d => ({ ...d, id: dbMap[d.legend_id]?.id ?? null }));
+
+  // ── Update page record ────────────────────────────────────────
+  await supabase.from("pages")
     .update({ pass_b2_complete: true })
     .eq("id", page_id);
 
@@ -122,10 +191,15 @@ Return ONLY valid JSON — no markdown, no extra text:
     pass:            "device_prescan",
     page_id,
     project_id,
-    devices_present: enriched,
-    devices_absent:  result.devices_absent  ?? [],
-    scan_notes:      result.scan_notes      ?? "",
-    warnings:        result.warnings        ?? []
+    strips_scanned:  N_STRIPS,
+    drawing_bounded: drawingBounds != null,
+    devices_confirmed: confirmed,         // high/medium confidence — drive Pass C
+    devices_low_confidence: lowConfidence, // flag for human review
+    strip_notes:     stripNotes,
+    errors,
+    warnings: errors.length > 0
+      ? [`${errors.length} strip(s) had errors`]
+      : []
   });
 }
 

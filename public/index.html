@@ -722,66 +722,158 @@ function applyScaleOverride(silent = false) {
   }
 }
 
-// ── Pass B2 — Device Pre-Scan ───────────────────────────────────────
+// ── Pass B2 — Device Pre-Scan + Auto Pass C ────────────────────────
 async function runPassB2() {
-  if (!projectId)     { alert('Confirm project first (Step 0)'); return; }
+  if (!projectId)            { alert('Confirm project first (Step 0)'); return; }
   if (!passBResult?.page_id) { alert('Run Pass B first to get page_id'); return; }
 
   const pg = evalPage || 1;
-  setStatus('pass-b2-status', `Rendering page ${pg} at low-res for pre-scan…`, 'running');
-  setOutput('pass-b2-output', 'Scanning…');
+  setStatus('pass-b2-status', 'Rendering page at 1.5x for strip scan…', 'running');
+  setOutput('pass-b2-output', 'Scanning drawing strips…');
 
-  // Reuse low-res render (same 0.6x as Pass B)
   const page = await pdfDoc.getPage(pg);
-  const vp   = page.getViewport({ scale: 0.6 });
+  const vp   = page.getViewport({ scale: 1.5 });
   const cv   = document.createElement('canvas');
   cv.width   = vp.width;
   cv.height  = vp.height;
   await page.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
-  const b64  = cv.toDataURL('image/jpeg', 0.82).split(',')[1];
+  const b64  = cv.toDataURL('image/jpeg', 0.92).split(',')[1];
   const kb   = Math.round(b64.length * 0.75 / 1024);
 
-  setStatus('pass-b2-status', `Calling /api/pass-b2-scan… (${kb} KB)`, 'running');
+  setStatus('pass-b2-status', 'Scanning 6 strips in parallel… (' + kb + ' KB)', 'running');
 
   try {
-    const r = await fetch(`${base()}/api/pass-b2-scan`, {
+    const r = await fetch(base() + '/api/pass-b2-scan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        project_id: projectId,
-        page_id:    passBResult.page_id,
+        project_id:        projectId,
+        page_id:           passBResult.page_id,
         page_image_base64: b64
       })
     });
     const rawText = await r.text();
     let j;
     try { j = JSON.parse(rawText); } catch(e) {
-      setStatus('pass-b2-status', `HTTP ${r.status} — non-JSON response`, 'err');
-      setOutput('pass-b2-output', rawText);
+      setStatus('pass-b2-status', 'HTTP ' + r.status + ' — non-JSON', 'err');
+      setOutput('pass-b2-output', rawText.slice(0, 500));
       return;
     }
 
-    setOutput('pass-b2-output', j);
+    const confirmed = j.devices_confirmed    ?? [];
+    const lowConf   = j.devices_low_confidence ?? [];
+    const NL        = String.fromCharCode(10);
 
-    if (j.devices_present?.length) {
-      // Enrich detected devices with real Supabase IDs then populate pills
-      const enriched = await enrichPillsWithDBIds(j.devices_present);
-      passAResult = { devices: enriched };
-      renderDevicePills(enriched);
-
-      const counts = j.devices_present.map(d =>
-        `${d.legend_id} ${d.name} (~${d.estimated_count})`
-      ).join(', ');
-      setStatus('pass-b2-status',
-        `✓ ${j.devices_present.length} device types found on this page — pills populated`, 'ok');
-      document.getElementById('pass-b2-output').textContent = ['Devices on this sheet:', ''].concat(j.devices_present.map(function(d){ return d.legend_id + '  ' + d.name + '  (est. ' + (d.estimated_count || '?') + ')  [' + d.confidence + ']'; })).join(String.fromCharCode(10));
-    } else {
-      setStatus('pass-b2-status', 'No devices detected on this page', 'err');
+    let out = '=== CONFIRMED DEVICES (' + confirmed.length + ') ===' + NL;
+    confirmed.forEach(function(d) {
+      out += d.legend_id + '  ' + d.name + '  [' + d.confidence + ']  est.' +
+             d.estimated_count + '  strips:' + (d.strips_found_in || []).join(',') + NL;
+    });
+    if (lowConf.length) {
+      out += NL + '=== LOW CONFIDENCE (' + lowConf.length + ') ===' + NL;
+      lowConf.forEach(function(d) {
+        out += d.legend_id + '  ' + d.name + '  est.' + d.estimated_count + NL;
+      });
     }
+    if (j.strip_notes && j.strip_notes.length) {
+      out += NL + '=== STRIP NOTES ===' + NL + j.strip_notes.join(NL);
+    }
+    setOutput('pass-b2-output', out);
+
+    if (!confirmed.length) {
+      setStatus('pass-b2-status', 'No devices confirmed — check strip notes', 'err');
+      return;
+    }
+
+    setStatus('pass-b2-status',
+      '✓ ' + confirmed.length + ' device type(s) confirmed — auto-starting Pass C…', 'ok');
+
+    passAResult = { devices: confirmed };
+    renderDevicePills(confirmed);
+    await runPassCSequential(confirmed, b64);
+
   } catch(e) {
     setStatus('pass-b2-status', 'Error: ' + e.message, 'err');
     setOutput('pass-b2-output', e.message);
   }
+}
+
+const N_STRIPS = 6;
+
+async function runPassCSequential(devices, imageBase64) {
+  const progressEl = document.getElementById('pass-b2-status');
+  const resultsTable = [];
+
+  for (let i = 0; i < devices.length; i++) {
+    const dev = devices[i];
+    if (!dev.id) {
+      resultsTable.push({ legend_id: dev.legend_id, name: dev.name, count: 'SKIP', tia: 0 });
+      continue;
+    }
+    progressEl.textContent = 'Pass C ' + (i+1) + '/' + devices.length + ': counting ' + dev.name + '…';
+    progressEl.className = 'status running';
+    try {
+      const r = await fetch(base() + '/api/pass-c-detect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project_id:        projectId,
+          page_id:           passBResult.page_id,
+          device_type_id:    dev.id,
+          page_image_base64: imageBase64,
+          demarc_override:   passBResult.demarcation && passBResult.demarcation.found
+            ? { x: passBResult.demarcation.x, y: passBResult.demarcation.y,
+                label: passBResult.demarcation.label, source: 'claude' }
+            : { x: 0.5, y: 0.5, label: 'CENTER', source: 'default_center' }
+        })
+      });
+      const j = await r.json();
+      const count = j.total_count ?? 0;
+      const tia   = j.tia_violations ?? 0;
+      resultsTable.push({ legend_id: dev.legend_id, name: dev.name, count: count, tia: tia,
+        longest: j.longest_run_ft, shortest: j.shortest_run_ft });
+      const imgB64 = j.annotated_image ?? j.annotated_image_base64;
+      if (imgB64) {
+        const img = document.getElementById('annotated-img');
+        img.src = 'data:image/jpeg;base64,' + imgB64;
+        img.style.display = 'block';
+      }
+    } catch(e) {
+      resultsTable.push({ legend_id: dev.legend_id, name: dev.name,
+        count: 'ERR: ' + e.message, tia: 0 });
+    }
+  }
+  showResultsSummary(resultsTable);
+  const total = resultsTable.reduce(function(s,d){ return s + (parseInt(d.count)||0); }, 0);
+  progressEl.textContent = '✓ All Pass C runs complete — ' + total + ' total devices found';
+  progressEl.className = 'status ok';
+}
+
+function showResultsSummary(results) {
+  const NL  = String.fromCharCode(10);
+  const el  = document.getElementById('pass-b2-output');
+  let table = NL + '=== PASS C RESULTS ===' + NL;
+  table += 'ID        Name                           Count  TIA  Longest  Shortest' + NL;
+  table += '─'.repeat(68) + NL;
+  let totalCount = 0;
+  let totalTia   = 0;
+  results.forEach(function(r) {
+    const cnt = parseInt(r.count) || 0;
+    totalCount += cnt;
+    totalTia   += (r.tia || 0);
+    table += (r.legend_id || '').padEnd(10) + (r.name || '').slice(0,30).padEnd(32) +
+      String(r.count).padEnd(7) + String(r.tia||0).padEnd(5) +
+      String(r.longest  ?? '—').padEnd(9) +
+      String(r.shortest ?? '—') + NL;
+  });
+  table += '─'.repeat(68) + NL;
+  table += 'TOTAL'.padEnd(42) + String(totalCount).padEnd(7) + String(totalTia) + NL;
+  el.textContent += table;
+  document.getElementById('device-count').textContent = totalCount;
+  document.getElementById('results-summary').style.display = 'block';
+  const badge = document.getElementById('tia-badge-container');
+  badge.innerHTML = totalTia > 0
+    ? '<span class="tia-badge">⚠ ' + totalTia + ' TIA &gt;295 ft</span>' : '';
 }
 
 // ── Load devices from Supabase ──────────────────────────────────────
