@@ -88,7 +88,7 @@ export default async function handler(req) {
     let parsed;
     try {
       const msg = await anthropic.messages.create({
-        model:      "claude-sonnet-4-20250514",
+        model:      "claude-sonnet-4-5",
         max_tokens: 512,
         system:     PARSE_SYSTEM,
         messages: [{ role: "user", content: PARSE_PROMPT(llm_description) }]
@@ -129,7 +129,7 @@ export default async function handler(req) {
     let result;
     try {
       const msg = await anthropic.messages.create({
-        model:      "claude-sonnet-4-20250514",
+        model:      "claude-sonnet-4-5",
         max_tokens: 1024,
         system:     GENERATE_SYSTEM,
         messages: [{
