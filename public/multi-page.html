@@ -1,0 +1,854 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Multi-Page Takeoff</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: monospace; background: #0d0d0d; color: #e0e0e0; padding: 20px; font-size: 13px; }
+h1 { color: #f0c040; font-size: 16px; margin-bottom: 4px; letter-spacing: 2px; text-transform: uppercase; }
+.subtitle { color: #666; font-size: 11px; margin-bottom: 20px; }
+a { color: #7ac0f0; text-decoration: none; }
+
+/* ── Sections ── */
+.section { background: #111; border: 1px solid #1e1e1e; border-radius: 4px; padding: 16px; margin-bottom: 12px; }
+.section-title { color: #f0c040; font-size: 11px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 10px; border-bottom: 1px solid #1e1e1e; padding-bottom: 6px; }
+
+/* ── Inputs / buttons ── */
+input[type="text"], input[type="file"], input[type="number"] {
+  background: #1a1a1a; border: 1px solid #333; color: #e0e0e0;
+  padding: 6px 8px; border-radius: 3px; font-family: monospace; font-size: 12px;
+}
+input[type="text"] { width: 200px; }
+label { color: #888; font-size: 11px; display: block; margin-bottom: 3px; margin-top: 8px; }
+button { background: #1e3a1e; border: 1px solid #3a7a3a; color: #7af07a; padding: 6px 14px; border-radius: 3px; cursor: pointer; font-family: monospace; font-size: 12px; white-space: nowrap; }
+button:hover { background: #2a4a2a; }
+button:disabled { opacity: 0.3; cursor: not-allowed; }
+button.info  { background: #1e2d3a; border-color: #3a6a8a; color: #7ac0f0; }
+button.amber { background: #2a2000; border-color: #7a6000; color: #f0c040; }
+button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
+
+.status { font-size: 11px; color: #aaa; min-height: 16px; margin-top: 4px; }
+.status.ok  { color: #7af07a; }
+.status.err { color: #f07a7a; }
+.status.running { color: #f0c040; }
+
+/* ── Thumbnails ── */
+.thumb-grid { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.thumb { position: relative; cursor: pointer; border: 2px solid #222; border-radius: 3px; transition: border-color 0.15s; }
+.thumb canvas { display: block; width: 72px; height: 52px; }
+.thumb.selected { border-color: #7af07a; }
+.thumb.selected::after { content: '✓'; position: absolute; top: 2px; right: 3px; color: #7af07a; font-size: 10px; font-weight: bold; }
+.thumb .pg-num { position: absolute; bottom: 0; left: 0; right: 0; background: rgba(0,0,0,0.7); color: #aaa; font-size: 9px; text-align: center; padding: 1px; }
+.thumb.demarc-page { border-color: #f0c040; }
+.thumb.demarc-page::before { content: '★'; position: absolute; top: 2px; left: 3px; color: #f0c040; font-size: 10px; }
+
+/* ── TR Map table ── */
+.tr-table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 8px; }
+.tr-table th { padding: 5px 8px; text-align: left; color: #666; font-weight: normal; border-bottom: 1px solid #1e1e1e; }
+.tr-table td { padding: 6px 8px; border-bottom: 1px solid #0d0d0d; vertical-align: top; }
+.badge { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; }
+.badge.on  { background: #001a00; border: 1px solid #007a00; color: #7af07a; }
+.badge.off { background: #2a1a00; border: 1px solid #7a5000; color: #f0c040; }
+
+/* ── Pin placement overlay ── */
+.pin-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 100; flex-direction: column; align-items: center; justify-content: center; }
+.pin-modal.open { display: flex; }
+.pin-canvas-wrap { position: relative; border: 1px solid #333; cursor: crosshair; }
+.pin-canvas-wrap canvas { display: block; max-width: 90vw; max-height: 70vh; }
+.placed-pin { position: absolute; width: 14px; height: 14px; border-radius: 50%; border: 2px solid #f0c040; background: rgba(240,192,64,0.4); transform: translate(-50%, -50%); pointer-events: none; }
+.placed-pin::after { content: ''; position: absolute; top: 50%; left: 50%; width: 4px; height: 4px; background: #f0c040; border-radius: 50%; transform: translate(-50%,-50%); }
+.pin-controls { margin-top: 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+/* ── Progress bar ── */
+.progress-wrap { background: #0a0a0a; border: 1px solid #222; border-radius: 3px; height: 8px; margin-top: 6px; overflow: hidden; }
+.progress-bar  { height: 100%; background: #3a7a3a; transition: width 0.3s; }
+
+/* ── Results ── */
+.results-tabs { display: flex; gap: 2px; margin-bottom: 0; }
+.tab { padding: 5px 14px; border: 1px solid #222; border-bottom: none; border-radius: 3px 3px 0 0; cursor: pointer; font-size: 11px; color: #888; background: #0a0a0a; }
+.tab.active { background: #111; color: #f0c040; border-color: #333; }
+.tab-content { display: none; border: 1px solid #222; border-radius: 0 3px 3px 3px; padding: 12px; }
+.tab-content.active { display: block; }
+.res-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.res-table th { padding: 5px 8px; color: #666; font-weight: normal; text-align: left; border-bottom: 1px solid #1e1e1e; }
+.res-table td { padding: 5px 8px; border-bottom: 1px solid #0d0d0d; }
+</style>
+</head>
+<body>
+
+<h1>⚡ Multi-Page Takeoff</h1>
+<p class="subtitle">
+  <a href="index.html">← Single page</a>
+  &nbsp;·&nbsp; <a id="dt-link" href="device-types.html">⚙ Device Types</a>
+</p>
+
+<!-- ── STEP 1: PROJECT ───────────────────────────────────────────── -->
+<div class="section">
+  <div class="section-title">1 · Project</div>
+  <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
+    <div>
+      <label>Netlify URL</label>
+      <input type="text" id="netlify-url" value="https://winquest-take-off.netlify.app">
+    </div>
+    <div>
+      <label>Project ID</label>
+      <input type="text" id="project-id" style="width:80px;" placeholder="e.g. 1">
+    </div>
+    <div>
+      <label>Project name</label>
+      <input type="text" id="project-name" value="New Project">
+    </div>
+    <div style="padding-top:16px;">
+      <button class="info" onclick="confirmProject()">Confirm Project</button>
+    </div>
+  </div>
+  <div class="status" id="project-status">—</div>
+</div>
+
+<!-- ── STEP 2: LOAD PDF + SELECT PAGES ──────────────────────────── -->
+<div class="section">
+  <div class="section-title">2 · Load PDF + Select Pages</div>
+  <input type="file" id="pdf-file" accept=".pdf" onchange="loadPDF(this)">
+  <div class="status" id="pdf-status">No file loaded</div>
+
+  <div style="margin-top:10px; display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
+    <div>
+      <label>Page range (e.g. 5-31 or 5,7,9-14)</label>
+      <input type="text" id="page-range" placeholder="5-31" style="width:160px;">
+    </div>
+    <div style="padding-top:16px;">
+      <button class="info" onclick="applyRange()">Apply Range</button>
+      <button onclick="clearSelection()" style="margin-left:4px;">Clear</button>
+    </div>
+  </div>
+
+  <div class="thumb-grid" id="thumb-grid"></div>
+  <div class="status" id="selection-status" style="margin-top:6px;">—</div>
+</div>
+
+<!-- ── STEP 3: DEMARC SCAN ───────────────────────────────────────── -->
+<div class="section">
+  <div class="section-title">3 · Demarc Scan</div>
+  <div style="font-size:11px; color:#666; margin-bottom:8px;">
+    Runs Pass B on all selected pages to extract TR room references and build the demarc map.
+  </div>
+  <button onclick="runDemarcScan()">▶ Scan Selected Pages</button>
+  <div class="status" id="scan-status">—</div>
+  <div class="progress-wrap" id="scan-progress-wrap" style="display:none;">
+    <div class="progress-bar" id="scan-progress" style="width:0%"></div>
+  </div>
+
+  <!-- TR Map -->
+  <div id="tr-map-section" style="display:none; margin-top:12px;">
+    <div style="font-size:11px; color:#888; margin-bottom:6px;">TR Room Map — confirm on-sheet, configure off-sheet</div>
+    <table class="tr-table">
+      <thead><tr>
+        <th>TR Room</th><th>Location</th><th>On Page</th><th>Serves</th><th>Status</th><th>Jumper (ft)</th><th>Pin</th>
+      </tr></thead>
+      <tbody id="tr-tbody"></tbody>
+    </table>
+    <div style="margin-top:10px;">
+      <button class="amber" onclick="lockDemarcs()">✓ Confirm Demarc Config → Start Batch</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── STEP 4: BATCH RUN ─────────────────────────────────────────── -->
+<div class="section" id="batch-section" style="display:none;">
+  <div class="section-title">4 · Batch Run</div>
+  <div class="progress-wrap">
+    <div class="progress-bar" id="batch-progress" style="width:0%"></div>
+  </div>
+  <div class="status" id="batch-status">—</div>
+  <div id="batch-log" style="margin-top:8px; font-size:10px; color:#555; max-height:120px; overflow-y:auto;"></div>
+</div>
+
+<!-- ── STEP 5: RESULTS ───────────────────────────────────────────── -->
+<div class="section" id="results-section" style="display:none;">
+  <div class="section-title">5 · Results</div>
+  <div class="results-tabs">
+    <div class="tab active" onclick="showTab('by-page')">By Page</div>
+    <div class="tab" onclick="showTab('by-tr')">By TR Room</div>
+    <div class="tab" onclick="showTab('project-total')">Project Total</div>
+  </div>
+  <div class="tab-content active" id="tab-by-page">
+    <div id="by-page-content">—</div>
+  </div>
+  <div class="tab-content" id="tab-by-tr">
+    <div id="by-tr-content">—</div>
+  </div>
+  <div class="tab-content" id="tab-project-total">
+    <div id="project-total-content">—</div>
+  </div>
+</div>
+
+<!-- ── PIN PLACEMENT MODAL ───────────────────────────────────────── -->
+<div class="pin-modal" id="pin-modal">
+  <div style="color:#f0c040; font-size:13px; margin-bottom:8px;" id="pin-modal-title">
+    Place pin for TR —
+  </div>
+  <div style="color:#888; font-size:11px; margin-bottom:10px;">
+    Click on the drawing to place the demarc exit point
+  </div>
+  <div class="pin-canvas-wrap" id="pin-canvas-wrap">
+    <canvas id="pin-canvas"></canvas>
+  </div>
+  <div class="pin-controls">
+    <div>
+      <label>Jumper length (ft) — distance from this point to actual TR</label>
+      <input type="number" id="pin-jumper-ft" value="0" min="0" step="5" style="width:80px;">
+    </div>
+    <button onclick="confirmPin()">✓ Confirm Pin</button>
+    <button class="danger" onclick="closePinModal()">✗ Cancel</button>
+  </div>
+  <div class="status" id="pin-status"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+// ── State ────────────────────────────────────────────────────────
+let projectId    = null;
+let pdfDoc       = null;
+let totalPages   = 0;
+let selectedPages = new Set();   // PDF page numbers
+let pageCache    = {};           // pageNum → { canvas, passBResult, pageId }
+let trMap        = {};           // TR name → config
+let pinTarget    = null;         // { trName, pageNum } — current pin placement
+let batchResults = {};           // pageNum → result
+
+function base() { return document.getElementById('netlify-url').value.replace(/\/$/, ''); }
+function pid()  { return parseInt(document.getElementById('project-id').value.trim()); }
+function setStatus(id, msg, cls='') {
+  const el = document.getElementById(id);
+  if (el) { el.textContent = msg; el.className = 'status ' + cls; }
+}
+
+// ── Session restore ───────────────────────────────────────────────
+(function init() {
+  const stored = sessionStorage.getItem('to_project_id');
+  const nurl   = sessionStorage.getItem('to_netlify_url');
+  if (stored) { document.getElementById('project-id').value = stored; projectId = parseInt(stored); updateLinks(); }
+  if (nurl)   document.getElementById('netlify-url').value = nurl;
+})();
+
+function updateLinks() {
+  const link = document.getElementById('dt-link');
+  if (link && projectId) link.href = `device-types.html?project_id=${projectId}`;
+}
+
+// ── Step 1: Project ───────────────────────────────────────────────
+async function confirmProject() {
+  const id   = document.getElementById('project-id').value.trim();
+  const name = document.getElementById('project-name').value.trim();
+  setStatus('project-status', 'Confirming…', 'running');
+  try {
+    if (id) {
+      projectId = parseInt(id);
+      sessionStorage.setItem('to_project_id',  id);
+      sessionStorage.setItem('to_netlify_url', base());
+      setStatus('project-status', `✓ Project ${id} confirmed`, 'ok');
+    } else {
+      const r = await fetch(`${base()}/api/projects`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name })
+      });
+      const j = await r.json();
+      projectId = j.id;
+      document.getElementById('project-id').value = j.id;
+      sessionStorage.setItem('to_project_id', j.id);
+      setStatus('project-status', `✓ Created project ${j.id}`, 'ok');
+    }
+    updateLinks();
+  } catch(e) { setStatus('project-status', 'Error: ' + e.message, 'err'); }
+}
+
+// ── Step 2: Load PDF ──────────────────────────────────────────────
+async function loadPDF(input) {
+  const file = input.files[0];
+  if (!file) return;
+  setStatus('pdf-status', `Loading ${file.name}…`, 'running');
+  try {
+    const ab  = await file.arrayBuffer();
+    pdfDoc    = await pdfjsLib.getDocument({ data: ab }).promise;
+    totalPages = pdfDoc.numPages;
+    setStatus('pdf-status', `✓ ${totalPages} pages loaded — ${file.name}`, 'ok');
+    await renderThumbnails();
+  } catch(e) { setStatus('pdf-status', 'Error: ' + e.message, 'err'); }
+}
+
+async function renderThumbnails() {
+  const grid = document.getElementById('thumb-grid');
+  grid.innerHTML = '';
+  for (let n = 1; n <= totalPages; n++) {
+    const page = await pdfDoc.getPage(n);
+    const vp   = page.getViewport({ scale: 0.12 });
+    const cv   = document.createElement('canvas');
+    cv.width   = vp.width;
+    cv.height  = vp.height;
+    await page.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+
+    const wrap = document.createElement('div');
+    wrap.className = 'thumb';
+    wrap.dataset.page = n;
+    wrap.appendChild(cv);
+    const lbl = document.createElement('div');
+    lbl.className = 'pg-num';
+    lbl.textContent = n;
+    wrap.appendChild(lbl);
+    wrap.onclick = () => togglePage(n);
+    grid.appendChild(wrap);
+  }
+}
+
+function togglePage(n) {
+  if (selectedPages.has(n)) selectedPages.delete(n);
+  else selectedPages.add(n);
+  updateThumbStates();
+}
+
+function updateThumbStates() {
+  document.querySelectorAll('.thumb').forEach(el => {
+    const n = parseInt(el.dataset.page);
+    el.classList.toggle('selected', selectedPages.has(n));
+  });
+  const count = selectedPages.size;
+  setStatus('selection-status', count ? `${count} pages selected` : '—',
+    count ? 'ok' : '');
+}
+
+// Parse range string: "5-31" or "5,7,9-14" or "5, 7, 9-14"
+function parseRange(str) {
+  const pages = new Set();
+  str.split(',').forEach(part => {
+    part = part.trim();
+    if (part.includes('-')) {
+      const [a, b] = part.split('-').map(Number);
+      for (let i = a; i <= b; i++) pages.add(i);
+    } else if (/^\d+$/.test(part)) {
+      pages.add(parseInt(part));
+    }
+  });
+  return pages;
+}
+
+function applyRange() {
+  const rangeStr = document.getElementById('page-range').value.trim();
+  if (!rangeStr) return;
+  const parsed = parseRange(rangeStr);
+  // Filter to valid pages only
+  selectedPages = new Set([...parsed].filter(n => n >= 1 && n <= totalPages));
+  updateThumbStates();
+}
+
+function clearSelection() {
+  selectedPages.clear();
+  updateThumbStates();
+}
+
+// ── Step 3: Demarc Scan ───────────────────────────────────────────
+async function runDemarcScan() {
+  if (!projectId)         { alert('Confirm project first'); return; }
+  if (!pdfDoc)            { alert('Load a PDF first'); return; }
+  if (!selectedPages.size){ alert('Select pages first'); return; }
+
+  setStatus('scan-status', `Scanning ${selectedPages.size} pages…`, 'running');
+  document.getElementById('scan-progress-wrap').style.display = 'block';
+
+  const sortedPages = [...selectedPages].sort((a,b) => a-b);
+  const pageBResults = [];
+  let done = 0;
+
+  for (const pageNum of sortedPages) {
+    setStatus('scan-status', `Scanning page ${pageNum}… (${done+1}/${sortedPages.length})`, 'running');
+    document.getElementById('scan-progress').style.width =
+      `${Math.round((done / sortedPages.length) * 100)}%`;
+
+    try {
+      // Render page at medium res for Pass B
+      const pdfPage = await pdfDoc.getPage(pageNum);
+      const vp      = pdfPage.getViewport({ scale: 1.5 });
+      const cv      = document.createElement('canvas');
+      cv.width      = vp.width;
+      cv.height     = vp.height;
+      await pdfPage.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+      const b64 = cv.toDataURL('image/jpeg', 0.75).split(',')[1];
+
+      // Run Pass B
+      const r = await fetch(`${base()}/api/pass-b-page`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project_id: projectId,
+          page_num:   pageNum,
+          image:      b64
+        })
+      });
+      const j = await r.json();
+      if (r.ok) {
+        pageCache[pageNum] = { passBResult: j, pageId: j.page_id };
+        pageBResults.push({ eval_page_num: pageNum, page_b_result: j });
+      }
+    } catch(e) { console.warn(`Page ${pageNum} scan failed:`, e.message); }
+    done++;
+  }
+
+  document.getElementById('scan-progress').style.width = '100%';
+
+  // Send to pass-scan
+  const r2 = await fetch(`${base()}/api/pass-scan`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ project_id: projectId, pages: pageBResults })
+  });
+  const scanResult = await r2.json();
+
+  if (!r2.ok) {
+    setStatus('scan-status', 'Scan error: ' + scanResult.error, 'err');
+    return;
+  }
+
+  setStatus('scan-status',
+    `✓ ${scanResult.pages_scanned} pages scanned · ${scanResult.tr_rooms} TR rooms found · ${scanResult.off_sheet} need configuration`,
+    scanResult.off_sheet > 0 ? '' : 'ok');
+
+  // Store TR map
+  trMap = {};
+  for (const tr of (scanResult.tr_map ?? [])) trMap[tr.name] = tr;
+
+  renderTRMap(scanResult.tr_map ?? []);
+}
+
+function renderTRMap(trs) {
+  const tbody = document.getElementById('tr-tbody');
+  tbody.innerHTML = '';
+  document.getElementById('tr-map-section').style.display = 'block';
+
+  for (const tr of trs) {
+    const isOn = tr.status === 'on_sheet';
+    const serves = (tr.pages ?? []).map(p => `pg${p.eval_page_num}`).join(', ');
+    const location = [tr.building, tr.floor, tr.area].filter(Boolean).join(' · ') || '—';
+    const demarcPage = tr.demarc_page_num ? `pg ${tr.demarc_page_num}` : '—';
+
+    const tr_el = document.createElement('tr');
+    tr_el.innerHTML = `
+      <td><strong style="color:#f0c040;">${tr.name}</strong></td>
+      <td style="color:#888;">${location}</td>
+      <td style="color:#888;">${demarcPage}</td>
+      <td style="color:#888;">${serves}</td>
+      <td><span class="badge ${isOn ? 'on' : 'off'}">${isOn ? '✓ on sheet' : '⚠ off sheet'}</span></td>
+      <td>${isOn
+        ? '<span style="color:#555;">—</span>'
+        : `<input type="number" id="jumper-${tr.name}" value="${tr.stub_ft ?? 0}" min="0" step="5" style="width:70px; background:#1a1a1a; border:1px solid #333; color:#e0e0e0; padding:3px 6px; border-radius:3px; font-size:11px;">`
+      }</td>
+      <td>${isOn
+        ? `<button class="info" onclick="movePinModal('${tr.name}', ${tr.demarc_page_num})" style="padding:2px 8px; font-size:10px;">Move</button>`
+        : `<button class="amber" onclick="openPinModal('${tr.name}')" style="padding:2px 8px; font-size:10px;">Place Pin</button>`
+      }</td>`;
+    tbody.appendChild(tr_el);
+  }
+}
+
+// ── Pin placement modal ───────────────────────────────────────────
+async function openPinModal(trName, pageNum) {
+  pinTarget = { trName, pageNum: pageNum ?? [...selectedPages].sort((a,b)=>a-b)[0] };
+  document.getElementById('pin-modal-title').textContent =
+    `Place exit pin for TR ${trName} on page ${pinTarget.pageNum}`;
+
+  const modal = document.getElementById('pin-modal');
+  const cv    = document.getElementById('pin-canvas');
+  const wrap  = document.getElementById('pin-canvas-wrap');
+
+  // Render page
+  const pdfPage = await pdfDoc.getPage(pinTarget.pageNum);
+  const vp      = pdfPage.getViewport({ scale: 1.8 });
+  cv.width      = vp.width;
+  cv.height     = vp.height;
+  await pdfPage.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+  cv.style.maxWidth  = '88vw';
+  cv.style.maxHeight = '68vh';
+
+  // Remove old pin dots
+  wrap.querySelectorAll('.placed-pin').forEach(el => el.remove());
+
+  // If existing pin, draw it
+  const existing = trMap[trName];
+  if (existing?.pin_x != null) drawPinDot(wrap, cv, existing.pin_x, existing.pin_y);
+
+  cv.onclick = (e) => {
+    const rect    = cv.getBoundingClientRect();
+    const scaleX  = cv.width  / rect.width;
+    const scaleY  = cv.height / rect.height;
+    const xNorm   = (e.clientX - rect.left) * scaleX / cv.width;
+    const yNorm   = (e.clientY - rect.top)  * scaleY / cv.height;
+    wrap.querySelectorAll('.placed-pin').forEach(el => el.remove());
+    drawPinDot(wrap, cv, xNorm, yNorm);
+    pinTarget.xNorm = xNorm;
+    pinTarget.yNorm = yNorm;
+    setStatus('pin-status', `Pin at (${xNorm.toFixed(3)}, ${yNorm.toFixed(3)})`, 'ok');
+  };
+
+  modal.classList.add('open');
+}
+
+function movePinModal(trName, pageNum) {
+  openPinModal(trName, pageNum);
+}
+
+function drawPinDot(wrap, cv, xNorm, yNorm) {
+  const dot = document.createElement('div');
+  dot.className = 'placed-pin';
+  const rect   = cv.getBoundingClientRect();
+  const dispW  = parseFloat(cv.style.maxWidth)  || cv.width;
+  const dispH  = parseFloat(cv.style.maxHeight) || cv.height;
+  const scaleX = Math.min(dispW, cv.width)  / cv.width;
+  const scaleY = Math.min(dispH, cv.height) / cv.height;
+  const scale  = Math.min(scaleX, scaleY);
+  dot.style.left = `${xNorm * cv.width  * scale}px`;
+  dot.style.top  = `${yNorm * cv.height * scale}px`;
+  wrap.appendChild(dot);
+}
+
+async function confirmPin() {
+  if (pinTarget?.xNorm == null) {
+    setStatus('pin-status', 'Click on the drawing first', 'err'); return;
+  }
+  const jumperFt = parseFloat(document.getElementById('pin-jumper-ft').value) || 0;
+  const { trName, xNorm, yNorm, pageNum } = pinTarget;
+  const pageId = pageCache[pageNum]?.pageId;
+
+  try {
+    const r = await fetch(`${base()}/api/pass-demarc`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: projectId,
+        page_id:    pageId ?? null,
+        name:       trName,
+        source:     'user_pin',
+        x_norm:     xNorm,
+        y_norm:     yNorm,
+        stub_ft:    jumperFt
+      })
+    });
+    const j = await r.json();
+    if (r.ok) {
+      trMap[trName] = { ...trMap[trName], pin_x: xNorm, pin_y: yNorm, stub_ft: jumperFt, demarc_id: j.id };
+      setStatus('pin-status', `✓ Pin saved for ${trName}`, 'ok');
+      setTimeout(closePinModal, 800);
+    } else {
+      setStatus('pin-status', 'Save error: ' + j.error, 'err');
+    }
+  } catch(e) { setStatus('pin-status', 'Error: ' + e.message, 'err'); }
+}
+
+function closePinModal() {
+  document.getElementById('pin-modal').classList.remove('open');
+}
+
+// ── Lock demarcs + start batch ────────────────────────────────────
+async function lockDemarcs() {
+  // Save jumper values for off-sheet TRs
+  for (const [trName, tr] of Object.entries(trMap)) {
+    const input = document.getElementById(`jumper-${trName}`);
+    if (input) {
+      tr.stub_ft = parseFloat(input.value) || 0;
+      // Update demarc record
+      await fetch(`${base()}/api/pass-demarc`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project_id: projectId, name: trName,
+          source: tr.status === 'on_sheet' ? 'auto' : 'off_sheet',
+          x_norm: tr.pin_x ?? tr.demarc_x ?? null,
+          y_norm: tr.pin_y ?? tr.demarc_y ?? null,
+          stub_ft: tr.stub_ft
+        })
+      });
+    }
+  }
+
+  document.getElementById('batch-section').style.display = 'block';
+  document.getElementById('batch-section').scrollIntoView({ behavior: 'smooth' });
+  await runBatch();
+}
+
+// ── Step 4: Batch run ─────────────────────────────────────────────
+async function runBatch() {
+  const sortedPages = [...selectedPages].sort((a,b) => a-b);
+  const log         = document.getElementById('batch-log');
+  let done = 0;
+
+  setStatus('batch-status', `Running ${sortedPages.length} pages…`, 'running');
+
+  for (const pageNum of sortedPages) {
+    const cache    = pageCache[pageNum] ?? {};
+    const pageId   = cache.pageId;
+    const passBRes = cache.passBResult;
+
+    if (!pageId) {
+      log.innerHTML += `<div style="color:#f07a7a;">pg${pageNum}: no page record — skipping</div>`;
+      continue;
+    }
+
+    setStatus('batch-status',
+      `Page ${pageNum} (${done+1}/${sortedPages.length})…`, 'running');
+
+    try {
+      // Extract text from PDF
+      const pdfPage  = await pdfDoc.getPage(pageNum);
+      const viewport = pdfPage.getViewport({ scale: 1.0 });
+      const tContent = await pdfPage.getTextContent({ includeMarkedContent: false });
+
+      // Anchor-pattern filtering (same logic as single-page)
+      const anchorSet = await getAnchorPatterns();
+      const W = viewport.width, H = viewport.height;
+      const textItems = [];
+      for (const item of tContent.items) {
+        const s = item.str?.trim();
+        if (!s || !anchorSet.has(s)) continue;
+        const tx = item.transform[4], ty = item.transform[5];
+        const fs = Math.abs(item.transform[3]);
+        const tw = item.width ?? 0, th = item.height ?? fs;
+        textItems.push({
+          str:      s,
+          cx_norm:  parseFloat(((tx + tw/2) / W).toFixed(4)),
+          cy_norm:  parseFloat((1 - (ty + th/2) / H).toFixed(4)),
+          color_hex: '#999999',
+          font_size: parseFloat(fs.toFixed(1))
+        });
+      }
+
+      // Build demarc pins for this page
+      const demarcPins = buildPinsForPage(pageNum, passBRes, W, H);
+
+      // Call pass-batch
+      const r = await fetch(`${base()}/api/pass-batch`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project_id:     projectId,
+          page_id:        pageId,
+          eval_page_num:  pageNum,
+          text_items:     textItems,
+          page_width_pts:  W,
+          page_height_pts: H,
+          demarc_pins:    demarcPins
+        })
+      });
+      const j = await r.json();
+
+      batchResults[pageNum] = j;
+      const msg = r.ok
+        ? `pg${pageNum}: ${j.device_count} devices${j.tia_violations ? ' ⚠'+j.tia_violations+' TIA' : ''}`
+        : `pg${pageNum}: ERROR — ${j.error}`;
+      log.innerHTML += `<div style="color:${r.ok ? '#7af07a' : '#f07a7a'}">${msg}</div>`;
+      log.scrollTop = log.scrollHeight;
+
+    } catch(e) {
+      log.innerHTML += `<div style="color:#f07a7a;">pg${pageNum}: ${e.message}</div>`;
+    }
+
+    done++;
+    document.getElementById('batch-progress').style.width =
+      `${Math.round((done / sortedPages.length) * 100)}%`;
+  }
+
+  setStatus('batch-status', `✓ Complete — ${done} pages processed`, 'ok');
+  document.getElementById('results-section').style.display = 'block';
+  document.getElementById('results-section').scrollIntoView({ behavior: 'smooth' });
+  renderResults();
+}
+
+// Build demarc pins for a page using the TR map
+function buildPinsForPage(pageNum, passBRes, pageW, pageH) {
+  const pins = [];
+  for (const [trName, tr] of Object.entries(trMap)) {
+    // Does this TR serve this page?
+    const servesThisPage = (tr.pages ?? []).some(p => p.eval_page_num === pageNum);
+    if (!servesThisPage) continue;
+
+    const xNorm = tr.pin_x ?? tr.demarc_x ?? null;
+    const yNorm = tr.pin_y ?? tr.demarc_y ?? null;
+    if (xNorm == null) continue;   // No pin placed — skip
+
+    pins.push({
+      demarc_id: tr.demarc_id ?? null,
+      name:      trName,
+      x_norm:    xNorm,
+      y_norm:    yNorm,
+      stub_ft:   tr.stub_ft ?? 0
+    });
+  }
+  return pins;
+}
+
+// Fetch anchor patterns from Supabase (cached)
+let _anchorCache = null;
+async function getAnchorPatterns() {
+  if (_anchorCache) return _anchorCache;
+  try {
+    const r = await fetch(`${base()}/api/takeoff-summary?project_id=${projectId}`);
+    const j = await r.json();
+    const set = new Set();
+    for (const dt of (j.device_types ?? [])) {
+      if (!dt.text_anchors) continue;
+      (dt.text_anchors.primary    ?? []).forEach(s => set.add(s));
+      (dt.text_anchors.associated ?? []).forEach(s => set.add(s));
+    }
+    _anchorCache = set.size > 0 ? set : new Set(['DD1','DD2','DD3','DV1','DV2','N2','WAP']);
+  } catch { _anchorCache = new Set(['DD1','DD2','DD3','DV1','DV2','N2','WAP']); }
+  return _anchorCache;
+}
+
+// ── Step 5: Results ───────────────────────────────────────────────
+function showTab(name) {
+  document.querySelectorAll('.tab').forEach((t,i) => {
+    t.classList.toggle('active', ['by-page','by-tr','project-total'][i] === name);
+  });
+  document.querySelectorAll('.tab-content').forEach(tc => {
+    tc.classList.remove('active');
+    if (tc.id === `tab-${name}`) tc.classList.add('active');
+  });
+}
+
+function renderResults() {
+  renderByPage();
+  renderByTR();
+  renderProjectTotal();
+}
+
+function renderByPage() {
+  const el = document.getElementById('by-page-content');
+  const sortedPages = [...selectedPages].sort((a,b)=>a-b);
+  let html = '';
+
+  for (const pageNum of sortedPages) {
+    const res  = batchResults[pageNum];
+    const cache = pageCache[pageNum]?.passBResult;
+    const sheet = cache?.sheet_title ?? `Page ${pageNum}`;
+    if (!res) continue;
+
+    html += `<div style="margin-bottom:16px; border-bottom:1px solid #1a1a1a; padding-bottom:12px;">`;
+    html += `<div style="color:#f0c040; font-size:12px; margin-bottom:6px;">
+      <strong>pg${pageNum}</strong> — ${sheet}
+      <span style="color:#888; margin-left:8px;">${res.device_count} devices</span>
+      ${res.tia_violations ? `<span style="color:#f07a7a; margin-left:8px;">⚠ ${res.tia_violations} TIA</span>` : ''}
+    </div>`;
+
+    // By-type summary
+    const byType = res.by_type ?? [];
+    html += `<div style="font-size:11px; color:#888; margin-bottom:6px;">`;
+    for (const t of byType) {
+      html += `<span style="margin-right:12px;"><strong style="color:#e0e0e0;">${t.count}</strong> ${t.name}</span>`;
+    }
+    html += `</div>`;
+
+    // Device table
+    html += `<table class="res-table"><thead><tr>
+      <th>#</th><th>Name</th><th>Labels</th><th style="text-align:right;">X,Y</th><th style="text-align:right;">Dist (ft)</th>
+    </tr></thead><tbody>`;
+
+    (res.devices ?? []).forEach((d, i) => {
+      const dist = d.total_ft != null
+        ? `<strong style="color:${d.tia_flag ? '#f07a7a' : '#7af07a'}">${d.total_ft}ft</strong>`
+        : '—';
+      html += `<tr>
+        <td style="color:#555;">${i+1}</td>
+        <td style="color:#f0c040;">${d.name ?? '—'}</td>
+        <td style="color:#7ac0f0; font-family:monospace;">${(d.raw_labels ?? []).join(' · ')}</td>
+        <td style="text-align:right; color:#666; font-family:monospace;">${d.x_norm?.toFixed(3)}, ${d.y_norm?.toFixed(3)}</td>
+        <td style="text-align:right;">${dist}</td>
+      </tr>`;
+    });
+
+    html += `</tbody></table></div>`;
+  }
+
+  el.innerHTML = html || '<div style="color:#555;">No results yet</div>';
+}
+
+function renderByTR() {
+  const el = document.getElementById('by-tr-content');
+  // Group all devices by demarc
+  const groups = {};
+  for (const [pageNum, res] of Object.entries(batchResults)) {
+    for (const d of (res.devices ?? [])) {
+      const key = d.demarc_id ?? 'unassigned';
+      if (!groups[key]) groups[key] = { devices: [], pages: new Set() };
+      groups[key].devices.push({ ...d, pageNum });
+      groups[key].pages.add(parseInt(pageNum));
+    }
+  }
+
+  // Get TR name for each demarc_id
+  const trById = {};
+  for (const [name, tr] of Object.entries(trMap)) {
+    if (tr.demarc_id) trById[tr.demarc_id] = { name, stub_ft: tr.stub_ft };
+  }
+
+  let html = '';
+  for (const [demarcId, grp] of Object.entries(groups)) {
+    const tr    = trById[demarcId] ?? { name: demarcId === 'unassigned' ? '— unassigned —' : `TR#${demarcId}` };
+    const pages = [...grp.pages].sort((a,b)=>a-b).map(n=>`pg${n}`).join(', ');
+    const tia   = grp.devices.filter(d => d.tia_flag).length;
+    const maxFt = Math.max(0, ...grp.devices.map(d => d.total_ft ?? 0));
+
+    html += `<div style="margin-bottom:16px; border-bottom:1px solid #1a1a1a; padding-bottom:12px;">
+      <div style="color:#f0c040; font-size:12px; margin-bottom:4px;">
+        TR ${tr.name}
+        ${tr.stub_ft ? `<span style="color:#888;"> + ${tr.stub_ft}ft stub</span>` : ''}
+      </div>
+      <div style="font-size:11px; color:#888;">
+        Pages: ${pages} · ${grp.devices.length} devices · longest: ${maxFt}ft
+        ${tia ? `· <span style="color:#f07a7a;">⚠ ${tia} TIA</span>` : ''}
+      </div>
+    </div>`;
+  }
+
+  el.innerHTML = html || '<div style="color:#555;">No results yet</div>';
+}
+
+function renderProjectTotal() {
+  const el = document.getElementById('project-total-content');
+  let totalDevices = 0, totalTIA = 0, maxFt = 0;
+  const typeRollup = {};
+
+  for (const res of Object.values(batchResults)) {
+    totalDevices += res.device_count ?? 0;
+    totalTIA     += res.tia_violations ?? 0;
+    for (const d of (res.devices ?? [])) {
+      if ((d.total_ft ?? 0) > maxFt) maxFt = d.total_ft;
+      const k = d.legend_id ?? 'unknown';
+      typeRollup[k] = typeRollup[k] ?? { name: d.name, count: 0 };
+      typeRollup[k].count++;
+    }
+  }
+
+  let html = `
+    <div style="display:flex; gap:32px; padding:10px 0; flex-wrap:wrap; margin-bottom:12px;">
+      <div><div style="font-size:10px; color:#666;">TOTAL DEVICES</div>
+           <div style="font-size:28px; color:#f0c040; font-weight:bold;">${totalDevices}</div></div>
+      <div><div style="font-size:10px; color:#666;">PAGES PROCESSED</div>
+           <div style="font-size:28px; color:#7af07a; font-weight:bold;">${Object.keys(batchResults).length}</div></div>
+      <div><div style="font-size:10px; color:#666;">LONGEST RUN</div>
+           <div style="font-size:28px; color:#7ac0f0; font-weight:bold;">${maxFt}ft</div></div>
+      <div><div style="font-size:10px; color:#666;">TIA VIOLATIONS</div>
+           <div style="font-size:28px; color:${totalTIA ? '#f07a7a' : '#7af07a'}; font-weight:bold;">${totalTIA}</div></div>
+    </div>
+    <table class="res-table"><thead><tr>
+      <th>Device Type</th><th style="text-align:right;">Count</th>
+    </tr></thead><tbody>`;
+
+  for (const [, t] of Object.entries(typeRollup)) {
+    html += `<tr>
+      <td style="color:#f0c040;">${t.name}</td>
+      <td style="text-align:right; color:#e0e0e0;">${t.count}</td>
+    </tr>`;
+  }
+
+  html += `</tbody></table>`;
+  el.innerHTML = html;
+}
+</script>
+</body>
+</html>
