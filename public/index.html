@@ -177,48 +177,51 @@
 </head>
 <body>
 
-<h1>⚡ Take-off — Pipeline Test</h1>
-<p class="subtitle">winquest-take-off.netlify.app · Supabase lpjpqmpjxtwsnakcwqvb · Legend pre-loaded · No Pass A</p>
+<h1>⚡ Take-off — Pipeline</h1>
+<p class="subtitle">
+  winquest-take-off.netlify.app
+  &nbsp;·&nbsp; <a href="device-types.html" style="color:#f0c040;">⚙ Manage Device Types</a>
+</p>
 
-<!-- ── STEP 0: CONFIG ────────────────────────────────────────────── -->
+<!-- ── STEP 1: PROJECT + CONFIG ─────────────────────────────────── -->
 <div class="section">
-  <div class="section-title">0 · Config</div>
+  <div class="section-title">1 · Project</div>
   <label>Netlify base URL</label>
   <input type="text" id="netlify-url" value="https://winquest-take-off.netlify.app">
   <label>Project ID (leave blank to auto-create)</label>
-  <input type="text" id="project-id" placeholder="e.g. 42">
+  <input type="text" id="project-id" placeholder="e.g. 1">
   <label>Project name (used only when auto-creating)</label>
-  <input type="text" id="project-name" value="Test Project — Page 28">
+  <input type="text" id="project-name" value="New Project">
   <button class="info" id="btn-create-project">Create / Confirm Project</button>
   <div class="status" id="project-status">—</div>
 </div>
 
-<!-- ── STEP 1: LOAD PDF ─────────────────────────────────────────── -->
+<!-- ── STEP 2: LOAD PDF ──────────────────────────────────────────── -->
 <div class="section">
-  <div class="section-title">1 · Load PDF</div>
+  <div class="section-title">2 · Load PDF</div>
   <input type="file" id="pdf-file" accept=".pdf">
   <div class="status" id="pdf-status">No file loaded</div>
   <div class="thumbnails" id="thumbnails"></div>
   <div style="margin-top:8px; font-size:11px; color:#555;">
-    Click a thumbnail to mark it. Purple = legend page · Green = eval page
+    Click a thumbnail to set pages. Purple = legend · Green = eval page
   </div>
 </div>
 
-<!-- ── STEP 2: PASS B ───────────────────────────────────────────── -->
+<!-- ── STEP 3: SCALE + DEMARC ────────────────────────────────────── -->
 <div class="section">
-  <div class="section-title">2 · PASS B — SCALE + DEMARCATION</div>
+  <div class="section-title">3 · Scale + Demarcation</div>
   <div style="font-size:11px; color:#666; margin-bottom:8px;">
     Eval page: <strong id="eval-page-label" style="color:#7af07a;">not selected</strong>
-    &nbsp;·&nbsp; Default: page 1 · click thumbnail to change
+    &nbsp;·&nbsp; click thumbnail to change
   </div>
-  <button onclick="runPassB()">▶ Run Pass B</button>
+  <button onclick="runPassB()">▶ Detect Scale + Demarc</button>
   <div class="status" id="pass-b-status">—</div>
   <div class="output-area" id="pass-b-output">Output will appear here…</div>
 
   <div id="scale-override-section" style="margin-top:12px; display:none;">
     <hr class="divider">
     <div style="font-size:11px; color:#888; margin-bottom:6px;">
-      Scale — edit if Claude misread or leave as detected:
+      Scale — edit if misread or leave as detected:
     </div>
     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
       <div>
@@ -249,69 +252,41 @@
   </div>
 </div>
 
-
-<!-- ── STEP 3b: PASS B2 — DEVICE PRE-SCAN ─────────────────────── -->
+<!-- ── STEP 4: DEVICE DETECTION ──────────────────────────────────── -->
 <div class="section">
-  <div class="section-title">3 · PASS B2 — DEVICE PRE-SCAN</div>
+  <div class="section-title">4 · Device Detection</div>
   <div style="font-size:11px; color:#666; margin-bottom:8px;">
-    Scans the page against all legend devices — returns only what is actually on this sheet.
-    Run after Pass B. Results auto-populate Pass C device pills.
+    Reads device labels directly from the PDF text layer using device type anchors.
+    Run after Step 3. Requires device types to have text anchors set —
+    <a href="device-types.html" style="color:#7ac0f0;">manage device types ↗</a>
   </div>
-  <button id="btn-pass-b2">&#9654; Scan for devices on this page</button>
-  <div class="status" id="pass-b2-status">—</div>
-  <div class="output-area" id="pass-b2-output">Output will appear here…</div>
-</div>
-
-<!-- ── STEP 3b: PASS EXTRACT — TEXT-LAYER DETECTION ────────────── -->
-<div class="section">
-  <div class="section-title">3b · PASS EXTRACT — TEXT-LAYER DEVICE DETECTION</div>
-  <div style="font-size:11px; color:#666; margin-bottom:8px;">
-    Reads device labels directly from the PDF text layer — no vision required.
-    Run after Pass B. Requires device types to have <code>text_anchors</code> set in Supabase.
-  </div>
-  <button id="btn-pass-extract">▶ Run Pass Extract</button>
+  <button id="btn-pass-extract">▶ Detect Devices</button>
   <div class="status" id="pass-extract-status">—</div>
-  <div class="output-area" id="pass-extract-output">Output will appear here…</div>
-</div>
 
-<!-- ── STEP 4: PASS C ───────────────────────────────────────────── -->
-<div class="section">
-  <div class="section-title">4 · PASS C — DEVICE DETECTION + DISTANCES</div>
-  <div style="font-size:11px; color:#666; margin-bottom:6px;">Select a device type then run Pass C:</div>
-  <button class="info" id="btn-load-devices">↓ Load devices from Supabase</button>
-  <div class="status" id="load-devices-status">—</div>
-  <div id="device-pills" style="margin-bottom:10px; margin-top:8px;">(click Load devices above)</div>
-  <button id="btn-pass-c">▶ Run Pass C</button>
-  <div class="status" id="pass-c-status">—</div>
-
-  <hr class="divider">
-
-  <!-- Results summary -->
-  <div id="results-summary" style="display:none; margin-top:8px;">
+  <div id="results-summary" style="display:none; margin-top:10px;">
     <span class="count-display" id="device-count">0</span>
     <span class="count-label">devices found</span>
     <span id="tia-badge-container"></span>
     <div style="font-size:11px; color:#666; margin-top:4px;" id="longest-run-label"></div>
   </div>
 
-  <div class="output-area" id="pass-c-output">Output will appear here…</div>
-  <img class="annotated-img" id="annotated-img" alt="Annotated drawing">
+  <div class="output-area" id="pass-extract-output">Output will appear here…</div>
 
   <!-- TIA violations table -->
   <table class="tia-table" id="tia-table">
     <thead>
       <tr>
-        <th>#</th><th>Device ID</th><th>Location</th><th>Run (ft)</th><th>Confidence</th>
+        <th>#</th><th>Device ID</th><th>Labels</th><th>Run (ft)</th><th>TIA Reason</th>
       </tr>
     </thead>
     <tbody id="tia-tbody"></tbody>
   </table>
 </div>
 
-<!-- ── STEP 5: SUMMARY ──────────────────────────────────────────── -->
+<!-- ── STEP 5: SUMMARY ───────────────────────────────────────────── -->
 <div class="section">
-  <div class="section-title">5 · SUPABASE SUMMARY</div>
-  <button class="info" id="btn-summary">▶ Fetch takeoff-summary</button>
+  <div class="section-title">5 · Summary</div>
+  <button class="info" id="btn-summary">▶ Fetch Takeoff Summary</button>
   <div class="status" id="summary-status">—</div>
   <div class="output-area" id="summary-output">Output will appear here…</div>
 </div>
@@ -1194,25 +1169,45 @@ async function runPassExtract() {
     const byType = j.by_type ?? [];
     let summary = `✓ ${j.device_count} devices found`;
     if (j.tia_violations) summary += ` · ⚠ ${j.tia_violations} TIA violations`;
-    if (j.max_run_ft)     summary += ` · longest: ${j.max_run_ft}ft`;
+    if (j.max_run_ft)     summary += ` · longest run: ${j.max_run_ft}ft`;
+    if (j.warnings?.length) summary += ` · ⚠ ${j.warnings.join(' · ')}`;
     setStatus('pass-extract-status', summary, j.tia_violations > 0 ? '' : 'ok');
 
-    setOutput('pass-extract-output', {
-      device_count: j.device_count,
-      by_type:      byType,
-      max_run_ft:   j.max_run_ft,
-      tia_violations: j.tia_violations,
-      demarc_used:  j.demarc_used,
-      warnings:     j.warnings,
-      sample_devices: j.devices?.slice(0, 8)
-    });
+    // Build readable output
+    const lines = ['=== DEVICE COUNT BY TYPE ==='];
+    for (const t of byType) {
+      lines.push(`  ${t.legend_id}  ${t.name}  →  ${t.count} found${t.tia ? '  ⚠ ' + t.tia + ' TIA' : ''}`);
+    }
+    lines.push('');
+    lines.push(`Total: ${j.device_count} devices`);
+    if (j.demarc_used) lines.push(`Demarc: ${j.demarc_used.name} (stub ${j.demarc_used.stub_ft ?? 0}ft)`);
+    if (j.warnings?.length) { lines.push(''); j.warnings.forEach(w => lines.push('⚠ ' + w)); }
+    setOutput('pass-extract-output', lines.join('\n'));
 
-    // Update the main device count display
+    // Update count display
     document.getElementById('device-count').textContent = j.device_count;
     document.getElementById('results-summary').style.display = 'block';
     const badge = document.getElementById('tia-badge-container');
     badge.innerHTML = j.tia_violations > 0
       ? `<span class="tia-badge">⚠ ${j.tia_violations} TIA &gt;295 ft</span>` : '';
+
+    // TIA table
+    const tiaDevices = (j.devices ?? []).filter(d => d.tia_flag);
+    if (tiaDevices.length > 0) {
+      const tbody = document.getElementById('tia-tbody');
+      tbody.innerHTML = '';
+      tiaDevices.forEach((d, i) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${i+1}</td><td>${d.id ?? '—'}</td>
+          <td>${(d.raw_labels ?? []).join(' ')}</td>
+          <td style="color:#f07a7a; font-weight:bold;">${d.total_ft ?? '—'} ft</td>
+          <td>${d.tia_reason ?? '—'}</td>`;
+        tbody.appendChild(tr);
+      });
+      document.getElementById('tia-table').style.display = 'table';
+    } else {
+      document.getElementById('tia-table').style.display = 'none';
+    }
 
   } catch(e) {
     setStatus('pass-extract-status', 'Error: ' + e.message, 'err');
@@ -1234,18 +1229,13 @@ async function runPassExtract() {
 
   // Buttons
   wire('btn-create-project', createProject);
-  wire('btn-pass-a',         runPassA);
-  wire('btn-pass-b',         runPassB);
-  wire('btn-pass-b2',        runPassB2);
   wire('btn-pass-extract',   runPassExtract);
-  wire('btn-load-devices',   loadDevicesFromSupabase);
-  wire('btn-pass-c',         runPassC);
   wire('btn-summary',        fetchSummary);
   wire('btn-scale-apply',    () => applyScaleOverride(false));
 
   // Init label
   const evalLbl = document.getElementById('eval-page-label');
-  if (evalLbl) evalLbl.textContent = `Page ${evalPage} (default — change by clicking thumbnail)`;
+  if (evalLbl) evalLbl.textContent = `Page ${evalPage} (default — click thumbnail to change)`;
 })();
 </script>
 </body>
