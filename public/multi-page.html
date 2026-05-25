@@ -157,10 +157,14 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
 
   <!-- TR Map -->
   <div id="tr-map-section" style="display:none; margin-top:12px;">
-    <div style="font-size:11px; color:#888; margin-bottom:6px;">TR Room Map — confirm on-sheet, configure off-sheet</div>
+    <div style="font-size:11px; color:#888; margin-bottom:8px;">
+    TR Room Map — confirm on-sheet, configure off-sheet.
+    <br><span style="color:#666;">If the detected page is wrong, use the dropdown to correct it.
+    Pages served by a TR on another floor need an exit pin (where cables leave that floor) + backbone distance.</span>
+  </div>
     <table class="tr-table">
       <thead><tr>
-        <th>TR Room</th><th>Location</th><th>On Page</th><th>Serves</th><th>Status</th><th>Jumper (ft)</th><th>Pin</th>
+        <th>TR Room</th><th>Location</th><th>Demarc Page</th><th>Serves</th><th>Status</th><th>Jumper (ft)</th><th>Pin</th>
       </tr></thead>
       <tbody id="tr-tbody"></tbody>
     </table>
@@ -277,6 +281,28 @@ function updateLinks() {
   }
 }
 
+function updateDemarcPage(trName, newPageNum) {
+  const tr = trMap[trName];
+  if (!tr) return;
+  const pageNum = parseInt(newPageNum) || null;
+  tr.demarc_page_num = pageNum;
+  tr.on_sheet        = !!pageNum;
+  tr.status          = pageNum ? 'on_sheet' : 'off_sheet';
+
+  if (pageNum) {
+    // Use auto-detected pin from Pass B for this page if available
+    const cache = pageCache[pageNum];
+    const d = cache?.passBResult?.demarcation;
+    if (d?.found) {
+      tr.demarc_x = d.x;
+      tr.demarc_y = d.y;
+      tr.demarc_page_id = cache.pageId;
+    }
+  }
+  // Refresh sub-row pin requirements
+  renderTRMap(Object.values(trMap));
+}
+
 function openCopyDevices() {
   const bar = document.getElementById('copy-devices-bar');
   bar.style.display = bar.style.display === 'none' ? 'block' : 'none';
@@ -297,12 +323,15 @@ async function copyDeviceTypes() {
     });
     const j = await r.json();
     if (r.ok) {
-      setStatus('copy-dt-status', `✓ Copied ${j.copied} device types`, 'ok');
+      const msg = j.copied > 0
+        ? `✓ ${j.copied} device types copied from project ${sourceId}`
+        : `✓ All device types already exist in this project (${j.message ?? 'no new types needed'})`;
+      setStatus('copy-dt-status', msg, 'ok');
       document.getElementById('copy-devices-bar').style.display = 'none';
       document.getElementById('device-type-bar').style.background = '#001a00';
       document.getElementById('device-type-bar').style.borderColor = '#007a00';
       document.getElementById('device-type-bar').innerHTML =
-        `<span style="color:#7af07a;">✓ Device types ready — ${j.copied} types copied from project ${sourceId}</span>`;
+        `<span style="color:#7af07a;">✓ Device types ready — ${msg}</span>`;
     } else {
       setStatus('copy-dt-status', 'Error: ' + (j.error ?? r.status), 'err');
     }
@@ -506,7 +535,10 @@ function renderTRMap(trs) {
     tr_el.innerHTML = `
       <td><strong style="color:#f0c040;">${tr.name}</strong></td>
       <td style="color:#888;">${location}</td>
-      <td style="color:#888;">${demarcPage}</td>
+      <td><select id="demarc-page-sel-${tr.name}"
+          onchange="updateDemarcPage('${tr.name}', this.value)"
+          style="background:#1a1a1a; border:1px solid #${isOn ? '3a7a3a' : '7a5000'}; color:${isOn ? '#7af07a' : '#f0c040'}; padding:2px 4px; border-radius:3px; font-size:11px; font-family:monospace;">
+        </select></td>
       <td style="color:#888;">${serves}</td>
       <td><span class="badge ${isOn ? 'on' : 'off'}">${isOn ? '✓ on sheet' : '⚠ off sheet'}</span></td>
       <td>${isOn
@@ -519,6 +551,21 @@ function renderTRMap(trs) {
       }</td>`;
     tbody.appendChild(tr_el);
 
+    // Populate demarc page dropdown (nested template literals unreliable)
+    const sel = document.getElementById(`demarc-page-sel-${tr.name}`);
+    if (sel) {
+      const offOpt = document.createElement('option');
+      offOpt.value = ''; offOpt.textContent = '— off sheet —';
+      sel.appendChild(offOpt);
+      for (const n of [...selectedPages].sort((a,b)=>a-b)) {
+        const opt = document.createElement('option');
+        opt.value = n;
+        opt.textContent = `pg ${n}`;
+        if (tr.demarc_page_num === n) opt.selected = true;
+        sel.appendChild(opt);
+      }
+    }
+
     // For each served page that is NOT the demarc page, add a sub-row for exit pin
     if (isOn && tr.pages?.length > 1) {
       for (const pg of tr.pages) {
@@ -528,13 +575,18 @@ function renderTRMap(trs) {
         const pinKey = `${tr.name}_pg${pg.eval_page_num}`;
         const hasPin = trMap[tr.name]?.extra_pins?.[pg.eval_page_num];
         subRow.innerHTML = `
-          <td colspan="4" style="padding:4px 8px 4px 24px; color:#666; font-size:10px;">
-            ↳ pg${pg.eval_page_num} (${pg.building ?? ''} ${pg.floor ?? ''}) — exit pin needed for this floor
+          <td colspan="3" style="padding:4px 8px 4px 24px; color:#888; font-size:10px;">
+            ↳ <strong style="color:#f0c040;">pg${pg.eval_page_num}</strong>
+            ${pg.building ?? ''} ${pg.floor ?? ''} —
+            <span style="color:#666;">place exit pin on this floor + backbone distance to ${tr.name}</span>
           </td>
           <td><span class="badge ${hasPin ? 'on' : 'off'}" style="font-size:9px;">${hasPin ? '✓ pin set' : '⚠ needs pin'}</span></td>
-          <td><input type="number" id="jumper-${pinKey}" value="${hasPin?.stub_ft ?? 0}" min="0" step="5"
-               style="width:70px; background:#1a1a1a; border:1px solid #333; color:#e0e0e0; padding:3px 6px; border-radius:3px; font-size:11px;"
-               placeholder="jumper ft"></td>
+          <td style="padding:4px 6px;">
+            <div style="font-size:9px; color:#555; margin-bottom:2px;">backbone to ${tr.name} (ft)</div>
+            <input type="number" id="jumper-${pinKey}" value="${hasPin?.stub_ft ?? 0}" min="0" step="5"
+               style="width:80px; background:#1a1a1a; border:1px solid #333; color:#e0e0e0; padding:3px 6px; border-radius:3px; font-size:11px;"
+               placeholder="e.g. 45">
+          </td>
           <td><button class="amber" onclick="openPinModal('${tr.name}', ${pg.eval_page_num})" 
                style="padding:2px 8px; font-size:10px;">${hasPin ? 'Move' : 'Place Pin'} pg${pg.eval_page_num}</button></td>`;
         tbody.appendChild(subRow);
