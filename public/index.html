@@ -768,6 +768,9 @@ async function runPassB2() {
     confirmed.forEach(function(d) {
       out += d.legend_id + '  ' + d.name + '  [' + d.confidence + ']  est.' +
              d.estimated_count + '  strips:' + (d.strips_found_in || []).join(',') + NL;
+      if (d.description) {
+        out += '    DESCRIPTION: ' + d.description.slice(0, 180) + (d.description.length > 180 ? '...' : '') + NL;
+      }
     });
     if (lowConf.length) {
       out += NL + '=== LOW CONFIDENCE (' + lowConf.length + ') ===' + NL;
@@ -830,7 +833,9 @@ async function runPassCSequential(devices, imageBase64) {
       const j = await r.json();
       const count = j.total_count ?? 0;
       const tia   = j.tia_violations ?? 0;
-      resultsTable.push({ legend_id: dev.legend_id, name: dev.name, count: count, tia: tia,
+      resultsTable.push({ legend_id: dev.legend_id, name: dev.name,
+        description: dev.description ?? null,
+        count: count, tia: tia,
         longest: j.longest_run_ft, shortest: j.shortest_run_ft });
       const imgB64 = j.annotated_image ?? j.annotated_image_base64;
       if (imgB64) {
@@ -865,6 +870,9 @@ function showResultsSummary(results) {
       String(r.count).padEnd(7) + String(r.tia||0).padEnd(5) +
       String(r.longest  ?? '—').padEnd(9) +
       String(r.shortest ?? '—') + NL;
+    if (r.description) {
+      table += '          DESC: ' + r.description.slice(0, 160) + (r.description.length > 160 ? '...' : '') + NL;
+    }
   });
   table += '─'.repeat(68) + NL;
   table += 'TOTAL'.padEnd(42) + String(totalCount).padEnd(7) + String(totalTia) + NL;
