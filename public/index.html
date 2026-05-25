@@ -303,17 +303,30 @@
     <div style="font-size:11px; color:#666; margin-top:4px;" id="longest-run-label"></div>
   </div>
 
-  <div class="output-area" id="pass-extract-output">Output will appear here…</div>
+  <!-- Device summary table -->
+  <div id="device-table-wrap" style="margin-top:12px; display:none;">
 
-  <!-- TIA violations table -->
-  <table class="tia-table" id="tia-table">
-    <thead>
-      <tr>
-        <th>#</th><th>Device ID</th><th>Labels</th><th>Run (ft)</th><th>TIA Reason</th>
-      </tr>
-    </thead>
-    <tbody id="tia-tbody"></tbody>
-  </table>
+    <!-- Summary bar -->
+    <div id="device-type-summary" style="margin-bottom:8px; font-size:11px; color:#888;"></div>
+
+    <!-- Device list table -->
+    <table id="device-table" style="width:100%; border-collapse:collapse; font-size:11px;">
+      <thead>
+        <tr style="background:#0a0a0a; border-bottom:1px solid #2a2a2a;">
+          <th style="padding:6px 8px; text-align:left; color:#666; font-weight:normal; width:24px;">#</th>
+          <th style="padding:6px 8px; text-align:left; color:#666; font-weight:normal;">Device</th>
+          <th style="padding:6px 8px; text-align:left; color:#666; font-weight:normal;">Description</th>
+          <th style="padding:6px 8px; text-align:left; color:#666; font-weight:normal;">Labels</th>
+          <th style="padding:6px 8px; text-align:right; color:#666; font-weight:normal;">X,Y</th>
+          <th style="padding:6px 8px; text-align:right; color:#666; font-weight:normal;">Dist (ft)</th>
+        </tr>
+      </thead>
+      <tbody id="device-tbody"></tbody>
+    </table>
+
+    <!-- Demarc footer -->
+    <div id="demarc-footer" style="margin-top:8px; font-size:10px; color:#555; border-top:1px solid #1a1a1a; padding-top:6px;"></div>
+  </div>
 </div>
 
 <!-- ── STEP 5: SUMMARY ───────────────────────────────────────────── -->
@@ -1265,17 +1278,6 @@ async function runPassExtract() {
     if (j.warnings?.length) summary += ` · ⚠ ${j.warnings.join(' · ')}`;
     setStatus('pass-extract-status', summary, j.tia_violations > 0 ? '' : 'ok');
 
-    // Build readable output
-    const lines = ['=== DEVICE COUNT BY TYPE ==='];
-    for (const t of byType) {
-      lines.push(`  ${t.legend_id}  ${t.name}  →  ${t.count} found${t.tia ? '  ⚠ ' + t.tia + ' TIA' : ''}`);
-    }
-    lines.push('');
-    lines.push(`Total: ${j.device_count} devices`);
-    if (j.demarc_used) lines.push(`Demarc: ${j.demarc_used.name} (stub ${j.demarc_used.stub_ft ?? 0}ft)`);
-    if (j.warnings?.length) { lines.push(''); j.warnings.forEach(w => lines.push('⚠ ' + w)); }
-    setOutput('pass-extract-output', lines.join('\n'));
-
     // Update count display
     document.getElementById('device-count').textContent = j.device_count;
     document.getElementById('results-summary').style.display = 'block';
@@ -1283,27 +1285,103 @@ async function runPassExtract() {
     badge.innerHTML = j.tia_violations > 0
       ? `<span class="tia-badge">⚠ ${j.tia_violations} TIA &gt;295 ft</span>` : '';
 
-    // TIA table
-    const tiaDevices = (j.devices ?? []).filter(d => d.tia_flag);
-    if (tiaDevices.length > 0) {
-      const tbody = document.getElementById('tia-tbody');
-      tbody.innerHTML = '';
-      tiaDevices.forEach((d, i) => {
-        const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${i+1}</td><td>${d.id ?? '—'}</td>
-          <td>${(d.raw_labels ?? []).join(' ')}</td>
-          <td style="color:#f07a7a; font-weight:bold;">${d.total_ft ?? '—'} ft</td>
-          <td>${d.tia_reason ?? '—'}</td>`;
-        tbody.appendChild(tr);
-      });
-      document.getElementById('tia-table').style.display = 'table';
-    } else {
-      document.getElementById('tia-table').style.display = 'none';
-    }
+    // Render device table
+    renderDeviceTable(j);
 
   } catch(e) {
     setStatus('pass-extract-status', 'Error: ' + e.message, 'err');
     setOutput('pass-extract-output', e.message);
+  }
+}
+
+// ── Device table renderer ────────────────────────────────────────────
+function renderDeviceTable(j) {
+  const wrap  = document.getElementById('device-table-wrap');
+  const tbody = document.getElementById('device-tbody');
+  const sumEl = document.getElementById('device-type-summary');
+  const demEl = document.getElementById('demarc-footer');
+  if (!wrap || !tbody) return;
+
+  // Summary bar — count by type
+  const byType = j.by_type ?? [];
+  const typeSummary = byType.map(t =>
+    `<span style="margin-right:16px;"><strong style="color:#f0c040;">${t.count}</strong> ${t.name}${t.tia ? ' <span style="color:#f07a7a;">⚠'+t.tia+' TIA</span>' : ''}</span>`
+  ).join('');
+  sumEl.innerHTML = typeSummary;
+
+  // Demarc footer
+  if (j.demarc_used) {
+    demEl.textContent = `Demarc: ${j.demarc_used.name}` +
+      (j.demarc_used.stub_ft ? ` + ${j.demarc_used.stub_ft}ft stub` : '') +
+      (j.max_run_ft ? ` · longest run: ${j.max_run_ft}ft` : '');
+  } else {
+    demEl.textContent = '⚠ No demarc set — distances not available. Set demarc in Step 3 and re-run.';
+    demEl.style.color = '#f0a040';
+  }
+
+  // Build device rows — need full device list from server
+  // j.devices is sample (8 items); fetch full list from Supabase
+  tbody.innerHTML = '<tr><td colspan="6" style="padding:12px; color:#555; text-align:center;">Loading full device list…</td></tr>';
+  wrap.style.display = 'block';
+
+  loadFullDeviceList(j);
+}
+
+async function loadFullDeviceList(extractResult) {
+  const tbody = document.getElementById('device-tbody');
+  try {
+    // Build device type lookup for human descriptions
+    const r = await fetch(`${base()}/api/takeoff-summary?project_id=${projectId}`);
+    const j = await r.json();
+    const dtMap = {};
+    for (const dt of (j.device_types ?? [])) dtMap[dt.legend_id] = dt;
+
+    // All devices are returned directly from pass-extract (no sample limit)
+    const devices = extractResult.devices ?? [];
+    renderDeviceRows(devices, dtMap, tbody, extractResult.device_count);
+  } catch(e) {
+    tbody.innerHTML = `<tr><td colspan="6" style="color:#f07a7a; padding:8px;">Error: ${e.message}</td></tr>`;
+  }
+}
+
+function renderDeviceRows(devices, dtMap, tbody, totalCount) {
+  tbody.innerHTML = '';
+
+  if (!devices.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="padding:12px; color:#555; text-align:center;">No devices</td></tr>';
+    return;
+  }
+
+  devices.forEach((d, i) => {
+    const dt       = dtMap[d.legend_id] ?? {};
+    const name     = dt.name ?? d.name ?? '—';
+    const humanDesc = (dt.human_description ?? '').slice(0, 60) || '—';
+    const labels   = (d.raw_labels ?? []).join(' · ') || '—';
+    const x        = d.x_norm != null ? d.x_norm.toFixed(3) : '—';
+    const y        = d.y_norm != null ? d.y_norm.toFixed(3) : '—';
+    const dist     = d.total_ft != null
+      ? `<strong style="color:${d.tia_flag ? '#f07a7a' : '#7af07a'}">${d.total_ft} ft</strong>${d.tia_flag ? ' ⚠' : ''}`
+      : '<span style="color:#555;">—</span>';
+
+    const tr = document.createElement('tr');
+    tr.style.borderBottom = '1px solid #0d0d0d';
+    tr.innerHTML = `
+      <td style="padding:5px 8px; color:#555;">${i + 1}</td>
+      <td style="padding:5px 8px; color:#f0c040;">${name}</td>
+      <td style="padding:5px 8px; color:#888;">${humanDesc}</td>
+      <td style="padding:5px 8px; color:#7ac0f0; font-family:monospace;">${labels}</td>
+      <td style="padding:5px 8px; color:#666; text-align:right; font-family:monospace;">${x}, ${y}</td>
+      <td style="padding:5px 8px; text-align:right;">${dist}</td>`;
+    tbody.appendChild(tr);
+  });
+
+  // Note if showing partial list
+  if (totalCount > devices.length) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td colspan="6" style="padding:6px 8px; color:#555; font-size:10px; text-align:center;">
+      Showing ${devices.length} of ${totalCount} devices — scroll output area or export for full list
+    </td>`;
+    tbody.appendChild(tr);
   }
 }
 

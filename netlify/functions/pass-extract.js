@@ -274,18 +274,22 @@ export default async function handler(req) {
       ? { id: primaryDemarc.id, name: primaryDemarc.name, stub_ft: primaryDemarc.stub_ft }
       : null,
     warnings,
-    devices:        instances.map((inst, j) => ({
-      id:          inserted?.[j]?.id,
-      legend_id:   inst.legend_id,
-      name:        inst.device_name,
-      x_norm:      inst.x_norm,
-      y_norm:      inst.y_norm,
-      x_ft:        inst.x_ft,
-      y_ft:        inst.y_ft,
-      raw_labels:  inst.raw_labels,
-      total_ft:    inst.total_ft,
-      tia_flag:    inst.tia_flag,
-      tia_reason:  inst.tia_reason
+    devices:        instances.map((inst, idx2) => ({
+      id:           inserted?.[idx2]?.id,
+      legend_id:    inst.legend_id,
+      name:         inst.device_name,
+      x_norm:       inst.x_norm,
+      y_norm:       inst.y_norm,
+      x_ft:         inst.x_ft,
+      y_ft:         inst.y_ft,
+      raw_labels:   inst.raw_labels,
+      data_ports:   inst.data_ports,
+      voice_ports:  inst.voice_ports,
+      node_labels:  inst.node_labels,
+      total_ft:     inst.total_ft,
+      run_length_ft: inst.run_length_ft,
+      tia_flag:     inst.tia_flag,
+      tia_reason:   inst.tia_reason
     }))
   });
 }
