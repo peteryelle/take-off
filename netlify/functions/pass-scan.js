@@ -100,19 +100,17 @@ export default async function handler(req) {
       .from("pages")
       .upsert({
         project_id,
-        eval_page_num,
+        pdf_page_number: eval_page_num,
         building,
-        floor,
+        level: floor,          // pages table uses 'level' not 'floor'
         area,
-        drawing_number: page_b_result.sheet_title ?? null,
-        tr_name:        trName,
-        status:         'ready',
+        tr_name:          trName,
+        status:           'ready',
         scale_pts_per_ft: scalePtsPerFt,
-        // Store scale fields for pass-extract
-        scale_paper_in: s?.paper_value ?? null,
-        scale_real_ft:  s?.real_value  ?? null
-      }, { onConflict: "project_id,eval_page_num" })
-      .select("id, eval_page_num, building, floor, area, tr_name")
+        scale_paper_in:   s?.paper_value ?? null,
+        scale_real_ft:    s?.real_value  ?? null
+      }, { onConflict: "project_id,pdf_page_number" })
+      .select("id, pdf_page_number, building, level, area, tr_name")
       .single();
 
     if (pgErr) {
@@ -123,10 +121,10 @@ export default async function handler(req) {
     // Upsert project_pages entry
     await supabase.from("project_pages").upsert({
       project_id,
-      page_id:      pageRec.id,
-      eval_page_num,
-      sort_order:   eval_page_num,
-      selected:     true
+      page_id:       pageRec.id,
+      eval_page_num: eval_page_num,
+      sort_order:    eval_page_num,
+      selected:      true
     }, { onConflict: "project_id,eval_page_num" });
 
     pageRecords.push(pageRec);
