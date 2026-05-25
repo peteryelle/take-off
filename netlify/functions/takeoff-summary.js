@@ -21,7 +21,7 @@ export default async function handler(req) {
       // Use slim fields by default to keep response small
       // Pass C loads full description directly from DB when needed
       supabase.from("device_types")
-        .select("id, legend_id, name, discipline, category")
+        .select("id, legend_id, name, discipline, category, human_description, llm_description, text_anchors, example_image_base64")
         .eq("project_id", project_id)
         .order("legend_id"),
       supabase.from("pages")
