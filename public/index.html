@@ -1057,54 +1057,51 @@ async function fetchSummary() {
 }
 
 // ── Pass Extract — text-layer device detection ────────────────────────
-// Device colors in VA telecom drawings (#999999 / #888888 gray)
-const DEVICE_COLORS_HEX = new Set(["#999999","#888888","#9a9a9a","#898989"]);
+// Known anchor labels — all strings that can identify a device.
+// Primary anchors (identify device type) + associated labels (cluster with them).
+// Fetched from Supabase at runtime via loadAnchorPatterns(); hardcoded as fallback.
+let anchorPatternSet = new Set([
+  'DD1','DD2','DD3','DV1','DV2','N2','N3','WAP'
+]);
 
-function colorToHex(arr) {
-  if (!arr || arr.length < 3) return null;
-  return '#' + arr.map(c => Math.round(c*255).toString(16).padStart(2,'0')).join('');
+// Fetch all text_anchors from device_types and build the full pattern set
+async function loadAnchorPatterns() {
+  try {
+    const r = await fetch(`${base()}/api/takeoff-summary?project_id=${projectId}`);
+    const j = await r.json();
+    const deviceTypes = j.device_types ?? [];
+    const patterns = new Set();
+    for (const dt of deviceTypes) {
+      if (!dt.text_anchors) continue;
+      (dt.text_anchors.primary    ?? []).forEach(s => patterns.add(s));
+      (dt.text_anchors.associated ?? []).forEach(s => patterns.add(s));
+    }
+    if (patterns.size > 0) {
+      anchorPatternSet = patterns;
+      console.log('Anchor patterns loaded:', [...patterns]);
+    }
+  } catch(e) {
+    console.warn('Could not load anchor patterns, using defaults:', e.message);
+  }
 }
 
-// Extract device-layer text items from a PDF page using operator list for color
-async function getColoredTextItems(pdfPage) {
+// Extract ALL text items from a PDF page, filter to known anchor strings only.
+// No color filtering — anchor string matching is the reliable discriminator.
+async function getDeviceTextItems(pdfPage) {
   const viewport = pdfPage.getViewport({ scale: 1.0 });
   const W = viewport.width;
   const H = viewport.height;
 
-  const [textContent, opList] = await Promise.all([
-    pdfPage.getTextContent({ includeMarkedContent: false }),
-    pdfPage.getOperatorList()
-  ]);
-
-  // Walk operator list to track fill color per text op
-  const OPS = pdfjsLib.OPS;
-  let currentColor = '#000000';
-  let textOpIdx = 0;
-  const textItemColors = [];
-
-  for (let i = 0; i < opList.fnArray.length; i++) {
-    const fn   = opList.fnArray[i];
-    const args = opList.argsArray[i];
-    if (fn === OPS.setFillRGBColor) {
-      currentColor = colorToHex(args);
-    } else if (fn === OPS.setFillGray) {
-      const v = Math.round(args[0] * 255);
-      const h = v.toString(16).padStart(2,'0');
-      currentColor = `#${h}${h}${h}`;
-    } else if (fn === OPS.showText || fn === OPS.showSpacedText) {
-      textItemColors.push(currentColor);
-    }
-  }
+  const textContent = await pdfPage.getTextContent({ includeMarkedContent: false });
 
   const items = [];
-  let colorIdx = 0;
 
   for (const item of textContent.items) {
-    if (!item.str?.trim()) continue;
-    const color = textItemColors[colorIdx++] ?? '#000000';
+    const str = item.str?.trim();
+    if (!str) continue;
 
-    // Only keep device-colored text
-    if (!DEVICE_COLORS_HEX.has(color)) continue;
+    // Only keep items that match a known anchor label exactly
+    if (!anchorPatternSet.has(str)) continue;
 
     const tx = item.transform[4];
     const ty = item.transform[5];
@@ -1113,33 +1110,12 @@ async function getColoredTextItems(pdfPage) {
     const th = item.height ?? fs;
 
     items.push({
-      str:       item.str.trim(),
+      str,
       cx_norm:   parseFloat(((tx + tw / 2) / W).toFixed(4)),
       cy_norm:   parseFloat((1 - (ty + th / 2) / H).toFixed(4)),
-      color_hex: color,
+      color_hex: '#999999',   // color not used server-side, placeholder
       font_size: parseFloat(fs.toFixed(1))
     });
-  }
-
-  // Fallback: if color filtering returned nothing, use known label patterns
-  if (!items.length) {
-    let allIdx = 0;
-    for (const item of textContent.items) {
-      if (!item.str?.trim()) continue;
-      if (!/^(DD[123]|DV[12]|N\d+|WAP)$/.test(item.str.trim())) continue;
-      const tx = item.transform[4];
-      const ty = item.transform[5];
-      const fs = Math.abs(item.transform[3]);
-      const tw = item.width ?? 0;
-      const th = item.height ?? fs;
-      items.push({
-        str:       item.str.trim(),
-        cx_norm:   parseFloat(((tx + tw / 2) / W).toFixed(4)),
-        cy_norm:   parseFloat((1 - (ty + th / 2) / H).toFixed(4)),
-        color_hex: '#999999',
-        font_size: parseFloat(fs.toFixed(1))
-      });
-    }
   }
 
   return { items, page_width_pts: W, page_height_pts: H };
@@ -1164,8 +1140,11 @@ async function runPassExtract() {
   setStatus('pass-extract-status', `Extracting text layer from page ${pg}…`, 'running');
 
   try {
+    // Load anchor patterns from Supabase so we match exactly what's in device_types
+    await loadAnchorPatterns();
+
     const pdfPage  = await pdfDoc.getPage(pg);
-    const textData = await getColoredTextItems(pdfPage);
+    const textData = await getDeviceTextItems(pdfPage);
     const { items, page_width_pts, page_height_pts } = textData;
 
     setStatus('pass-extract-status',
