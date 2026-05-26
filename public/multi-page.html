@@ -452,21 +452,24 @@ async function suggestAllExitPins(trName) {
           x_norm: servingX, y_norm: servingY,
           stub_ft: stubFt, demarc_id: j.id, source: 'suggested'
         };
-        // Collapse the floor row to the auto-confirmed state
-        const pinKey  = `${trName}_pg${pg.eval_page_num}`;
-        const rowBody = document.getElementById(`floor-body-${pinKey}`);
-        const rowHdr  = document.getElementById(`floor-row-${pinKey}`)?.querySelector('.badge');
-        if (rowBody && !document.getElementById(`floor-auto-${pinKey}`)) {
-          rowBody.classList.add('collapsed');
+        // Collapse only the pin buttons; distance input stays visible
+        const pinKey   = `${trName}_pg${pg.eval_page_num}`;
+        const pinBtns  = document.getElementById(`floor-body-${pinKey}`);
+        const pinStNum = document.getElementById(`pin-stepnum-${pinKey}`);
+        const badge    = document.getElementById(`floor-badge-${pinKey}`);
+        if (pinBtns && !document.getElementById(`floor-auto-${pinKey}`)) {
+          pinBtns.style.display = 'none';
           const autoLine = document.createElement('div');
           autoLine.className = 'floor-auto-line';
           autoLine.id = `floor-auto-${pinKey}`;
-          autoLine.innerHTML = `⚡ Exit pin auto-placed
+          autoLine.style.cssText = 'padding:3px 0; background:none; font-size:12px; color:#7af07a;';
+          autoLine.innerHTML = `⚡ Auto-placed
             <a href="#" onclick="expandFloorRow('${pinKey}'); return false;"
                style="color:#aaa; font-size:11px; margin-left:8px;">override</a>`;
-          rowBody.parentElement.insertBefore(autoLine, rowBody);
+          pinBtns.parentElement.insertBefore(autoLine, pinBtns);
         }
-        if (rowHdr) { rowHdr.className = 'badge on'; rowHdr.style.fontSize='10px'; rowHdr.textContent = '✓ pin set'; }
+        if (pinStNum) { pinStNum.classList.remove('pending'); }
+        if (badge) { badge.className = 'badge on'; badge.style.fontSize='10px'; badge.textContent = '✓ pin set'; }
       }
     } catch(e) { console.error(`Suggest failed for pg${pg.eval_page_num}:`, e); }
   }
@@ -532,10 +535,24 @@ async function suggestExitPin(trName, pageNum) {
       source:   'suggested'
     };
 
-    // Refresh TR map to show pin set
-    renderTRMap(Object.values(trMap));
+    // Collapse only the pin buttons for this floor row (no full re-render)
+    const pinBtns2  = document.getElementById(`floor-body-${pinKey}`);
+    const pinStNum2 = document.getElementById(`pin-stepnum-${pinKey}`);
+    const badge2    = document.getElementById(`floor-badge-${pinKey}`);
+    if (pinBtns2 && !document.getElementById(`floor-auto-${pinKey}`)) {
+      pinBtns2.style.display = 'none';
+      const autoLine2 = document.createElement('div');
+      autoLine2.className = 'floor-auto-line';
+      autoLine2.id = `floor-auto-${pinKey}`;
+      autoLine2.style.cssText = 'padding:3px 0; background:none; font-size:12px; color:#7af07a;';
+      autoLine2.innerHTML = `⚡ Auto-placed
+        <a href="#" onclick="expandFloorRow('${pinKey}'); return false;"
+           style="color:#aaa; font-size:11px; margin-left:8px;">override</a>`;
+      pinBtns2.parentElement.insertBefore(autoLine2, pinBtns2);
+    }
+    if (pinStNum2) pinStNum2.classList.remove('pending');
+    if (badge2) { badge2.className = 'badge on'; badge2.style.fontSize='10px'; badge2.textContent = '✓ pin set'; }
 
-    // Show a brief confirmation in the batch log if visible
     const log = document.getElementById('batch-log');
     if (log) {
       log.innerHTML += `<div style="color:#7ac0f0;">⚡ Exit pin for ${trName} pg${pageNum} suggested from serving demarc (${servingX.toFixed(3)}, ${servingY.toFixed(3)})</div>`;
@@ -804,16 +821,47 @@ function renderTRMap(trs) {
     const location = [tr.building, tr.floor, tr.area].filter(Boolean).join(' · ')
       || (tr.demarc_page_num ? `pg${tr.demarc_page_num}` : '— off sheet —');
 
-    // If trMap has a demarc page but no pin coords yet, try to auto-populate
-    // from pageCache (handles freshly-scanned pages and legacy scan results)
+    // ── Auto-infer host page from pageCache ─────────────────────────
+    // If pass-scan.js couldn't determine the host (demarc_page_num null
+    // or on_sheet false), scan pageCache for the first page in this TR's
+    // served list that has Pass B demarcation coords → use it as host.
+    if (!tr.on_sheet || (tr.pin_x ?? tr.demarc_x) == null) {
+      // Try existing demarc_page_num first
+      let hostPage = tr.demarc_page_num
+        ? pageCache[tr.demarc_page_num]?.passBResult?.demarcation
+        : null;
+
+      // If no coords on stated demarc page, scan all served pages for coords
+      if (!(hostPage?.x != null)) {
+        for (const pg of (tr.pages ?? [])) {
+          const d = pageCache[pg.eval_page_num]?.passBResult?.demarcation;
+          if (d?.found && d.x != null && d.y != null) {
+            hostPage = d;
+            tr.demarc_page_num = pg.eval_page_num;
+            tr.building        = pg.building ?? tr.building;
+            tr.floor           = pg.floor    ?? tr.floor;
+            break; // first page with coords wins
+          }
+        }
+      }
+
+      if (hostPage?.x != null) {
+        tr.demarc_x       = hostPage.x;
+        tr.demarc_y       = hostPage.y;
+        tr.pin_x          = hostPage.x;
+        tr.pin_y          = hostPage.y;
+        tr.on_sheet       = true;
+        tr.status         = 'on_sheet';
+        tr.host_confirmed = true;
+      }
+    }
+
+    // Coords present but pin not explicitly set — sync them
     if (tr.demarc_page_num && (tr.pin_x ?? tr.demarc_x) == null) {
       const cached = pageCache[tr.demarc_page_num]?.passBResult?.demarcation;
-      if (cached?.found && cached.x != null && cached.y != null) {
-        tr.demarc_x       = cached.x;
-        tr.demarc_y       = cached.y;
-        tr.pin_x          = cached.x;
-        tr.pin_y          = cached.y;
-        tr.host_confirmed = true;
+      if (cached?.found && cached.x != null) {
+        tr.demarc_x = cached.x; tr.demarc_y = cached.y;
+        tr.pin_x    = cached.x; tr.pin_y    = cached.y;
       }
     }
 
@@ -941,32 +989,14 @@ function renderTRMap(trs) {
           <div class="floor-row-header">
             <span style="color:#f0c040; font-size:12px; font-weight:bold;">pg${pg.eval_page_num}</span>
             <span class="floor-row-label">${pgLabel}</span>
-            <span class="badge ${hasPin ? 'on' : 'off'}" style="font-size:10px;">${hasPin ? '✓ pin set' : '⚠ needs pin'}</span>
+            <span class="badge ${hasPin ? 'on' : 'off'}" id="floor-badge-${pinKey}" style="font-size:10px;">${hasPin ? '✓ pin set' : '⚠ needs pin'}</span>
           </div>
-          ${isAutoSuggested
-            ? `<div class="floor-auto-line" id="floor-auto-${pinKey}">
-                 ⚡ Exit pin auto-placed
-                 <a href="#" onclick="expandFloorRow('${pinKey}'); return false;"
-                    style="color:#aaa; font-size:11px; margin-left:8px;">override</a>
-               </div>`
-            : ''}
-          <div class="floor-row-body ${isAutoSuggested ? 'collapsed' : ''}" id="floor-body-${pinKey}">
+
+          <div class="floor-row-body" style="padding:10px 12px; display:flex; flex-direction:column; gap:8px;">
+
+            <!-- ③ Backbone Distance — always visible, never collapses -->
             <div class="tr-step">
-              <div class="step-num ${hasPin ? '' : 'pending'}">3</div>
-              <div class="step-body">
-                <div class="step-label">Exit Pin</div>
-                <button class="amber" onclick="openPinModal('${tr.name}', ${pg.eval_page_num})"
-                  style="font-size:11px; padding:4px 10px;">
-                  ${hasPin ? '📍 Move' : '📍 Place'} Exit Pin
-                </button>
-                <button class="info" onclick="suggestExitPin('${tr.name}', ${pg.eval_page_num})"
-                  style="font-size:11px; padding:4px 10px; margin-left:4px;">
-                  ⚡ Suggest from ${tr.name}
-                </button>
-              </div>
-            </div>
-            <div class="tr-step">
-              <div class="step-num ${stubFt > 0 ? '' : 'pending'}">4</div>
+              <div class="step-num ${stubFt > 0 ? '' : 'pending'}" id="dist-stepnum-${pinKey}">3</div>
               <div class="step-body">
                 <div class="step-label">Backbone Distance</div>
                 <input type="number" id="jumper-${pinKey}" value="${stubFt}" min="0" step="10"
@@ -977,9 +1007,37 @@ function renderTRMap(trs) {
                          padding:5px 8px; border-radius:3px; font-size:14px; font-weight:bold; font-family:monospace;"
                   onchange="onBackboneChange('${pinKey}', this)">
                 <span style="font-size:12px; color:#666; margin-left:6px;">ft to ${tr.name}</span>
-                ${stubFt > 0 ? `<div style="font-size:11px; color:#555; margin-top:2px;">${stubFt} ft set</div>` : '<div style="font-size:11px; color:#666; margin-top:2px;">enter distance</div>'}
+                <div style="font-size:11px; color:${stubFt > 0 ? '#555' : '#666'}; margin-top:2px;" id="dist-hint-${pinKey}">
+                  ${stubFt > 0 ? stubFt + ' ft set' : 'enter distance'}
+                </div>
               </div>
             </div>
+
+            <!-- ④ Exit Pin — buttons collapse after suggest, status line stays -->
+            <div class="tr-step">
+              <div class="step-num ${hasPin ? '' : 'pending'}" id="pin-stepnum-${pinKey}">4</div>
+              <div class="step-body">
+                <div class="step-label">Exit Pin</div>
+                ${isAutoSuggested
+                  ? `<div class="floor-auto-line" id="floor-auto-${pinKey}" style="padding:3px 0; background:none;">
+                       ⚡ Auto-placed
+                       <a href="#" onclick="expandFloorRow('${pinKey}'); return false;"
+                          style="color:#aaa; font-size:11px; margin-left:8px;">override</a>
+                     </div>`
+                  : ''}
+                <div id="floor-body-${pinKey}" ${isAutoSuggested ? 'style="display:none;"' : ''}>
+                  <button class="amber" onclick="openPinModal('${tr.name}', ${pg.eval_page_num})"
+                    style="font-size:11px; padding:4px 10px;">
+                    ${hasPin ? '📍 Move' : '📍 Place'} Exit Pin
+                  </button>
+                  <button class="info" onclick="suggestExitPin('${tr.name}', ${pg.eval_page_num})"
+                    style="font-size:11px; padding:4px 10px; margin-left:4px;">
+                    ⚡ Suggest from ${tr.name}
+                  </button>
+                </div>
+              </div>
+            </div>
+
           </div>`;
 
         floorRows.appendChild(row);
@@ -1009,7 +1067,7 @@ function renderTRMap(trs) {
 function expandFloorRow(pinKey) {
   document.getElementById(`floor-auto-${pinKey}`)?.remove();
   const body = document.getElementById(`floor-body-${pinKey}`);
-  if (body) body.classList.remove('collapsed');
+  if (body) body.style.display = '';
 }
 
 // Backbone distance input change — update styling
