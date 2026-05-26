@@ -37,11 +37,21 @@ export default async function handler(req) {
     text_items,
     page_width_pts,
     page_height_pts,
-    scale_pts_per_ft   // pts per real-world foot, null if unknown
+    scale_pts_per_ft,
+    clear_only
   } = body;
 
-  if (!project_id || !page_id || !text_items?.length)
-    return err("project_id, page_id and text_items required");
+  if (!project_id || !page_id)
+    return err("project_id and page_id required");
+
+  // clear_only mode: just delete existing instances, return
+  if (clear_only) {
+    await supabase.from("device_instances").delete().eq("page_id", page_id);
+    return ok({ pass: "extract", page_id, cleared: true, device_count: 0, devices: [], warnings: [] });
+  }
+
+  if (!text_items?.length)
+    return err("text_items required");
 
   const supabase = getSupabase();
 
@@ -228,10 +238,29 @@ export default async function handler(req) {
   });
 
   // ── Clear previous results for this page (idempotent) ───────────
+  // Delete by page_id AND by any other page records with the same pdf_page_number
+  // to handle cases where multiple page records exist for the same drawing page
   await supabase
     .from("device_instances")
     .delete()
     .eq("page_id", page_id);
+
+  // Also clear any sibling page records with the same pdf_page_number
+  if (page?.pdf_page_number) {
+    const { data: siblingPages } = await supabase
+      .from("pages")
+      .select("id")
+      .eq("project_id", project_id)
+      .eq("pdf_page_number", page.pdf_page_number)
+      .neq("id", page_id);
+
+    if (siblingPages?.length) {
+      await supabase
+        .from("device_instances")
+        .delete()
+        .in("page_id", siblingPages.map(p => p.id));
+    }
+  }
 
   // ── Write to device_instances ─────────────────────────────────
   const dbRows = instances.map(({ _cluster_id, device_name, legend_id, ...row }) => row);

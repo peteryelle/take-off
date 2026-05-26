@@ -353,7 +353,11 @@
     Run after Step 3. Requires device types to have text anchors set —
     <a id="device-types-link" href="device-types.html" style="color:#7ac0f0;">manage device types ↗</a>
   </div>
-  <button id="btn-pass-extract">▶ Detect Devices</button>
+  <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+    <button id="btn-pass-extract">▶ Detect Devices</button>
+    <button class="danger" onclick="clearAndDetect()"
+            style="padding:6px 12px; font-size:12px;">↺ Clear + Re-detect</button>
+  </div>
   <div class="status" id="pass-extract-status">—</div>
 
   <div id="results-summary" style="display:none; margin-top:10px;">
@@ -1774,6 +1778,35 @@ async function saveServingDemarc() {
       setStatus('serving-demarc-status', 'Error: ' + j.error, 'err');
     }
   } catch(e) { setStatus('serving-demarc-status', e.message, 'err'); }
+}
+
+async function clearAndDetect() {
+  if (!projectId || !passBResult?.page_id) {
+    alert('Run Pass B first'); return;
+  }
+  if (!confirm('Clear all detected devices for this page and re-detect?')) return;
+
+  setStatus('pass-extract-status', 'Clearing…', 'running');
+  try {
+    // Direct clear via SQL through a simple fetch
+    const r = await fetch(`${base()}/api/pass-extract`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id:      projectId,
+        page_id:         passBResult.page_id,
+        text_items:      [],   // empty = just clear, don't insert
+        page_width_pts:  1,
+        page_height_pts: 1,
+        scale_pts_per_ft: null,
+        clear_only: true
+      })
+    });
+    setStatus('pass-extract-status', 'Cleared — running detection…', 'running');
+  } catch(e) {}
+
+  // Now run normal detection
+  await runPassExtract();
 }
 
 // ── Init defaults ────────────────────────────────────────────────────
