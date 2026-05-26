@@ -48,6 +48,31 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
 .tr-table { width: 100%; border-collapse: collapse; font-size: 14px; margin-top: 8px; }
 .tr-table th { padding: 7px 10px; text-align: left; color: #999; font-weight: normal; border-bottom: 1px solid #2e2e2e; }
 .tr-table td { padding: 8px 10px; border-bottom: 1px solid #1a1a1a; vertical-align: top; }
+
+/* ── TR Room Cards ── */
+.tr-card { background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 6px; overflow: hidden; }
+.tr-card-header { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: #111; border-bottom: 1px solid #2a2a2a; }
+.tr-badge { font-size: 15px; font-weight: bold; color: #f0c040; letter-spacing: 1px; }
+.tr-location { font-size: 12px; color: #888; flex: 1; }
+.tr-card-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.tr-step { display: flex; align-items: flex-start; gap: 10px; }
+.step-num { width: 22px; height: 22px; min-width: 22px; border-radius: 50%; background: #1a2a1a; border: 1px solid #3a5a3a;
+  color: #7af07a; font-size: 11px; font-weight: bold; display: flex; align-items: center; justify-content: center; margin-top: 1px; }
+.step-num.pending { background: #2a1a00; border-color: #7a5000; color: #f0c040; }
+.step-label { font-size: 12px; color: #888; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 1px; }
+.step-body { flex: 1; }
+.pin-auto-tag { display: inline-block; font-size: 12px; color: #7af07a; background: #0a1a0a; border: 1px solid #2a4a2a;
+  padding: 3px 8px; border-radius: 3px; }
+.pin-needs-tag { display: inline-block; font-size: 12px; color: #f0c040; background: #1a1000; border: 1px solid #4a3000;
+  padding: 3px 8px; border-radius: 3px; }
+.tr-divider { border: none; border-top: 1px solid #1e1e1e; margin: 2px 0; }
+.floor-rows { display: flex; flex-direction: column; gap: 0; }
+.floor-row { border: 1px solid #1a1a1a; border-radius: 4px; overflow: hidden; margin-bottom: 6px; }
+.floor-row-header { display: flex; align-items: center; gap: 8px; padding: 7px 12px; background: #0a0a0a; border-bottom: 1px solid #1a1a1a; }
+.floor-row-label { font-size: 12px; color: #aaa; flex: 1; }
+.floor-row-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.floor-row-body.collapsed { display: none; }
+.floor-auto-line { padding: 6px 12px; font-size: 12px; color: #7af07a; background: #0a1a0a; }
 .badge { display: inline-block; padding: 3px 8px; border-radius: 3px; font-size: 12px; }
 .badge.on  { background: #001a00; border: 1px solid #007a00; color: #7af07a; }
 .badge.off { background: #2a1a00; border: 1px solid #7a5000; color: #f0c040; }
@@ -173,16 +198,8 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
       <span id="tr-summary-text" style="color:#aaa; flex:1;">—</span>
       <span id="tr-warnings-text" style="color:#f0c040;"></span>
     </div>
-    <div style="font-size:12px; color:#888; margin-bottom:8px;">
-      Use dropdown to correct demarc page if wrong. Pages served by a cross-floor TR need an exit pin + backbone distance.
-    </div>
-    <table class="tr-table">
-      <thead><tr>
-        <th>TR Room</th><th>Location (of TR)</th><th>Demarc Page</th><th>Serves</th><th>Status</th><th>Backbone (ft)</th><th>Actions</th>
-      </tr></thead>
-      <tbody id="tr-tbody"></tbody>
-    </table>
-    <div style="margin-top:10px;">
+    <div id="tr-cards" style="display:flex; flex-direction:column; gap:12px; margin-top:4px;"></div>
+    <div style="margin-top:14px;">
       <button class="amber" onclick="lockDemarcs()">✓ Confirm Demarc Config → Start Batch</button>
     </div>
   </div>
@@ -190,13 +207,7 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
 
 <!-- ── STEP 4: BATCH RUN ─────────────────────────────────────────── -->
 <div class="section" id="batch-section" style="display:none;">
-  <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; border-bottom:1px solid #2e2e2e; padding-bottom:6px;">
-    <div class="section-title" style="margin-bottom:0; border-bottom:none; padding-bottom:0;">4 · Batch Run</div>
-    <div style="display:flex; gap:8px;" id="batch-controls">
-      <button class="info" id="btn-redetect" onclick="clearAndRerun()" style="display:none; font-size:12px; padding:5px 12px;">↺ Re-detect All</button>
-      <button class="danger" id="btn-redetect-page" onclick="redetectPage()" style="display:none; font-size:12px; padding:5px 12px;">↺ Re-detect Page…</button>
-    </div>
-  </div>
+  <div class="section-title">4 · Batch Run</div>
   <div class="progress-wrap">
     <div class="progress-bar" id="batch-progress" style="width:0%"></div>
   </div>
@@ -338,15 +349,21 @@ function updateDemarcPage(trName, newPageNum) {
       tr.floor    = level ? `LEVEL ${level}` : tr.floor;
       tr.area     = area  ? `AREA ${area}`   : null;
     }
-    // Auto-detect pin from Pass B for the newly selected page
+    // Auto-place pin from Pass B only when this page is the physical host
     const d = cache?.passBResult?.demarcation;
-    if (d?.found) {
-      tr.demarc_x = d.x;
-      tr.demarc_y = d.y;
-      tr.demarc_page_id = cache?.pageId;
-      tr.pin_x = d.x;
-      tr.pin_y = d.y;
-      tr.demarc_id = null;  // will be saved on confirm
+    if (d?.found && d?.is_host === true && d.x != null) {
+      tr.demarc_x        = d.x;
+      tr.demarc_y        = d.y;
+      tr.demarc_page_id  = cache?.pageId;
+      tr.pin_x           = d.x;
+      tr.pin_y           = d.y;
+      tr.host_confirmed  = true;
+      tr.demarc_id       = null;  // saved on confirm
+    } else if (d?.found && d?.is_host !== true) {
+      // Page references TR but room isn't drawn here — clear auto-pin
+      tr.pin_x = null;
+      tr.pin_y = null;
+      tr.host_confirmed = false;
     }
   }
   renderTRMap(Object.values(trMap));
@@ -414,6 +431,21 @@ async function suggestAllExitPins(trName) {
           x_norm: servingX, y_norm: servingY,
           stub_ft: stubFt, demarc_id: j.id, source: 'suggested'
         };
+        // Collapse the floor row to the auto-confirmed state
+        const pinKey  = `${trName}_pg${pg.eval_page_num}`;
+        const rowBody = document.getElementById(`floor-body-${pinKey}`);
+        const rowHdr  = document.getElementById(`floor-row-${pinKey}`)?.querySelector('.badge');
+        if (rowBody && !document.getElementById(`floor-auto-${pinKey}`)) {
+          rowBody.classList.add('collapsed');
+          const autoLine = document.createElement('div');
+          autoLine.className = 'floor-auto-line';
+          autoLine.id = `floor-auto-${pinKey}`;
+          autoLine.innerHTML = `⚡ Exit pin auto-placed
+            <a href="#" onclick="expandFloorRow('${pinKey}'); return false;"
+               style="color:#aaa; font-size:11px; margin-left:8px;">override</a>`;
+          rowBody.parentElement.insertBefore(autoLine, rowBody);
+        }
+        if (rowHdr) { rowHdr.className = 'badge on'; rowHdr.style.fontSize='10px'; rowHdr.textContent = '✓ pin set'; }
       }
     } catch(e) { console.error(`Suggest failed for pg${pg.eval_page_num}:`, e); }
   }
@@ -721,11 +753,11 @@ async function runDemarcScan() {
 }
 
 function renderTRMap(trs) {
-  const tbody = document.getElementById('tr-tbody');
-  tbody.innerHTML = '';
+  const container = document.getElementById('tr-cards');
+  container.innerHTML = '';
   document.getElementById('tr-map-section').style.display = 'block';
 
-  // Update summary bar
+  // Summary bar
   const onSheet  = trs.filter(t => t.status === 'on_sheet' || t.on_sheet);
   const offSheet = trs.filter(t => t.status !== 'on_sheet' && !t.on_sheet);
   const needPins = trs.filter(t => t.on_sheet && (t.pages ?? []).some(p =>
@@ -737,91 +769,214 @@ function renderTRMap(trs) {
     needPins.length > 0 ? `⚠ ${needPins.length} TR${needPins.length > 1 ? 's' : ''} need cross-floor exit pins` : '';
 
   for (const tr of trs) {
-    const isOn = tr.status === 'on_sheet';
-    const serves = (tr.pages ?? []).map(p => `pg${p.eval_page_num}`).join(', ');
+    const isOn     = tr.status === 'on_sheet' || tr.on_sheet;
     const location = [tr.building, tr.floor, tr.area].filter(Boolean).join(' · ')
-      || (tr.demarc_page_num ? `pg${tr.demarc_page_num} (detecting…)` : '— off sheet —');
-    const demarcPage = tr.demarc_page_num ? `pg ${tr.demarc_page_num}` : '—';
+      || (tr.demarc_page_num ? `pg${tr.demarc_page_num}` : '— off sheet —');
+    const hasDemarcPin = (tr.pin_x ?? tr.demarc_x) != null;
+    const servedPages  = (tr.pages ?? []).filter(p => p.eval_page_num !== tr.demarc_page_num);
+    const allPinned    = servedPages.length > 0 && servedPages.every(p => tr.extra_pins?.[p.eval_page_num]);
 
-    const tr_el = document.createElement('tr');
-    tr_el.innerHTML = `
-      <td><strong style="color:#f0c040;">${tr.name}</strong></td>
-      <td style="color:#888;">${location}</td>
-      <td><select id="demarc-page-sel-${tr.name}"
+    // ── Card shell ────────────────────────────────────────────────
+    const card = document.createElement('div');
+    card.className = 'tr-card';
+    card.id = `tr-card-${tr.name}`;
+
+    // Header
+    const statusBadge = isOn
+      ? `<span class="badge on" style="font-size:11px;">✓ on sheet</span>`
+      : `<span class="badge off" style="font-size:11px;">⚠ off sheet</span>`;
+    card.innerHTML = `
+      <div class="tr-card-header">
+        <span class="tr-badge">${tr.name}</span>
+        <span class="tr-location">${location}</span>
+        ${statusBadge}
+      </div>
+      <div class="tr-card-body" id="tr-body-${tr.name}"></div>`;
+    container.appendChild(card);
+
+    const body = card.querySelector(`#tr-body-${tr.name}`);
+
+    // ── Step 1: Demarc Page ───────────────────────────────────────
+    const step1 = document.createElement('div');
+    step1.className = 'tr-step';
+    step1.innerHTML = `
+      <div class="step-num ${tr.demarc_page_num ? '' : 'pending'}">1</div>
+      <div class="step-body">
+        <div class="step-label">Demarc Page</div>
+        <select id="demarc-page-sel-${tr.name}"
           onchange="updateDemarcPage('${tr.name}', this.value)"
-          style="background:#1a1a1a; border:1px solid #${isOn ? '3a7a3a' : '7a5000'}; color:${isOn ? '#7af07a' : '#f0c040'}; padding:5px 8px; border-radius:3px; font-size:13px; font-family:monospace;">
-        </select></td>
-      <td style="color:#888;">${serves}</td>
-      <td><span class="badge ${isOn ? 'on' : 'off'}">${isOn ? '✓ on sheet' : '⚠ off sheet'}</span></td>
-      <td>${isOn
-        ? '<span style="color:#555;">—</span>'
-        : `<input type="number" id="jumper-${tr.name}" value="${tr.stub_ft ?? 0}" min="0" step="5" style="width:70px; background:#1a1a1a; border:1px solid #333; color:#e0e0e0; padding:3px 6px; border-radius:3px; font-size:11px;">`
-      }</td>
-      <td style="white-space:nowrap;">
-        ${isOn
-          ? `<button class="info" onclick="movePinModal('${tr.name}', ${tr.demarc_page_num})" style="padding:2px 8px; font-size:10px; display:block; margin-bottom:3px;">📍 Serving Demarc pg${tr.demarc_page_num}</button>
-             ${tr.pages?.length > 1
-               ? `<button onclick="suggestAllExitPins('${tr.name}')" style="padding:2px 8px; font-size:10px; display:block; background:#1a2a1a; border:1px solid #3a5a3a; color:#9af09a;">⚡ Suggest All Exit Pins</button>`
-               : ''}`
-          : `<button class="amber" onclick="openPinModal('${tr.name}')" style="padding:2px 8px; font-size:10px;">📍 Set Serving Demarc</button>`
-        }
-      </td>`;
-    tbody.appendChild(tr_el);
+          style="background:#1a1a1a; border:1px solid #${isOn ? '3a7a3a' : '7a5000'};
+                 color:${isOn ? '#7af07a' : '#f0c040'};
+                 padding:5px 8px; border-radius:3px; font-size:13px; font-family:monospace;">
+        </select>
+        <span style="font-size:11px; color:#666; margin-left:8px;">
+          ${tr.host_confirmed ? '✓ TR room detected on this page' : ''}
+        </span>
+      </div>`;
+    body.appendChild(step1);
 
-    // Populate demarc page dropdown (nested template literals unreliable)
-    const sel = document.getElementById(`demarc-page-sel-${tr.name}`);
-    if (sel) {
-      const offOpt = document.createElement('option');
-      offOpt.value = ''; offOpt.textContent = '— off sheet —';
-      sel.appendChild(offOpt);
-      for (const n of [...selectedPages].sort((a,b)=>a-b)) {
-        const opt = document.createElement('option');
-        opt.value = n;
-        opt.textContent = `pg ${n}`;
-        if (tr.demarc_page_num === n) opt.selected = true;
-        sel.appendChild(opt);
+    // Populate dropdown
+    const sel = step1.querySelector(`#demarc-page-sel-${tr.name}`);
+    const offOpt = document.createElement('option');
+    offOpt.value = ''; offOpt.textContent = '— off sheet —';
+    sel.appendChild(offOpt);
+    for (const n of [...selectedPages].sort((a,b)=>a-b)) {
+      const cache = pageCache[n];
+      const label = cache?.passBResult?.sheet_title
+        ? `pg ${n} — ${cache.passBResult.sheet_title.replace(/TELECOMMUNICATIONS.*/i,'').trim().replace(/[-·]+$/, '').trim()}`
+        : `pg ${n}`;
+      const opt = document.createElement('option');
+      opt.value = n;
+      opt.textContent = label;
+      if (tr.demarc_page_num === n) opt.selected = true;
+      sel.appendChild(opt);
+    }
+
+    // ── Step 2: Demarc Pin ────────────────────────────────────────
+    const step2 = document.createElement('div');
+    step2.className = 'tr-step';
+    const pinX = tr.pin_x ?? tr.demarc_x;
+    const pinY = tr.pin_y ?? tr.demarc_y;
+    const pinAutoText = hasDemarcPin
+      ? `<span class="pin-auto-tag">📍 Auto-placed at room center</span>
+         <button class="info" onclick="openPinModal('${tr.name}', ${tr.demarc_page_num})"
+           style="font-size:11px; padding:3px 8px; margin-left:6px;">Override</button>`
+      : `<span class="pin-needs-tag">⚠ pin not set</span>
+         <button class="amber" onclick="openPinModal('${tr.name}')"
+           style="font-size:11px; padding:3px 8px; margin-left:6px;">📍 Place Pin</button>`;
+    step2.innerHTML = `
+      <div class="step-num ${hasDemarcPin ? '' : 'pending'}">2</div>
+      <div class="step-body" id="demarc-pin-body-${tr.name}">
+        <div class="step-label">Demarc Pin</div>
+        ${pinAutoText}
+        ${hasDemarcPin ? `<div style="font-size:11px; color:#555; margin-top:3px;">
+          x=${pinX?.toFixed(3)} y=${pinY?.toFixed(3)}</div>` : ''}
+      </div>`;
+    body.appendChild(step2);
+
+    // ── Served Floors ─────────────────────────────────────────────
+    if (servedPages.length > 0) {
+      const hr = document.createElement('hr');
+      hr.className = 'tr-divider';
+      body.appendChild(hr);
+
+      const floorsHeader = document.createElement('div');
+      floorsHeader.style.cssText = 'display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;';
+      floorsHeader.innerHTML = `
+        <div style="font-size:12px; color:#888; text-transform:uppercase; letter-spacing:1px;">
+          Served Floors (${servedPages.length})
+        </div>
+        <button class="info" onclick="suggestAllExitPins('${tr.name}')"
+          ${hasDemarcPin ? '' : 'disabled title="Set demarc pin first"'}
+          style="font-size:11px; padding:4px 10px;">
+          ⚡ Auto-suggest all exit pins
+        </button>`;
+      body.appendChild(floorsHeader);
+
+      const floorRows = document.createElement('div');
+      floorRows.className = 'floor-rows';
+      floorRows.id = `floor-rows-${tr.name}`;
+      body.appendChild(floorRows);
+
+      for (const pg of servedPages) {
+        const pinKey = `${tr.name}_pg${pg.eval_page_num}`;
+        const hasPin = tr.extra_pins?.[pg.eval_page_num];
+        const stubFt = hasPin?.stub_ft ?? 0;
+        const pgLabel = [pg.building, pg.floor, pg.area].filter(Boolean).join(' · ')
+          || `Page ${pg.eval_page_num}`;
+
+        const row = document.createElement('div');
+        row.className = 'floor-row';
+        row.id = `floor-row-${pinKey}`;
+
+        // If already auto-suggested, start collapsed
+        const isAutoSuggested = hasPin?.source === 'suggested';
+
+        row.innerHTML = `
+          <div class="floor-row-header">
+            <span style="color:#f0c040; font-size:12px; font-weight:bold;">pg${pg.eval_page_num}</span>
+            <span class="floor-row-label">${pgLabel}</span>
+            <span class="badge ${hasPin ? 'on' : 'off'}" style="font-size:10px;">${hasPin ? '✓ pin set' : '⚠ needs pin'}</span>
+          </div>
+          ${isAutoSuggested
+            ? `<div class="floor-auto-line" id="floor-auto-${pinKey}">
+                 ⚡ Exit pin auto-placed
+                 <a href="#" onclick="expandFloorRow('${pinKey}'); return false;"
+                    style="color:#aaa; font-size:11px; margin-left:8px;">override</a>
+               </div>`
+            : ''}
+          <div class="floor-row-body ${isAutoSuggested ? 'collapsed' : ''}" id="floor-body-${pinKey}">
+            <div class="tr-step">
+              <div class="step-num ${hasPin ? '' : 'pending'}">3</div>
+              <div class="step-body">
+                <div class="step-label">Exit Pin</div>
+                <button class="amber" onclick="openPinModal('${tr.name}', ${pg.eval_page_num})"
+                  style="font-size:11px; padding:4px 10px;">
+                  ${hasPin ? '📍 Move' : '📍 Place'} Exit Pin
+                </button>
+                <button class="info" onclick="suggestExitPin('${tr.name}', ${pg.eval_page_num})"
+                  style="font-size:11px; padding:4px 10px; margin-left:4px;">
+                  ⚡ Suggest from ${tr.name}
+                </button>
+              </div>
+            </div>
+            <div class="tr-step">
+              <div class="step-num ${stubFt > 0 ? '' : 'pending'}">4</div>
+              <div class="step-body">
+                <div class="step-label">Backbone Distance</div>
+                <input type="number" id="jumper-${pinKey}" value="${stubFt}" min="0" step="10"
+                  placeholder="ft"
+                  title="Backbone cable run from this floor up to ${tr.name}"
+                  style="width:90px; background:#1a1a1a; border:1px solid ${stubFt > 0 ? '#3a7a3a' : '#7a5000'};
+                         color:${stubFt > 0 ? '#7af07a' : '#f0c040'};
+                         padding:5px 8px; border-radius:3px; font-size:14px; font-weight:bold; font-family:monospace;"
+                  onchange="onBackboneChange('${pinKey}', this)">
+                <span style="font-size:12px; color:#666; margin-left:6px;">ft to ${tr.name}</span>
+                ${stubFt > 0 ? `<div style="font-size:11px; color:#555; margin-top:2px;">${stubFt} ft set</div>` : '<div style="font-size:11px; color:#666; margin-top:2px;">enter distance</div>'}
+              </div>
+            </div>
+          </div>`;
+
+        floorRows.appendChild(row);
       }
     }
 
-    // For each served page that is NOT the demarc page, add a sub-row for exit pin
-    if (isOn && tr.pages?.length > 1) {
-      for (const pg of tr.pages) {
-        if (pg.eval_page_num === tr.demarc_page_num) continue;
-        const subRow = document.createElement('tr');
-        subRow.style.background = '#0a0a0a';
-        const pinKey = `${tr.name}_pg${pg.eval_page_num}`;
-        const hasPin = trMap[tr.name]?.extra_pins?.[pg.eval_page_num];
-        subRow.innerHTML = `
-          <td colspan="3" style="padding:6px 10px 6px 28px; color:#aaa; font-size:13px;">
-            ↳ <strong style="color:#f0c040;">pg${pg.eval_page_num}</strong>
-            ${pg.building ?? ''} ${pg.floor ?? ''} —
-            <span style="color:#999;">place exit pin on this floor + enter backbone distance to ${tr.name}</span>
-          </td>
-          <td><span class="badge ${hasPin ? 'on' : 'off'}" style="font-size:9px;">${hasPin ? '✓ pin set' : '⚠ needs pin'}</span></td>
-          <td style="padding:4px 6px;">
-            <input type="number" id="jumper-${pinKey}" value="${hasPin?.stub_ft ?? 0}" min="0" step="10"
-               style="width:80px; background:#1a1a1a; border:1px solid ${(hasPin?.stub_ft ?? 0) > 0 ? '#3a7a3a' : '#7a5000'}; color:${(hasPin?.stub_ft ?? 0) > 0 ? '#7af07a' : '#f0c040'}; padding:5px 8px; border-radius:3px; font-size:14px; font-weight:bold;"
-               placeholder="ft" title="Backbone cable from this floor to ${tr.name}"
-               onchange="this.style.borderColor=(this.value>0?'#3a7a3a':'#7a5000'); this.style.color=(this.value>0?'#7af07a':'#f0c040')">
-            <div style="font-size:11px; color:#666; margin-top:2px;">${(hasPin?.stub_ft ?? 0) > 0 ? hasPin.stub_ft + 'ft set' : 'enter distance'}</div>
-          </td>
-          <td style="white-space:nowrap;">
-            <button class="amber" onclick="openPinModal('${tr.name}', ${pg.eval_page_num})" 
-               style="padding:2px 8px; font-size:10px; margin-bottom:3px; display:block;">
-              ${hasPin ? '📍 Move' : '📍 Place'} Exit Pin pg${pg.eval_page_num}
-            </button>
-            <button class="info" onclick="suggestExitPin('${tr.name}', ${pg.eval_page_num})"
-               style="padding:2px 8px; font-size:10px; display:block;"
-               title="Copy serving demarc coordinates to this floor as exit pin">
-              ⚡ Suggest from ${tr.name}
-            </button>
-          </td>`;
-        tbody.appendChild(subRow);
-      }
+    // ── Off-sheet backbone (no demarc page) ──────────────────────
+    if (!isOn) {
+      const step = document.createElement('div');
+      step.className = 'tr-step';
+      step.innerHTML = `
+        <div class="step-num pending">3</div>
+        <div class="step-body">
+          <div class="step-label">Backbone Distance</div>
+          <input type="number" id="jumper-${tr.name}" value="${tr.stub_ft ?? 0}" min="0" step="10"
+            style="width:90px; background:#1a1a1a; border:1px solid #7a5000; color:#f0c040;
+                   padding:5px 8px; border-radius:3px; font-size:14px; font-weight:bold; font-family:monospace;"
+            placeholder="ft">
+          <span style="font-size:12px; color:#666; margin-left:6px;">ft to off-sheet TR</span>
+        </div>`;
+      body.appendChild(step);
     }
   }
 }
 
+// Expand a collapsed floor row (override after auto-suggest)
+function expandFloorRow(pinKey) {
+  document.getElementById(`floor-auto-${pinKey}`)?.remove();
+  const body = document.getElementById(`floor-body-${pinKey}`);
+  if (body) body.classList.remove('collapsed');
+}
+
+// Backbone distance input change — update styling
+function onBackboneChange(pinKey, input) {
+  const v = parseFloat(input.value) || 0;
+  input.style.borderColor = v > 0 ? '#3a7a3a' : '#7a5000';
+  input.style.color       = v > 0 ? '#7af07a' : '#f0c040';
+  const hint = input.nextElementSibling?.nextElementSibling;
+  if (hint) hint.textContent = v > 0 ? `${v} ft set` : 'enter distance';
+}
+
+// ── Pin placement modal ───────────────────────────────────────────
 // ── Pin placement modal ───────────────────────────────────────────
 // ── Pin modal zoom/pan state ─────────────────────────────────────
 let pinZoomLevel = 1.0;
@@ -1136,112 +1291,7 @@ async function runBatch() {
   setStatus('batch-status', `✓ Complete — ${done} pages processed`, 'ok');
   document.getElementById('results-section').style.display = 'block';
   document.getElementById('results-section').scrollIntoView({ behavior: 'smooth' });
-  // Show re-detect controls now that a run has completed
-  document.getElementById('btn-redetect').style.display      = 'inline-block';
-  document.getElementById('btn-redetect-page').style.display = 'inline-block';
   renderResults();
-}
-
-// ── Clear all results and re-run every selected page ─────────────
-async function clearAndRerun() {
-  if (!confirm(`Re-detect all ${selectedPages.size} pages? This will replace all current device counts.`)) return;
-  batchResults = {};
-  const log = document.getElementById('batch-log');
-  log.innerHTML = '';
-  document.getElementById('batch-progress').style.width = '0%';
-  document.getElementById('results-section').style.display = 'none';
-  await runBatch();
-}
-
-// ── Re-detect a single page by number ────────────────────────────
-async function redetectPage() {
-  const input = prompt(`Re-detect which page?\nSelected: ${[...selectedPages].sort((a,b)=>a-b).join(', ')}`);
-  if (!input) return;
-  const pageNum = parseInt(input.trim());
-  if (!selectedPages.has(pageNum)) {
-    alert(`Page ${pageNum} is not in the selected set.`);
-    return;
-  }
-
-  // Bust anchor cache so any recent DB changes (e.g. new primary anchors) take effect
-  _anchorCache = null;
-
-  const log = document.getElementById('batch-log');
-  const cache    = pageCache[pageNum] ?? {};
-  const pageId   = cache.pageId;
-  const passBRes = cache.passBResult;
-
-  if (!pageId) {
-    log.innerHTML += `<div style="color:#f07a7a;">pg${pageNum}: no page record — skipping</div>`;
-    return;
-  }
-
-  setStatus('batch-status', `Re-detecting pg${pageNum}…`, 'running');
-  log.innerHTML += `<div style="color:#f0c040;">— re-running pg${pageNum} —</div>`;
-
-  try {
-    const pdfPage  = await pdfDoc.getPage(pageNum);
-    const viewport = pdfPage.getViewport({ scale: 1.0 });
-    const tContent = await pdfPage.getTextContent({ includeMarkedContent: false });
-
-    const anchorSet = await getAnchorPatterns();
-    const W = viewport.width, H = viewport.height;
-    const textItems = [];
-    for (const item of tContent.items) {
-      const raw = item.str?.trim();
-      if (!raw) continue;
-      const s = raw.replace(/[^\x20-\x7E]/g, '').trim();
-      if (!s || !anchorSet.has(s)) continue;
-      const tx = item.transform[4], ty = item.transform[5];
-      const fs = Math.abs(item.transform[3]);
-      const tw = item.width ?? 0, th = item.height ?? fs;
-      textItems.push({
-        str:      s,
-        cx_norm:  parseFloat(((tx + tw/2) / W).toFixed(4)),
-        cy_norm:  parseFloat((1 - (ty + th/2) / H).toFixed(4)),
-        color_hex: '#999999',
-        font_size: parseFloat(fs.toFixed(1))
-      });
-    }
-
-    const demarcPins = buildPinsForPage(pageNum, passBRes, W, H);
-
-    // Debug: show what text items were extracted (remove after confirming pg7 works)
-    log.innerHTML += `<div style="color:#666; font-size:11px;">pg${pageNum} text items (${textItems.length}): ${
-      textItems.length
-        ? textItems.map(t => t.str).join(' · ')
-        : '⚠ NONE — PDF may be image-based or anchors not in text layer'
-    }</div>`;
-    log.scrollTop = log.scrollHeight;
-
-    const r = await fetch(`${base()}/api/pass-batch`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        project_id:     projectId,
-        page_id:        pageId,
-        eval_page_num:  pageNum,
-        text_items:     textItems,
-        page_width_pts:  W,
-        page_height_pts: H,
-        demarc_pins:    demarcPins
-      })
-    });
-    const j = await r.json();
-    batchResults[pageNum] = j;
-
-    const msg = r.ok
-      ? `pg${pageNum}: ${j.device_count} devices${j.tia_violations ? ' ⚠'+j.tia_violations+' TIA' : ''}`
-      : `pg${pageNum}: ERROR — ${j.error}`;
-    log.innerHTML += `<div style="color:${r.ok ? '#7af07a' : '#f07a7a'}">${msg}</div>`;
-    log.scrollTop = log.scrollHeight;
-
-    setStatus('batch-status', `✓ pg${pageNum} complete — ${j.device_count ?? 0} devices`, 'ok');
-    renderResults();
-
-  } catch(e) {
-    log.innerHTML += `<div style="color:#f07a7a;">pg${pageNum}: ${e.message}</div>`;
-    setStatus('batch-status', `Error on pg${pageNum}: ${e.message}`, 'err');
-  }
 }
 
 // Build demarc pins for a page using the TR map
