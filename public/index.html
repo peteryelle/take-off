@@ -230,7 +230,7 @@
   <div class="status" id="pdf-status">No file loaded</div>
   <div class="thumbnails" id="thumbnails"></div>
   <div style="margin-top:8px; font-size:11px; color:#555;">
-    Click a thumbnail to set pages. Purple = legend · Green = eval page
+    Click a thumbnail to set pages. Click thumbnail to set eval page
   </div>
 </div>
 
@@ -393,13 +393,7 @@
   </div>
 </div>
 
-<!-- ── STEP 5: SUMMARY ───────────────────────────────────────────── -->
-<div class="section">
-  <div class="section-title">5 · Summary</div>
-  <button class="info" id="btn-summary">▶ Fetch Takeoff Summary</button>
-  <div class="status" id="summary-status">—</div>
-  <div class="output-area" id="summary-output">Output will appear here…</div>
-</div>
+
 
 <!-- ── SERVING DEMARC PIN MODAL (single-page) ──────────────────── -->
 <div id="sp-pin-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.88);
@@ -610,34 +604,14 @@ async function renderThumbnails() {
 }
 
 function handleThumbClick(n, wrap) {
-  // Show a small popup with two options: Set as Legend / Set as Eval
+  // Close any open popup
   const existing = document.getElementById('thumb-popup');
   if (existing) existing.remove();
 
-  const popup = document.createElement('div');
-  popup.id = 'thumb-popup';
-  popup.style.cssText = `
-    position:fixed; background:#1a1a1a; border:1px solid #444;
-    border-radius:4px; padding:8px; z-index:999;
-    font-family:monospace; font-size:12px;
-    box-shadow:0 4px 12px rgba(0,0,0,0.6);
-  `;
-  popup.innerHTML = `
-    <div style="color:#aaa; margin-bottom:6px;">Page ${n}</div>
-    <button onclick="setLegendPage(${n})" style="display:block;width:100%;margin-bottom:4px;background:#1e1e3a;border:1px solid #5a5aaa;color:#aaaaff;padding:4px 8px;border-radius:3px;cursor:pointer;font-family:monospace;font-size:11px;">
-      📋 Set as Legend page
-    </button>
-    <button onclick="setEvalPage(${n})" style="display:block;width:100%;background:#1e3a1e;border:1px solid #3a7a3a;color:#7af07a;padding:4px 8px;border-radius:3px;cursor:pointer;font-family:monospace;font-size:11px;">
-      🔍 Set as Eval page
-    </button>
-  `;
-
-  const rect = wrap.getBoundingClientRect();
-  popup.style.left = Math.min(rect.left, window.innerWidth - 180) + 'px';
-  popup.style.top  = (rect.bottom + 4) + 'px';
-  document.body.appendChild(popup);
-  setTimeout(() => document.addEventListener('click', () => popup.remove(), { once: true }), 100);
+  // Single click = set as eval page directly, no popup needed
+  setEvalPage(n);
 }
+
 
 function setLegendPage(n) {
   document.querySelectorAll('.thumb-wrap').forEach(w => w.classList.remove('legend-page'));
@@ -1835,7 +1809,6 @@ async function clearAndDetect() {
     loadProjectCard(parseInt(id));
   });
   wire('btn-pass-extract',   runPassExtract);
-  wire('btn-summary',        fetchSummary);
   wire('btn-scale-apply',    () => applyScaleOverride(false));
 
   // Restore from URL params first (coming back from device-types.html)
