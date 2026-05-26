@@ -190,7 +190,13 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
 
 <!-- ── STEP 4: BATCH RUN ─────────────────────────────────────────── -->
 <div class="section" id="batch-section" style="display:none;">
-  <div class="section-title">4 · Batch Run</div>
+  <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; border-bottom:1px solid #2e2e2e; padding-bottom:6px;">
+    <div class="section-title" style="margin-bottom:0; border-bottom:none; padding-bottom:0;">4 · Batch Run</div>
+    <div style="display:flex; gap:8px;" id="batch-controls">
+      <button class="info" id="btn-redetect" onclick="clearAndRerun()" style="display:none; font-size:12px; padding:5px 12px;">↺ Re-detect All</button>
+      <button class="danger" id="btn-redetect-page" onclick="redetectPage()" style="display:none; font-size:12px; padding:5px 12px;">↺ Re-detect Page…</button>
+    </div>
+  </div>
   <div class="progress-wrap">
     <div class="progress-bar" id="batch-progress" style="width:0%"></div>
   </div>
@@ -1130,7 +1136,101 @@ async function runBatch() {
   setStatus('batch-status', `✓ Complete — ${done} pages processed`, 'ok');
   document.getElementById('results-section').style.display = 'block';
   document.getElementById('results-section').scrollIntoView({ behavior: 'smooth' });
+  // Show re-detect controls now that a run has completed
+  document.getElementById('btn-redetect').style.display      = 'inline-block';
+  document.getElementById('btn-redetect-page').style.display = 'inline-block';
   renderResults();
+}
+
+// ── Clear all results and re-run every selected page ─────────────
+async function clearAndRerun() {
+  if (!confirm(`Re-detect all ${selectedPages.size} pages? This will replace all current device counts.`)) return;
+  batchResults = {};
+  const log = document.getElementById('batch-log');
+  log.innerHTML = '';
+  document.getElementById('batch-progress').style.width = '0%';
+  document.getElementById('results-section').style.display = 'none';
+  await runBatch();
+}
+
+// ── Re-detect a single page by number ────────────────────────────
+async function redetectPage() {
+  const input = prompt(`Re-detect which page?\nSelected: ${[...selectedPages].sort((a,b)=>a-b).join(', ')}`);
+  if (!input) return;
+  const pageNum = parseInt(input.trim());
+  if (!selectedPages.has(pageNum)) {
+    alert(`Page ${pageNum} is not in the selected set.`);
+    return;
+  }
+
+  const log = document.getElementById('batch-log');
+  const cache    = pageCache[pageNum] ?? {};
+  const pageId   = cache.pageId;
+  const passBRes = cache.passBResult;
+
+  if (!pageId) {
+    log.innerHTML += `<div style="color:#f07a7a;">pg${pageNum}: no page record — skipping</div>`;
+    return;
+  }
+
+  setStatus('batch-status', `Re-detecting pg${pageNum}…`, 'running');
+  log.innerHTML += `<div style="color:#f0c040;">— re-running pg${pageNum} —</div>`;
+
+  try {
+    const pdfPage  = await pdfDoc.getPage(pageNum);
+    const viewport = pdfPage.getViewport({ scale: 1.0 });
+    const tContent = await pdfPage.getTextContent({ includeMarkedContent: false });
+
+    const anchorSet = await getAnchorPatterns();
+    const W = viewport.width, H = viewport.height;
+    const textItems = [];
+    for (const item of tContent.items) {
+      const raw = item.str?.trim();
+      if (!raw) continue;
+      const s = raw.replace(/[^\x20-\x7E]/g, '').trim();
+      if (!s || !anchorSet.has(s)) continue;
+      const tx = item.transform[4], ty = item.transform[5];
+      const fs = Math.abs(item.transform[3]);
+      const tw = item.width ?? 0, th = item.height ?? fs;
+      textItems.push({
+        str:      s,
+        cx_norm:  parseFloat(((tx + tw/2) / W).toFixed(4)),
+        cy_norm:  parseFloat((1 - (ty + th/2) / H).toFixed(4)),
+        color_hex: '#999999',
+        font_size: parseFloat(fs.toFixed(1))
+      });
+    }
+
+    const demarcPins = buildPinsForPage(pageNum, passBRes, W, H);
+
+    const r = await fetch(`${base()}/api/pass-batch`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id:     projectId,
+        page_id:        pageId,
+        eval_page_num:  pageNum,
+        text_items:     textItems,
+        page_width_pts:  W,
+        page_height_pts: H,
+        demarc_pins:    demarcPins
+      })
+    });
+    const j = await r.json();
+    batchResults[pageNum] = j;
+
+    const msg = r.ok
+      ? `pg${pageNum}: ${j.device_count} devices${j.tia_violations ? ' ⚠'+j.tia_violations+' TIA' : ''}`
+      : `pg${pageNum}: ERROR — ${j.error}`;
+    log.innerHTML += `<div style="color:${r.ok ? '#7af07a' : '#f07a7a'}">${msg}</div>`;
+    log.scrollTop = log.scrollHeight;
+
+    setStatus('batch-status', `✓ pg${pageNum} complete — ${j.device_count ?? 0} devices`, 'ok');
+    renderResults();
+
+  } catch(e) {
+    log.innerHTML += `<div style="color:#f07a7a;">pg${pageNum}: ${e.message}</div>`;
+    setStatus('batch-status', `Error on pg${pageNum}: ${e.message}`, 'err');
+  }
 }
 
 // Build demarc pins for a page using the TR map
