@@ -1163,6 +1163,9 @@ async function redetectPage() {
     return;
   }
 
+  // Bust anchor cache so any recent DB changes (e.g. new primary anchors) take effect
+  _anchorCache = null;
+
   const log = document.getElementById('batch-log');
   const cache    = pageCache[pageNum] ?? {};
   const pageId   = cache.pageId;
@@ -1202,6 +1205,14 @@ async function redetectPage() {
     }
 
     const demarcPins = buildPinsForPage(pageNum, passBRes, W, H);
+
+    // Debug: show what text items were extracted (remove after confirming pg7 works)
+    log.innerHTML += `<div style="color:#666; font-size:11px;">pg${pageNum} text items (${textItems.length}): ${
+      textItems.length
+        ? textItems.map(t => t.str).join(' · ')
+        : '⚠ NONE — PDF may be image-based or anchors not in text layer'
+    }</div>`;
+    log.scrollTop = log.scrollHeight;
 
     const r = await fetch(`${base()}/api/pass-batch`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
