@@ -1,6 +1,6 @@
 // netlify/functions/pass-describe.js
-// Parse an llm_description → structured text_anchors JSON
-// Also: generate an llm_description from example images (Pass A 2.0)
+// Generate an llm_description from example images (Pass A 2.0)
+// Extract text_anchors deterministically from the description (no LLM)
 //
 // POST /api/pass-describe
 // Body (parse mode):
@@ -11,87 +11,91 @@
 
 import { getSupabase, getAnthropic, ok, err, CORS } from "./utils/clients.js";
 
-const PARSE_SYSTEM = `You are a precise JSON extractor. Given a natural-language device description
-written for an engineering drawing symbol detector, extract the text anchor information.
-Return ONLY valid JSON — no markdown, no explanation.`;
+// ── Deterministic text_anchors extraction ────────────────────────
+// Rules-based — Claude NEVER controls text_anchors.
+// Claude writes the visual description; these rules extract the anchors.
+function extractTextAnchors(llmDescription) {
+  const desc = (llmDescription ?? '').toUpperCase();
 
-const PARSE_PROMPT = (desc) => `Extract text anchor information from this telecom device description.
+  const PRIMARY_PATTERNS = [
+    { test: /\bWAP\b/,
+      primary: ['WAP'], associated: [] },
 
-${desc}
+    { test: /\b180\b/,
+      primary: ['180'], associated: [] },
 
-CRITICAL RULES for telecom outlet devices:
-One device instance = one symbol on the drawing. A device may have 1, 2, or 3 label types stacked:
-  - DD label alone         (e.g. DD2)
-  - DD + DV                (e.g. DD2 + DV1)
-  - DD + DV + N            (e.g. DD2 + DV1 + N2)
-  - DD + N                 (e.g. DD2 + N2)
-  - DV + N                 (e.g. DV1 + N2)
-  - DV alone               (e.g. DV1) — voice-only outlet
-  - N alone                (e.g. N2)  — nurse station outlet
+    { test: /\bPTZ\b/,
+      primary: ['PTZ'], associated: [] },
 
-The DD label (DD1, DD2, DD3...) is the PRIMARY anchor — it uniquely identifies a data outlet.
-DV labels (DV1, DV2...) are ASSOCIATED — they cluster with the nearest DD, never anchor alone
-  UNLESS no DD is present (voice-only outlet, then DV becomes primary).
-N labels (N2, N3...) are ASSOCIATED — they cluster with the nearest DD or DV.
-  UNLESS the device description says N is the only label (nurse station), then N is primary.
-WAP is always its own primary — never associated with anything.
+    // Data outlet: DD present → DD is primary, DV+N are associated
+    { test: /\bDD[1-9]\b/,
+      primary: ['DD1','DD2','DD3'],
+      associated: ['DV1','DV2','N1','N2','N3'] },
 
-NEVER put DV labels in primary if DD labels are also listed as primary.
-NEVER put N labels in primary if DD or DV labels are also listed as primary.
+    // Nurse station: N-only (no DD, no DV)
+    { test: /\bN[1-9]\b.*ONLY|ONLY.*\bN[1-9]\b|NURSE|N-LABEL ONLY|SOLE LABEL.*N/,
+      primary: ['N1','N2','N3','N4','N5'], associated: [] },
 
-Return exactly this JSON — no markdown, no preamble:
-{
-  "primary": ["exact label strings that uniquely identify ONE device instance"],
-  "associated": ["labels that cluster with primary but do not anchor a device alone"],
-  "label_suffix_is_port_count": true,
-  "text_always_horizontal": true,
-  "notes": "one sentence describing the device and its label pattern"
+    // Voice-only outlet: DV-only (no DD)
+    { test: /\bDV[1-9]\b.*ONLY|ONLY.*\bDV[1-9]\b|VOICE.ONLY|VOICE ONLY/,
+      primary: ['DV1','DV2'], associated: [] },
+  ];
+
+  for (const pattern of PRIMARY_PATTERNS) {
+    if (pattern.test.test(desc)) {
+      const hasPortCount = /DD[1-9]/.test(desc) &&
+                           /SUFFIX|PORT COUNT|DIGIT/.test(desc);
+      return {
+        primary:                    pattern.primary,
+        associated:                 pattern.associated,
+        label_suffix_is_port_count: hasPortCount,
+        text_always_horizontal:     true,
+        notes:                      inferNotes(desc, pattern.primary)
+      };
+    }
+  }
+
+  // No match — flag for manual review
+  return {
+    primary:                    [],
+    associated:                 [],
+    label_suffix_is_port_count: false,
+    text_always_horizontal:     true,
+    notes: 'No standard label pattern detected — verify text_anchors manually'
+  };
 }
 
-Examples:
-- Data/VoIP outlet (DD2/DV1/N2):  primary=["DD1","DD2","DD3"]  associated=["DV1","DV2","N2","N3"]
-- WAP:                             primary=["WAP"]               associated=[]
-- Nurse station (N only):          primary=["N1","N2","N3"]      associated=[]
-- Voice-only outlet (DV only):     primary=["DV1","DV2"]         associated=[]
-If a field is not determinable, use null.`;
+function inferNotes(desc, primary) {
+  if (primary.includes('WAP'))  return 'WAP — rectangle with arrowhead, always 2 CAT6A runs';
+  if (primary.includes('DD1'))  return 'Data/VoIP outlet — DD suffix = port count, DV = voice, N = node';
+  if (primary.includes('180'))  return 'Security camera 180° — degree symbol may be non-ASCII in PDF';
+  if (primary.includes('N1'))   return 'Nurse station — N label only, no DD or DV present';
+  if (primary.includes('DV1'))  return 'Voice-only outlet — DV label only, no DD present';
+  return '';
+}
 
-const GENERATE_SYSTEM = `You are an expert engineering drawing analyst. Given one or more example images 
-of a device symbol from an engineering drawing, write a precise machine-readable description
-that will be used by an automated symbol detector. Return ONLY valid JSON — no markdown.`;
+// ── Generate prompt ───────────────────────────────────────────────
+const GENERATE_SYSTEM = `You are an expert engineering drawing analyst. Given one or more example
+images of a device symbol from an engineering drawing, write a precise machine-readable description
+that will be used by an automated symbol detector. Return ONLY valid JSON — no markdown, no preamble.`;
 
-const GENERATE_PROMPT = (name) => `These images show examples of the device: "${name}"
+const GENERATE_PROMPT = (name) => `These images show examples of the device symbol: "${name}"
 
-Write a complete llm_description for this device symbol — a precise fingerprint for automated detection.
-Also extract the text_anchors.
+Write a complete llm_description — a precise visual fingerprint for automated detection.
 
 Return exactly this JSON:
 {
-  "llm_description": "Multi-line description covering:\\nSHAPE: ...\\nSIZE: ...\\nTEXT ANCHORS: ...\\nTEXT ORIENTATION: ...\\nLABEL PATTERN: ...\\nORIENTATION: ...\\nEXCLUSIONS: ...\\nLOOK-ALIKES: ...",
-  "text_anchors": {
-    "primary": [],
-    "associated": [],
-    "label_suffix_is_port_count": false,
-    "text_always_horizontal": true,
-    "notes": ""
-  }
+  "llm_description": "Multi-line description:\\nSHAPE: ...\\nSIZE: ...\\nTEXT ANCHORS: ...\\nTEXT ORIENTATION: ...\\nLABEL PATTERN: ...\\nORIENTATION: ...\\nEXCLUSIONS: ...\\nLOOK-ALIKES: ..."
 }
 
-CRITICAL RULES for text_anchors:
-- primary = label strings that ALONE identify one device instance on a drawing
-- associated = labels that appear near primary but never anchor a device by themselves
-- For data outlets: DD1/DD2/DD3 → primary. DV1/DV2/N2/N3 → associated. NEVER mix.
-- For WAP: WAP → primary. Nothing → associated.
-- For nurse stations (N-only): N1/N2/N3 → primary. Nothing → associated.
-- NEVER put DV or N in primary if DD is also primary for the same device.
-
-Rules for llm_description:
+Rules for each section:
 - SHAPE: exact geometry (triangle/rectangle/circle/compound), fill (solid/outline/none), stroke color
-- SIZE: consistent size in mm on the drawing, or describe if variable  
-- TEXT ANCHORS: the exact label strings always adjacent to this symbol
-- TEXT ORIENTATION: whether labels rotate with symbol or stay horizontal
-- LABEL PATTERN: how many strings, stacked or inline, any suffix rules
-- ORIENTATION: can symbol rotate freely, or is it fixed direction
-- EXCLUSIONS: where NOT to count (legend box, keynote callouts, detail insets)
+- SIZE: consistent size in mm on drawing, or variable
+- TEXT ANCHORS: exact label strings always adjacent (e.g. DD2, DV1, N2, WAP, 180)
+- TEXT ORIENTATION: do labels rotate with the symbol or always stay horizontal?
+- LABEL PATTERN: how many strings, stacked or inline, suffix rules (e.g. DD2 digit = port count)
+- ORIENTATION: can the symbol rotate freely, or fixed direction?
+- EXCLUSIONS: where NOT to count (legend box, keynote callouts, detail insets, title block)
 - LOOK-ALIKES: other symbols that could be confused, and the distinguishing detail`;
 
 export default async function handler(req) {
@@ -108,35 +112,25 @@ export default async function handler(req) {
   const supabase  = getSupabase();
   const anthropic = getAnthropic();
 
-  // ── Mode: PARSE existing llm_description ─────────────────────
+  // ── Mode: PARSE existing llm_description ─────────────────────────
+  // Deterministic — no Claude call. Rules extract text_anchors from description.
   if (llm_description) {
-    let parsed;
-    try {
-      const msg = await anthropic.messages.create({
-        model:      "claude-sonnet-4-5",
-        max_tokens: 512,
-        system:     PARSE_SYSTEM,
-        messages: [{ role: "user", content: PARSE_PROMPT(llm_description) }]
-      });
-      const raw = msg.content[0].text.replace(/```json|```/g, "").trim();
-      parsed = JSON.parse(raw);
-    } catch (e) {
-      return err(`Parse error: ${e.message}`, 502);
-    }
+    const text_anchors = extractTextAnchors(llm_description);
 
-    // Save both fields to device_types
     const { error: upErr } = await supabase
       .from("device_types")
-      .update({ llm_description, text_anchors: parsed, updated_at: new Date() })
+      .update({ llm_description, text_anchors, updated_at: new Date() })
       .eq("id", device_type_id)
       .eq("project_id", project_id);
 
     if (upErr) return err(`DB error: ${upErr.message}`, 500);
 
-    return ok({ mode: "parse", device_type_id, text_anchors: parsed });
+    return ok({ mode: "parse", device_type_id, text_anchors });
   }
 
-  // ── Mode: GENERATE from example images ───────────────────────
+  // ── Mode: GENERATE from example images ───────────────────────────
+  // Claude generates the llm_description from images.
+  // text_anchors are then extracted deterministically — Claude never sets them.
   if (example_images?.length) {
     if (!device_name) return err("device_name required for generate mode");
 
@@ -147,7 +141,7 @@ export default async function handler(req) {
     }
 
     const imageContent = example_images.map(b64 => ({
-      type: "image",
+      type:   "image",
       source: { type: "base64", media_type: detectMediaType(b64), data: b64 }
     }));
 
@@ -158,7 +152,7 @@ export default async function handler(req) {
         max_tokens: 1024,
         system:     GENERATE_SYSTEM,
         messages: [{
-          role: "user",
+          role:    "user",
           content: [...imageContent, { type: "text", text: GENERATE_PROMPT(device_name) }]
         }]
       });
@@ -168,25 +162,19 @@ export default async function handler(req) {
       return err(`Generate error: ${e.message}`, 502);
     }
 
-    // Save to device_types
+    // Deterministic text_anchors — ignore anything Claude may have returned
+    const text_anchors = extractTextAnchors(result.llm_description);
+
     const { error: upErr } = await supabase
       .from("device_types")
-      .update({
-        llm_description: result.llm_description,
-        text_anchors:    result.text_anchors,
-        updated_at:      new Date()
-      })
+      .update({ llm_description: result.llm_description, text_anchors, updated_at: new Date() })
       .eq("id", device_type_id)
       .eq("project_id", project_id);
 
     if (upErr) return err(`DB error: ${upErr.message}`, 500);
 
-    return ok({
-      mode:            "generate",
-      device_type_id,
-      llm_description: result.llm_description,
-      text_anchors:    result.text_anchors
-    });
+    return ok({ mode: "generate", device_type_id,
+                llm_description: result.llm_description, text_anchors });
   }
 
   return err("Provide either llm_description (parse) or example_images (generate)");
