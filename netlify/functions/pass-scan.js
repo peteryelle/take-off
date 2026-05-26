@@ -31,19 +31,18 @@ function parseSheetTitle(title) {
   };
 }
 
-// Extract TR room name from demarcation description or note text
-// e.g. "Telecommunications Room BT03 on Level 00B serving data outlets"
-// e.g. "DATA OUTLETS SHALL BE SERVED FROM TELECOMMUNICATIONS ROOM SL06"
+// Extract TR room name from demarcation label, description, or warnings.
+// Returns the best single candidate, or null.
 function extractTRName(passBResult) {
   const candidates = [];
 
-  // From demarcation label (most reliable)
+  // From demarcation label (most reliable — Claude extracts this directly)
   const demarc = passBResult?.demarcation;
   if (demarc?.found && demarc?.label) {
     candidates.push(demarc.label.trim());
   }
 
-  // From demarcation description (natural language)
+  // From demarcation description (natural language fallback)
   const desc = demarc?.description ?? '';
   const descMatch = desc.match(/\b([A-Z]{1,4}[\d]{2,4}[A-Z]?)\b/g);
   if (descMatch) candidates.push(...descMatch);
@@ -55,11 +54,11 @@ function extractTRName(passBResult) {
     if (wMatch) candidates.push(...wMatch);
   }
 
-  // Filter to likely TR name patterns: 2-6 chars + 2-4 digits optional suffix
+  // Filter to likely TR name patterns: 2-6 alpha chars + 2-4 digits + optional suffix
   const trPattern = /^([A-Z]{1,4}\d{2,4}[A-Z]?)$/;
   const trNames = [...new Set(candidates)].filter(c => trPattern.test(c));
 
-  return trNames[0] ?? null;  // Best guess — first match
+  return trNames[0] ?? null;
 }
 
 export default async function handler(req) {
@@ -76,15 +75,13 @@ export default async function handler(req) {
   const supabase = getSupabase();
 
   // ── Process each page result ──────────────────────────────────
-  const pageRecords  = [];
-  const trMap        = {};   // TR name → { pages[], onSheet: bool, demarc_xy }
+  const pageRecords = [];
+  const trMap       = {};   // TR name → aggregated TR record
 
   for (const { eval_page_num, page_b_result } of pages) {
     if (!page_b_result) continue;
 
-    const { building, floor, area } = parseSheetTitle(
-      page_b_result.sheet_title
-    );
+    const { building, floor, area } = parseSheetTitle(page_b_result.sheet_title);
     const trName = extractTRName(page_b_result);
     const scale  = page_b_result.scale;
 
@@ -100,9 +97,9 @@ export default async function handler(req) {
       .from("pages")
       .upsert({
         project_id,
-        pdf_page_number: eval_page_num,
+        pdf_page_number:  eval_page_num,
         building,
-        level: floor,          // pages table uses 'level' not 'floor'
+        level:            floor,   // pages table uses 'level' not 'floor'
         area,
         tr_name:          trName,
         status:           'ready',
@@ -129,41 +126,57 @@ export default async function handler(req) {
 
     pageRecords.push(pageRec);
 
-    // Build TR map
-    if (trName) {
-      if (!trMap[trName]) {
-        trMap[trName] = {
-          name:       trName,
-          pages:      [],
-          on_sheet:   false,
-          demarc_x:   null,
-          demarc_y:   null,
-          building:   null,
-          floor:      null,
-          area:       null
-        };
-      }
-      trMap[trName].pages.push({
-        page_id:      pageRec.id,
-        eval_page_num,
-        building,
-        floor,
-        area
-      });
+    // ── Build TR map entry for this page ──────────────────────────
+    if (!trName) continue;
 
-      // If demarc found on this page → mark as on-sheet
-      const d = page_b_result.demarcation;
-      if (d?.found) {
-        trMap[trName].on_sheet  = true;
-        trMap[trName].demarc_x  = d.x;
-        trMap[trName].demarc_y  = d.y;
-        trMap[trName].building  = building;
-        trMap[trName].floor     = floor;
-        trMap[trName].area      = area;
-        trMap[trName].demarc_page_id = pageRec.id;
-        trMap[trName].demarc_page_num = eval_page_num;
-      }
+    if (!trMap[trName]) {
+      trMap[trName] = {
+        name:              trName,
+        pages:             [],
+        host_confirmed:    false,   // true once a page with is_host=true is found
+        on_sheet:          false,
+        demarc_page_id:    null,
+        demarc_page_num:   null,
+        demarc_x:          null,
+        demarc_y:          null,
+        // Location fields come from the HOST page, not from served pages
+        building:          null,
+        floor:             null,
+        area:              null,
+      };
     }
+
+    // Always add this page to the list of pages served by this TR
+    trMap[trName].pages.push({
+      page_id:      pageRec.id,
+      eval_page_num,
+      building,
+      floor,
+      area
+    });
+
+    const d = page_b_result.demarcation;
+
+    // ── HOST PAGE: TR room is physically drawn here ───────────────
+    // Only set demarc location from a host page. Once confirmed, never
+    // overwrite with a served-page reference (is_host=false).
+    if (d?.found && d?.is_host === true && !trMap[trName].host_confirmed) {
+      trMap[trName].host_confirmed  = true;
+      trMap[trName].on_sheet        = true;
+      trMap[trName].demarc_page_id  = pageRec.id;
+      trMap[trName].demarc_page_num = eval_page_num;
+      trMap[trName].demarc_x        = d.x;
+      trMap[trName].demarc_y        = d.y;
+      // TR room location metadata comes from the host page
+      trMap[trName].building        = building;
+      trMap[trName].floor           = floor;
+      trMap[trName].area            = area;
+    }
+
+    // ── SERVED PAGE: TR referenced in notes only (is_host=false) ─
+    // We still have the TR name (already pushed to pages[]) so distance
+    // measurement knows which demarc to use. But we do NOT update
+    // demarc_page_num, demarc_x/y, or location — those belong to the host.
   }
 
   // ── Upsert demarc records for on-sheet TRs ────────────────────
@@ -191,14 +204,22 @@ export default async function handler(req) {
     if (!dmErr) demarcsCreated.push(demarcRec);
   }
 
-  // ── Summary ───────────────────────────────────────────────────
+  // ── Build summary list ─────────────────────────────────────────
   const trList = Object.values(trMap).map(tr => ({
-    ...tr,
-    status: tr.on_sheet ? 'on_sheet' : 'off_sheet'
+    name:            tr.name,
+    building:        tr.building,
+    floor:           tr.floor,
+    area:            tr.area,
+    demarc_page_num: tr.demarc_page_num,
+    demarc_x:        tr.demarc_x,
+    demarc_y:        tr.demarc_y,
+    pages:           tr.pages,
+    host_confirmed:  tr.host_confirmed,
+    status:          tr.on_sheet ? 'on_sheet' : 'off_sheet'
   }));
 
-  const offSheet = trList.filter(t => !t.on_sheet);
-  const onSheet  = trList.filter(t => t.on_sheet);
+  const offSheet = trList.filter(t => t.status === 'off_sheet');
+  const onSheet  = trList.filter(t => t.status === 'on_sheet');
 
   const warnings = [];
   if (offSheet.length) {
@@ -209,13 +230,13 @@ export default async function handler(req) {
   }
 
   return ok({
-    pass:          "scan",
+    pass:            "scan",
     project_id,
-    pages_scanned: pageRecords.length,
-    tr_rooms:      trList.length,
-    on_sheet:      onSheet.length,
-    off_sheet:     offSheet.length,
-    tr_map:        trList,
+    pages_scanned:   pageRecords.length,
+    tr_rooms:        trList.length,
+    on_sheet:        onSheet.length,
+    off_sheet:       offSheet.length,
+    tr_map:          trList,
     demarcs_created: demarcsCreated.length,
     warnings
   });

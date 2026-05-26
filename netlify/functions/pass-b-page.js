@@ -51,6 +51,7 @@ Return exactly this structure:
     "found": false,
     "label": "string or null",
     "type": "MDF|IDF|NID|handhole|panel|backboard|off_sheet|other",
+    "is_host": false,
     "x": null,
     "y": null,
     "description": "string or null",
@@ -70,8 +71,14 @@ Return exactly this structure:
 Rules:
 - Coordinates x,y are normalized 0-1 (x=0 left, x=1 right, y=0 top, y=1 bottom)
 - If scale not found set type to "none"
-- If demarcation is on a different sheet set found=false and type="off_sheet"
 - drawing_bounds: identify the bounding box of the actual floor plan drawing area only — exclude notes columns, title block, key plan, legend boxes, and general notes text. This is the region containing walls, rooms, and device symbols.
+
+Demarcation rules:
+- found: set to true if a TR/telecom room is either physically drawn on this page OR referenced as serving this floor.
+- label: the TR room identifier (e.g. "BT03", "SL06", "TR G20"). Extract from the room label or from service notes like "DATA OUTLETS SHALL BE SERVED FROM TELECOMMUNICATIONS ROOM SL06".
+- is_host: set to TRUE only if the TR room boundary is physically drawn on this page as a labeled room polygon or enclosed space on the floor plan (e.g. a room box labeled "BT03" or "TELECOM ROOM"). Set to FALSE if the TR room is only mentioned in a general note, keynote, or annotation such as "DEVICES IN THIS AREA SHALL BE SERVED FROM TR BT03 ON LEVEL 00B" without a physical room being shown on this page. This field is critical — it determines which page the TR room actually lives on.
+- type: use "off_sheet" when is_host is false (TR is on a different floor/sheet). Use "IDF", "MDF", etc. when is_host is true.
+- x, y: provide coordinates only when is_host is true (the physical room location on this page). Set to null when is_host is false.
 - Return ONLY the JSON object, nothing else`;
 
   let msgText;
@@ -102,6 +109,9 @@ Rules:
     return err(`JSON parse error: ${e.message} — raw: ${msgText.slice(0, 200)}`, 502);
   }
 
+  const isHost    = result.demarcation?.found && result.demarcation?.is_host === true;
+  const isOffSheet = result.demarcation?.found && !isHost;
+
   // ── Upsert page record ────────────────────────────────────────
   const pageRow = {
     project_id,
@@ -115,10 +125,11 @@ Rules:
     scale_paper_in:  result.scale?.text?.paper_value   ?? null,
     scale_real_ft:   result.scale?.text?.real_value    ?? null,
     demarc_label:    result.demarcation?.label         ?? null,
-    demarc_type:     result.demarcation?.found ? result.demarcation.type : "off_sheet",
-    demarc_x:        result.demarcation?.found ? result.demarcation.x   : null,
-    demarc_y:        result.demarcation?.found ? result.demarcation.y   : null,
-    demarc_source:   result.demarcation?.found ? "claude" : "off_sheet",
+    demarc_type:     isHost       ? result.demarcation.type : "off_sheet",
+    demarc_x:        isHost       ? result.demarcation.x   : null,
+    demarc_y:        isHost       ? result.demarcation.y   : null,
+    demarc_is_host:  isHost,
+    demarc_source:   isHost       ? "claude"               : "off_sheet",
     drawing_x0:      result.drawing_bounds?.x0 ?? null,
     drawing_y0:      result.drawing_bounds?.y0 ?? null,
     drawing_x1:      result.drawing_bounds?.x1 ?? null,
@@ -139,7 +150,7 @@ Rules:
     page_id:        page.id,
     sheet_title:    result.sheet_title,
     scale:          result.scale,
-    demarcation:    result.demarcation,
+    demarcation:    result.demarcation,   // includes is_host for pass-scan.js to consume
     drawing_bounds: result.drawing_bounds ?? null,
     warnings:       result.warnings ?? []
   });
