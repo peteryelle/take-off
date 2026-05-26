@@ -15,28 +15,45 @@ const PARSE_SYSTEM = `You are a precise JSON extractor. Given a natural-language
 written for an engineering drawing symbol detector, extract the text anchor information.
 Return ONLY valid JSON — no markdown, no explanation.`;
 
-const PARSE_PROMPT = (desc) => `Extract text anchor information from this device description:
+const PARSE_PROMPT = (desc) => `Extract text anchor information from this telecom device description.
 
 ${desc}
 
-Return exactly this JSON structure:
+CRITICAL RULES for telecom outlet devices:
+One device instance = one symbol on the drawing. A device may have 1, 2, or 3 label types stacked:
+  - DD label alone         (e.g. DD2)
+  - DD + DV                (e.g. DD2 + DV1)
+  - DD + DV + N            (e.g. DD2 + DV1 + N2)
+  - DD + N                 (e.g. DD2 + N2)
+  - DV + N                 (e.g. DV1 + N2)
+  - DV alone               (e.g. DV1) — voice-only outlet
+  - N alone                (e.g. N2)  — nurse station outlet
+
+The DD label (DD1, DD2, DD3...) is the PRIMARY anchor — it uniquely identifies a data outlet.
+DV labels (DV1, DV2...) are ASSOCIATED — they cluster with the nearest DD, never anchor alone
+  UNLESS no DD is present (voice-only outlet, then DV becomes primary).
+N labels (N2, N3...) are ASSOCIATED — they cluster with the nearest DD or DV.
+  UNLESS the device description says N is the only label (nurse station), then N is primary.
+WAP is always its own primary — never associated with anything.
+
+NEVER put DV labels in primary if DD labels are also listed as primary.
+NEVER put N labels in primary if DD or DV labels are also listed as primary.
+
+Return exactly this JSON — no markdown, no preamble:
 {
-  "primary": ["list","of","exact","label","strings","that","identify","this","device"],
-  "associated": ["secondary","labels","that","cluster","nearby"],
+  "primary": ["exact label strings that uniquely identify ONE device instance"],
+  "associated": ["labels that cluster with primary but do not anchor a device alone"],
   "label_suffix_is_port_count": true,
   "text_always_horizontal": true,
-  "notes": "any important detection notes in one sentence"
+  "notes": "one sentence describing the device and its label pattern"
 }
 
-Rules:
-- primary: the label text strings that, when found in a drawing's text layer, identify this device type
-  (e.g. ["DD1","DD2","DD3"] for data outlets, ["WAP"] for wireless access points)
-- associated: other label strings that appear near primary labels but are not by themselves unique
-  (e.g. ["DV1","DV2","N2","N3"] for outlets)
-- label_suffix_is_port_count: true if the numeric suffix on a primary label encodes a port count
-  (DD2 = 2 data ports, DD3 = 3 data ports)
-- text_always_horizontal: true if labels are always readable regardless of symbol rotation
-- If a field is not determinable, use null`;
+Examples:
+- Data/VoIP outlet (DD2/DV1/N2):  primary=["DD1","DD2","DD3"]  associated=["DV1","DV2","N2","N3"]
+- WAP:                             primary=["WAP"]               associated=[]
+- Nurse station (N only):          primary=["N1","N2","N3"]      associated=[]
+- Voice-only outlet (DV only):     primary=["DV1","DV2"]         associated=[]
+If a field is not determinable, use null.`;
 
 const GENERATE_SYSTEM = `You are an expert engineering drawing analyst. Given one or more example images 
 of a device symbol from an engineering drawing, write a precise machine-readable description
@@ -58,6 +75,14 @@ Return exactly this JSON:
     "notes": ""
   }
 }
+
+CRITICAL RULES for text_anchors:
+- primary = label strings that ALONE identify one device instance on a drawing
+- associated = labels that appear near primary but never anchor a device by themselves
+- For data outlets: DD1/DD2/DD3 → primary. DV1/DV2/N2/N3 → associated. NEVER mix.
+- For WAP: WAP → primary. Nothing → associated.
+- For nurse stations (N-only): N1/N2/N3 → primary. Nothing → associated.
+- NEVER put DV or N in primary if DD is also primary for the same device.
 
 Rules for llm_description:
 - SHAPE: exact geometry (triangle/rectangle/circle/compound), fill (solid/outline/none), stroke color
