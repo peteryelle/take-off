@@ -80,30 +80,41 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
 
 <h1>⚡ Multi-Page Takeoff</h1>
 <p class="subtitle">
-  <a href="index.html">← Single page</a>
+  <a href="projects.html">⚡ Projects</a> &nbsp;·&nbsp; <a href="index.html">Single Page</a>
   &nbsp;·&nbsp; <a id="dt-link" href="device-types.html">⚙ Device Types</a>
 </p>
 
 <!-- ── STEP 1: PROJECT ───────────────────────────────────────────── -->
 <div class="section">
   <div class="section-title">1 · Project</div>
-  <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
-    <div>
-      <label>Netlify URL</label>
-      <input type="text" id="netlify-url" value="https://winquest-take-off.netlify.app">
-    </div>
-    <div>
-      <label>Project ID</label>
-      <input type="text" id="project-id" style="width:80px;" placeholder="e.g. 1">
-    </div>
-    <div>
-      <label>Project name</label>
-      <input type="text" id="project-name" value="New Project">
-    </div>
-    <div style="padding-top:16px;">
-      <button class="info" onclick="confirmProject()">Confirm Project</button>
+
+  <!-- hidden fields still needed for base() -->
+  <input type="hidden" id="netlify-url" value="https://winquest-take-off.netlify.app">
+  <input type="hidden" id="project-id" value="">
+
+  <!-- Project card -->
+  <div id="project-card" style="display:none; padding:12px 16px; background:#0a0a0a;
+       border:1px solid #2a2a2a; border-radius:4px;">
+    <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px;">
+      <div>
+        <div id="project-card-name" style="font-size:16px; color:#f0c040; font-weight:bold;"></div>
+        <div id="project-card-meta" style="font-size:13px; color:#666; margin-top:4px;"></div>
+        <div id="project-card-file" style="font-size:12px; color:#555; margin-top:4px;"></div>
+      </div>
+      <a href="projects.html" style="background:#1e2d3a; border:1px solid #3a6a8a; color:#7ac0f0;
+         padding:6px 12px; border-radius:3px; font-size:13px; text-decoration:none;
+         font-family:monospace; white-space:nowrap;">
+        ⇄ Switch Project
+      </a>
     </div>
   </div>
+
+  <!-- Fallback -->
+  <div id="project-manual" style="display:none; font-size:13px; color:#888;">
+    No project selected.
+    <a href="projects.html" style="color:#7ac0f0;">Go to Projects →</a>
+  </div>
+
   <div class="status" id="project-status">—</div>
   <div id="device-type-bar" style="margin-top:10px; padding:8px 12px; background:#1a1a00; border:1px solid #5a5000; border-radius:3px; font-size:11px; display:none;">
     <span style="color:#f0c040;">⚠ Device types needed for detection.</span>
@@ -548,6 +559,18 @@ async function loadPDF(input) {
     totalPages = pdfDoc.numPages;
     setStatus('pdf-status', `✓ ${totalPages} pages loaded — ${file.name}`, 'ok');
     await renderThumbnails();
+    // Save filename to project record
+    if (projectId) {
+      document.getElementById('project-card-file').textContent = '📄 ' + file.name;
+      document.getElementById('project-card-file').style.color = '#4a7a4a';
+      fetch(`${base()}/api/projects`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'update_project', id: projectId,
+          pdf_filename: file.name, pdf_page_count: totalPages
+        })
+      }).catch(() => {});
+    }
   } catch(e) { setStatus('pdf-status', 'Error: ' + e.message, 'err'); }
 }
 
@@ -1335,6 +1358,27 @@ function renderProjectTotal() {
 
   html += `</tbody></table>`;
   el.innerHTML = html;
+}
+
+// ── Load project card details ────────────────────────────────────
+async function loadProjectCard(pid) {
+  try {
+    const r = await fetch(`${base()}/api/projects`);
+    const j = await r.json();
+    const p = Array.isArray(j) ? j.find(x => x.id === pid) : null;
+    if (!p) {
+      document.getElementById('project-card-name').textContent = `Project ${pid}`;
+      return;
+    }
+    document.getElementById('project-card-name').textContent = p.name ?? `Project ${pid}`;
+    const meta = [p.project_number, p.client].filter(Boolean).join(' · ');
+    document.getElementById('project-card-meta').textContent = meta || `ID: ${pid}`;
+    if (p.pdf_filename) {
+      document.getElementById('project-card-file').textContent = '📄 ' + p.pdf_filename;
+      document.getElementById('project-card-file').style.color = '#4a7a4a';
+      setStatus('pdf-status', `⚠ Re-upload ${p.pdf_filename} to run new scans — results below are from last run`, '');
+    }
+  } catch(e) { console.warn('loadProjectCard:', e); }
 }
 
 // ── Full state restore from Supabase ─────────────────────────────

@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Projects — Take-off</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: monospace; background: #0d0d0d; color: #e0e0e0; font-size: 14px; }
+
+/* ── Header ── */
+.header {
+  background: #080808; border-bottom: 1px solid #1e1e1e;
+  padding: 14px 24px; display: flex; align-items: center; gap: 16px;
+}
+.header h1 { color: #f0c040; font-size: 18px; letter-spacing: 2px; text-transform: uppercase; }
+.header .sub { color: #555; font-size: 12px; flex: 1; }
+input[type="text"] {
+  background: #1a1a1a; border: 1px solid #333; color: #e0e0e0;
+  padding: 7px 10px; border-radius: 3px; font-family: monospace; font-size: 13px; width: 220px;
+}
+button {
+  background: #1e3a1e; border: 1px solid #3a7a3a; color: #7af07a;
+  padding: 7px 16px; border-radius: 3px; cursor: pointer;
+  font-family: monospace; font-size: 13px; white-space: nowrap;
+}
+button:hover  { background: #2a4a2a; }
+button.info   { background: #1e2d3a; border-color: #3a6a8a; color: #7ac0f0; }
+button.info:hover { background: #253545; }
+button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
+button.danger:hover { background: #4a2020; }
+button.amber  { background: #2a2000; border-color: #7a6000; color: #f0c040; }
+
+/* ── Layout ── */
+.main { display: grid; grid-template-columns: 320px 1fr; min-height: calc(100vh - 53px); }
+
+/* ── New project panel ── */
+.new-project-panel {
+  background: #0a0a0a; border-right: 1px solid #1e1e1e;
+  padding: 20px; display: flex; flex-direction: column; gap: 12px;
+}
+.panel-title {
+  color: #f0c040; font-size: 12px; text-transform: uppercase;
+  letter-spacing: 2px; border-bottom: 1px solid #1e1e1e;
+  padding-bottom: 8px; margin-bottom: 4px;
+}
+label { color: #888; font-size: 12px; display: block; margin-bottom: 3px; }
+.field { margin-bottom: 10px; }
+.field input[type="text"] { width: 100%; }
+.netlify-field { margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid #1a1a1a; }
+.status { font-size: 12px; color: #888; min-height: 16px; }
+.status.ok  { color: #7af07a; }
+.status.err { color: #f07a7a; }
+.status.running { color: #f0c040; }
+
+/* ── Project list ── */
+.project-list-panel { padding: 20px; }
+.list-header {
+  display: flex; align-items: center; gap: 12px; margin-bottom: 16px;
+}
+.list-title { color: #e0e0e0; font-size: 15px; flex: 1; }
+.search-input {
+  background: #1a1a1a; border: 1px solid #333; color: #e0e0e0;
+  padding: 6px 10px; border-radius: 3px; font-family: monospace;
+  font-size: 13px; width: 200px;
+}
+.project-grid { display: flex; flex-direction: column; gap: 8px; }
+
+.project-card {
+  background: #111; border: 1px solid #1e1e1e; border-radius: 6px;
+  padding: 14px 16px; cursor: pointer; transition: border-color 0.15s;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: start;
+}
+.project-card:hover   { border-color: #333; }
+.project-card.active  { border-color: #f0c040; background: #111100; }
+
+.project-name { color: #f0c040; font-size: 15px; font-weight: bold; margin-bottom: 3px; }
+.project-meta { font-size: 12px; color: #666; display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+.project-meta span { color: #888; }
+.project-stats {
+  display: flex; gap: 16px; font-size: 12px; color: #888; flex-wrap: wrap;
+}
+.stat-val { color: #e0e0e0; font-weight: bold; }
+.stat-warn { color: #f07a7a; }
+.pdf-name {
+  font-size: 11px; color: #555; margin-top:4px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.pdf-name.has-file { color: #4a7a4a; }
+.project-actions { display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
+.project-date { font-size: 10px; color: #444; }
+
+.empty-state {
+  text-align: center; padding: 60px 20px; color: #444; font-size: 14px;
+}
+.empty-state .big { font-size: 32px; margin-bottom: 12px; }
+
+/* ── Confirm dialog ── */
+.confirm-overlay {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,0.75); z-index: 100;
+  align-items: center; justify-content: center;
+}
+.confirm-overlay.open { display: flex; }
+.confirm-box {
+  background: #111; border: 1px solid #444; border-radius: 6px;
+  padding: 24px; max-width: 360px; width: 90%;
+}
+.confirm-box h2 { color: #f0c040; font-size: 14px; margin-bottom: 10px; }
+.confirm-box p  { color: #aaa; font-size: 13px; line-height: 1.5; margin-bottom: 16px; }
+.confirm-box .btns { display: flex; gap: 8px; justify-content: flex-end; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>⚡ Take-off</h1>
+  <div class="sub">Project Manager</div>
+  <label style="color:#555; font-size:11px; margin:0;">Netlify URL</label>
+  <input type="text" id="netlify-url" value="https://winquest-take-off.netlify.app" style="width:300px;">
+  <button class="info" onclick="loadProjects()">↻ Refresh</button>
+</div>
+
+<div class="main">
+
+  <!-- ── New project panel ── -->
+  <div class="new-project-panel">
+    <div class="panel-title">New Project</div>
+
+    <div class="field">
+      <label>Project Name *</label>
+      <input type="text" id="new-name" placeholder="VA Syracuse EHRM Upgrade">
+    </div>
+    <div class="field">
+      <label>Project Number</label>
+      <input type="text" id="new-number" placeholder="528A7-22-700">
+    </div>
+    <div class="field">
+      <label>Client</label>
+      <input type="text" id="new-client" placeholder="U.S. Dept. of Veterans Affairs">
+    </div>
+
+    <button onclick="createProject()" style="width:100%;">+ Create Project</button>
+    <div class="status" id="create-status">—</div>
+
+    <hr style="border:none; border-top:1px solid #1e1e1e; margin:8px 0;">
+
+    <!-- Edit selected project -->
+    <div id="edit-panel" style="display:none;">
+      <div class="panel-title" style="margin-bottom:12px;">Edit Project</div>
+      <div class="field">
+        <label>Name</label>
+        <input type="text" id="edit-name" placeholder="Project name">
+      </div>
+      <div class="field">
+        <label>Number</label>
+        <input type="text" id="edit-number" placeholder="Project number">
+      </div>
+      <div class="field">
+        <label>Client</label>
+        <input type="text" id="edit-client" placeholder="Client name">
+      </div>
+      <button onclick="saveProjectEdits()" style="width:100%;">✓ Save Changes</button>
+      <div class="status" id="edit-status"></div>
+    </div>
+  </div>
+
+  <!-- ── Project list ── -->
+  <div class="project-list-panel">
+    <div class="list-header">
+      <div class="list-title">Projects</div>
+      <input type="text" class="search-input" id="search-input"
+             placeholder="Search…" oninput="filterProjects(this.value)">
+    </div>
+
+    <div class="project-grid" id="project-grid">
+      <div class="empty-state">
+        <div class="big">📂</div>
+        Loading projects…
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Confirm delete dialog ── -->
+<div class="confirm-overlay" id="confirm-overlay">
+  <div class="confirm-box">
+    <h2>Delete Project</h2>
+    <p id="confirm-msg">Are you sure? This will permanently delete all pages, devices, demarc pins, and results for this project.</p>
+    <div class="btns">
+      <button class="danger" onclick="confirmDelete()">Delete</button>
+      <button class="info" onclick="closeConfirm()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let allProjects   = [];
+let selectedId    = null;
+let deleteTarget  = null;
+
+function base() { return document.getElementById('netlify-url').value.replace(/\/$/, ''); }
+
+function setStatus(id, msg, cls='') {
+  const el = document.getElementById(id);
+  if (el) { el.textContent = msg; el.className = 'status ' + cls; }
+}
+
+// ── Load projects ─────────────────────────────────────────────────
+async function loadProjects() {
+  try {
+    const r = await fetch(`${base()}/api/projects`);
+    const j = await r.json();
+    allProjects = Array.isArray(j) ? j : [];
+    renderList(allProjects);
+  } catch(e) {
+    document.getElementById('project-grid').innerHTML =
+      `<div class="empty-state"><div class="big">⚠</div>Could not load: ${e.message}</div>`;
+  }
+}
+
+// ── Render project list ───────────────────────────────────────────
+function renderList(projects) {
+  const grid = document.getElementById('project-grid');
+  if (!projects.length) {
+    grid.innerHTML = `<div class="empty-state">
+      <div class="big">📂</div>
+      No projects yet — create one to get started
+    </div>`;
+    return;
+  }
+
+  grid.innerHTML = projects.map(p => {
+    const isActive = p.id === selectedId;
+    const hasPDF   = !!p.pdf_filename;
+    const lastRun  = p.last_run_at
+      ? new Date(p.last_run_at).toLocaleDateString()
+      : 'never run';
+    const updated  = p.updated_at
+      ? new Date(p.updated_at).toLocaleDateString()
+      : '—';
+    const devices  = p.total_devices ?? 0;
+    const pages    = p.pages_selected ?? 0;
+    const tia      = p.tia_violations ?? 0;
+
+    return `
+    <div class="project-card ${isActive ? 'active' : ''}"
+         onclick="selectProject(${p.id})" id="card-${p.id}">
+      <div>
+        <div class="project-name">${esc(p.name ?? '—')}</div>
+        <div class="project-meta">
+          ${p.project_number ? `<span>#${esc(p.project_number)}</span>` : ''}
+          ${p.client         ? `<span>${esc(p.client)}</span>`         : ''}
+          <span>ID: ${p.id}</span>
+        </div>
+        <div class="project-stats">
+          <div><span class="stat-val">${pages}</span> pages</div>
+          <div><span class="stat-val">${devices}</span> devices</div>
+          ${tia > 0 ? `<div><span class="stat-val stat-warn">${tia} TIA</span> flags</div>` : ''}
+          <div>last run: ${lastRun}</div>
+        </div>
+        <div class="pdf-name ${hasPDF ? 'has-file' : ''}">
+          ${hasPDF ? '📄 ' + esc(p.pdf_filename) : '○ no PDF recorded'}
+        </div>
+      </div>
+      <div class="project-actions">
+        <div class="project-date">updated ${updated}</div>
+        <button class="info" onclick="openSinglePage(${p.id}); event.stopPropagation();"
+                style="padding:4px 12px; font-size:12px; margin-top:4px;">
+          Single Page →
+        </button>
+        <button class="info" onclick="openMultiPage(${p.id}); event.stopPropagation();"
+                style="padding:4px 12px; font-size:12px;">
+          Multi-Page →
+        </button>
+        <button class="danger" onclick="promptDelete(${p.id}, '${esc(p.name ?? '')}'); event.stopPropagation();"
+                style="padding:4px 12px; font-size:12px; margin-top:4px;">
+          Delete
+        </button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function filterProjects(q) {
+  const lower = q.toLowerCase();
+  const filtered = allProjects.filter(p =>
+    (p.name ?? '').toLowerCase().includes(lower) ||
+    (p.project_number ?? '').toLowerCase().includes(lower) ||
+    (p.client ?? '').toLowerCase().includes(lower)
+  );
+  renderList(filtered);
+}
+
+// ── Select project (highlights + shows edit panel) ────────────────
+function selectProject(id) {
+  selectedId = id;
+  const p = allProjects.find(x => x.id === id);
+  if (!p) return;
+
+  // Highlight card
+  document.querySelectorAll('.project-card').forEach(c => c.classList.remove('active'));
+  document.getElementById(`card-${id}`)?.classList.add('active');
+
+  // Populate edit panel
+  document.getElementById('edit-name').value   = p.name            ?? '';
+  document.getElementById('edit-number').value = p.project_number  ?? '';
+  document.getElementById('edit-client').value = p.client          ?? '';
+  document.getElementById('edit-panel').style.display = 'block';
+  setStatus('edit-status', '');
+}
+
+// ── Create project ─────────────────────────────────────────────────
+async function createProject() {
+  const name   = document.getElementById('new-name').value.trim();
+  const number = document.getElementById('new-number').value.trim();
+  const client = document.getElementById('new-client').value.trim();
+  if (!name) { setStatus('create-status', 'Project name is required', 'err'); return; }
+
+  setStatus('create-status', 'Creating…', 'running');
+  try {
+    const r = await fetch(`${base()}/api/projects`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, project_number: number, client })
+    });
+    const j = await r.json();
+    if (!r.ok) { setStatus('create-status', 'Error: ' + j.error, 'err'); return; }
+
+    setStatus('create-status', `✓ Project ${j.id} created`, 'ok');
+    document.getElementById('new-name').value   = '';
+    document.getElementById('new-number').value = '';
+    document.getElementById('new-client').value = '';
+
+    // Save to localStorage and open
+    localStorage.setItem('mp_project_id',  j.id);
+    localStorage.setItem('mp_netlify_url', base());
+    await loadProjects();
+    selectProject(j.id);
+  } catch(e) { setStatus('create-status', 'Error: ' + e.message, 'err'); }
+}
+
+// ── Save edits ────────────────────────────────────────────────────
+async function saveProjectEdits() {
+  if (!selectedId) return;
+  setStatus('edit-status', 'Saving…', 'running');
+  try {
+    const r = await fetch(`${base()}/api/projects`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action:          'update_project',
+        id:              selectedId,
+        name:            document.getElementById('edit-name').value.trim(),
+        project_number:  document.getElementById('edit-number').value.trim(),
+        client:          document.getElementById('edit-client').value.trim()
+      })
+    });
+    const j = await r.json();
+    if (!r.ok) { setStatus('edit-status', 'Error: ' + j.error, 'err'); return; }
+    setStatus('edit-status', '✓ Saved', 'ok');
+    await loadProjects();
+    selectProject(selectedId);
+  } catch(e) { setStatus('edit-status', 'Error: ' + e.message, 'err'); }
+}
+
+// ── Open in pipeline ──────────────────────────────────────────────
+function openSinglePage(id) {
+  localStorage.setItem('mp_project_id',  id);
+  localStorage.setItem('mp_netlify_url', base());
+  localStorage.setItem('mp_origin', 'index.html');
+  window.location.href = `index.html?project_id=${id}`;
+}
+
+function openMultiPage(id) {
+  localStorage.setItem('mp_project_id',  id);
+  localStorage.setItem('mp_netlify_url', base());
+  localStorage.setItem('mp_origin', 'multi-page.html');
+  window.location.href = `multi-page.html?project_id=${id}`;
+}
+
+// ── Delete ────────────────────────────────────────────────────────
+function promptDelete(id, name) {
+  deleteTarget = id;
+  document.getElementById('confirm-msg').textContent =
+    `Delete "${name}" (ID: ${id})?\n\nThis permanently removes all pages, devices, demarc pins, and results. Cannot be undone.`;
+  document.getElementById('confirm-overlay').classList.add('open');
+}
+
+function closeConfirm() {
+  document.getElementById('confirm-overlay').classList.remove('open');
+  deleteTarget = null;
+}
+
+async function confirmDelete() {
+  if (!deleteTarget) return;
+  closeConfirm();
+  try {
+    const r = await fetch(`${base()}/api/projects`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'delete_project', id: deleteTarget })
+    });
+    if (r.ok) {
+      if (selectedId === deleteTarget) {
+        selectedId = null;
+        document.getElementById('edit-panel').style.display = 'none';
+      }
+      await loadProjects();
+    }
+  } catch(e) { alert('Delete error: ' + e.message); }
+}
+
+// ── Init ──────────────────────────────────────────────────────────
+(function init() {
+  const stored = localStorage.getItem('mp_netlify_url');
+  if (stored) document.getElementById('netlify-url').value = stored;
+  loadProjects();
+})();
+</script>
+</body>
+</html>

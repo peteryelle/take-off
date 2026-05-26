@@ -16,10 +16,18 @@ export default async function handler(req) {
 
   // ── GET — list projects ───────────────────────────────────────
   if (req.method === "GET") {
+    // Try the summary view first, fall back to base table
+    const { data: viewData, error: viewErr } = await supabase
+      .from("v_project_list")
+      .select("*");
+
+    if (!viewErr && viewData) return ok(viewData);
+
+    // Fallback: base table
     const { data, error } = await supabase
       .from("projects")
-      .select("id, name, number, client, pdf_filename, created_at")
-      .order("created_at", { ascending: false });
+      .select("id, name, project_number, client, pdf_filename, pdf_page_count, created_at, updated_at, last_run_at")
+      .order("updated_at", { ascending: false });
 
     if (error) return err(error.message, 500);
     return ok(data);

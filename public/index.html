@@ -186,16 +186,40 @@
   <a id="device-types-link" href="device-types.html" style="color:#f0c040;">⚙ Device Types</a>
 </p>
 
-<!-- ── STEP 1: PROJECT + CONFIG ─────────────────────────────────── -->
+<!-- ── STEP 1: PROJECT ──────────────────────────────────────────── -->
 <div class="section">
   <div class="section-title">1 · Project</div>
-  <label>Netlify base URL</label>
-  <input type="text" id="netlify-url" value="https://winquest-take-off.netlify.app">
-  <label>Project ID (leave blank to auto-create)</label>
-  <input type="text" id="project-id" placeholder="e.g. 1">
-  <label>Project name (used only when auto-creating)</label>
-  <input type="text" id="project-name" value="New Project">
-  <button class="info" id="btn-create-project">Create / Confirm Project</button>
+
+  <!-- Project card — shown when a project is loaded -->
+  <div id="project-card" style="display:none; padding:10px 14px; background:#0a0a0a;
+       border:1px solid #2a2a2a; border-radius:4px; margin-bottom:10px;">
+    <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px;">
+      <div>
+        <div id="project-card-name" style="font-size:16px; color:#f0c040; font-weight:bold;"></div>
+        <div id="project-card-meta" style="font-size:12px; color:#666; margin-top:3px;"></div>
+        <div id="project-card-file" style="font-size:11px; color:#555; margin-top:4px;"></div>
+      </div>
+      <div style="display:flex; gap:6px; flex-shrink:0;">
+        <a href="projects.html" style="background:#1e2d3a; border:1px solid #3a6a8a; color:#7ac0f0;
+           padding:5px 10px; border-radius:3px; font-size:12px; text-decoration:none; font-family:monospace;">
+          ⇄ Switch
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Fallback: manual ID entry if no project loaded -->
+  <div id="project-manual" style="display:none;">
+    <label>Netlify base URL</label>
+    <input type="text" id="netlify-url" value="https://winquest-take-off.netlify.app">
+    <label style="margin-top:8px;">Project ID</label>
+    <input type="text" id="project-id" placeholder="e.g. 1" style="width:80px;">
+    <button class="info" id="btn-create-project" style="margin-left:8px;">Confirm</button>
+    <div style="margin-top:6px;">
+      <a href="projects.html" style="color:#7ac0f0; font-size:12px;">← Go to Projects page to create or select</a>
+    </div>
+  </div>
+
   <div class="status" id="project-status">—</div>
 </div>
 
@@ -253,6 +277,39 @@
   </div>
 
   <div class="output-area" id="pass-b-output" style="display:none; margin-top:6px;">Output will appear here…</div>
+
+  <!-- Serving demarc pin -->
+  <div id="serving-demarc-section" style="display:none; margin-top:12px; padding:12px 14px;
+       background:#0a0a0a; border:1px solid #2a2a2a; border-radius:4px;">
+    <div style="font-size:11px; color:#666; text-transform:uppercase; letter-spacing:1px; margin-bottom:8px;">
+      Serving Demarc
+    </div>
+    <div style="display:flex; align-items:flex-start; gap:20px; flex-wrap:wrap;">
+      <div>
+        <div id="serving-demarc-label" style="font-size:15px; color:#f0c040; font-weight:bold;">—</div>
+        <div id="serving-demarc-coords" style="font-size:12px; color:#666; margin-top:3px;">not pinned</div>
+      </div>
+      <div>
+        <button class="amber" onclick="openServingDemarcModal()" style="padding:7px 16px; font-size:13px;">
+          📍 Set Serving Demarc Pin
+        </button>
+        <div style="font-size:11px; color:#555; margin-top:4px; max-width:300px; line-height:1.4;">
+          Override auto-detected location. All device distances measure to this pin.
+        </div>
+      </div>
+      <div>
+        <label style="font-size:12px; color:#888; display:block; margin-bottom:4px;">
+          Stub length (ft) — fixed distance added to all runs
+        </label>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <input type="number" id="serving-stub-ft" value="0" min="0" step="5"
+                 style="width:80px; font-size:13px; padding:5px 8px;">
+          <button class="info" onclick="saveServingDemarc()" style="padding:5px 12px; font-size:12px;">✓ Save</button>
+          <div class="status" id="serving-demarc-status"></div>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <div id="scale-override-section" style="margin-top:12px; display:none;">
     <hr class="divider">
@@ -340,6 +397,33 @@
   <div class="output-area" id="summary-output">Output will appear here…</div>
 </div>
 
+<!-- ── SERVING DEMARC PIN MODAL (single-page) ──────────────────── -->
+<div id="sp-pin-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.88);
+     z-index:200; flex-direction:column; align-items:center; justify-content:center;">
+  <div style="color:#f0c040; font-size:15px; font-weight:bold; margin-bottom:6px;" id="sp-pin-title">
+    Set Serving Demarc Pin
+  </div>
+  <div style="color:#aaa; font-size:13px; margin-bottom:10px;">
+    Scroll to zoom · Drag to pan · Click to place pin
+  </div>
+  <div style="display:flex; gap:8px; margin-bottom:8px; align-items:center;">
+    <button onclick="spPinZoom(1.5)" style="padding:3px 12px;">＋</button>
+    <button onclick="spPinZoom(1/1.5)" style="padding:3px 12px;">－</button>
+    <button onclick="spPinReset()" class="info" style="padding:3px 10px; font-size:11px;">Reset</button>
+    <span id="sp-pin-zoom" style="color:#888; font-size:12px;">100%</span>
+  </div>
+  <div id="sp-pin-wrap" style="overflow:hidden; width:88vw; height:64vh; position:relative;
+       cursor:crosshair; border:1px solid #333;">
+    <canvas id="sp-pin-canvas" style="position:absolute; top:0; left:0; transform-origin:0 0;"></canvas>
+  </div>
+  <div style="margin-top:10px; display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+    <div class="status" id="sp-pin-status"></div>
+    <span id="sp-pin-coords" style="color:#555; font-size:12px; font-family:monospace;"></span>
+    <button onclick="confirmServingPin()" style="padding:8px 20px; font-size:14px;">✓ Confirm</button>
+    <button class="danger" onclick="closeServingPinModal()" style="padding:8px 16px; font-size:14px;">✗ Cancel</button>
+  </div>
+</div>
+
 <script>
 // ── PDF.js setup ────────────────────────────────────────────────────
 pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -358,6 +442,26 @@ let projectId   = null;
 function base() { return document.getElementById('netlify-url').value.replace(/\/$/, ''); }
 
 // ── Session persistence ───────────────────────────────────────────────
+async function loadProjectCard(pid) {
+  try {
+    const r = await fetch(`${base()}/api/projects`);
+    const j = await r.json();
+    const p = Array.isArray(j) ? j.find(x => x.id === pid) : null;
+    if (!p) return;
+    document.getElementById('project-card-name').textContent = p.name ?? `Project ${pid}`;
+    const meta = [p.project_number, p.client].filter(Boolean).join(' · ');
+    document.getElementById('project-card-meta').textContent = meta || `ID: ${pid}`;
+    if (p.pdf_filename) {
+      document.getElementById('project-card-file').textContent = '📄 ' + p.pdf_filename;
+      document.getElementById('project-card-file').style.color = '#4a7a4a';
+      setStatus('pdf-status',
+        `⚠ Re-upload ${p.pdf_filename} to enable new scans`, '');
+    } else {
+      document.getElementById('project-card-file').textContent = '○ No PDF recorded yet';
+    }
+  } catch(e) { console.warn('loadProjectCard:', e); }
+}
+
 function saveSession() {
   try {
     sessionStorage.setItem('to_project_id',   projectId ?? '');
@@ -374,13 +478,21 @@ function restoreSession() {
     const pb   = sessionStorage.getItem('to_pass_b');
     const nurl = sessionStorage.getItem('to_netlify_url');
 
-    if (nurl) document.getElementById('netlify-url').value = nurl;
+    if (nurl) {
+      document.getElementById('netlify-url').value = nurl;
+    }
 
     if (pid) {
       projectId = parseInt(pid);
-      document.getElementById('project-id').value = pid;
-      setStatus('project-status', `Project ${pid} restored`, 'ok');
+      // Show project card, hide manual entry
+      document.getElementById('project-card').style.display  = 'block';
+      document.getElementById('project-manual').style.display = 'none';
+      setStatus('project-status', `Project ${pid} loaded`, 'ok');
       updateDeviceTypesLink();
+      // Load project details for card
+      loadProjectCard(parseInt(pid));
+    } else {
+      document.getElementById('project-manual').style.display = 'block';
     }
     if (pg)  {
       evalPage = parseInt(pg);
@@ -753,6 +865,21 @@ async function runPassB() {
     passBResult = j;
     saveSession();
     renderPassBSummary(j);
+    // Show serving demarc section
+    document.getElementById('serving-demarc-section').style.display = 'block';
+    // Pre-populate label from detected demarc
+    const detectedDemarc = j.demarcation;
+    if (detectedDemarc?.found) {
+      document.getElementById('serving-demarc-label').textContent =
+        detectedDemarc.label + ' (auto-detected)';
+      document.getElementById('serving-demarc-coords').textContent =
+        `Auto-detected at (${detectedDemarc.x?.toFixed(3)}, ${detectedDemarc.y?.toFixed(3)}) — click Set Pin to override`;
+      spPinXNorm = detectedDemarc.x;
+      spPinYNorm = detectedDemarc.y;
+    } else {
+      document.getElementById('serving-demarc-label').textContent = 'Not detected — place pin manually';
+      document.getElementById('serving-demarc-coords').textContent = 'Click Set Serving Demarc Pin below';
+    }
     setOutput('pass-b-output', j);
 
     const scale  = j.scale?.display_label || 'unknown';
@@ -1483,6 +1610,172 @@ function restorePassBSummaryIfAvailable() {
   if (passBResult) renderPassBSummary(passBResult);
 }
 
+// ── Serving demarc pin (single-page) ─────────────────────────────────
+let spPinZoomLevel = 1.0;
+let spPinPanX = 0, spPinPanY = 0;
+let spPinDragStart = null;
+let spPinCanvasW = 0, spPinCanvasH = 0;
+let spPinXNorm = null, spPinYNorm = null;
+let servingDemarcId = null;  // current saved demarc id
+
+function spPinApplyTransform() {
+  const cv = document.getElementById('sp-pin-canvas');
+  cv.style.transform = `translate(${spPinPanX}px,${spPinPanY}px) scale(${spPinZoomLevel})`;
+  document.getElementById('sp-pin-zoom').textContent = Math.round(spPinZoomLevel*100) + '%';
+  spRedrawPin();
+}
+
+function spPinZoom(factor) {
+  const wrap = document.getElementById('sp-pin-wrap');
+  const w = wrap.offsetWidth/2, h = wrap.offsetHeight/2;
+  spPinPanX = w - (w - spPinPanX)*factor;
+  spPinPanY = h - (h - spPinPanY)*factor;
+  spPinZoomLevel = Math.min(10, Math.max(0.3, spPinZoomLevel*factor));
+  spPinApplyTransform();
+}
+
+function spPinReset() {
+  spPinZoomLevel = 1.0; spPinPanX = 0; spPinPanY = 0;
+  spPinApplyTransform();
+}
+
+function spRedrawPin() {
+  const wrap = document.getElementById('sp-pin-wrap');
+  wrap.querySelectorAll('.sp-pin-dot').forEach(e => e.remove());
+  if (spPinXNorm == null) return;
+  const dot = document.createElement('div');
+  dot.className = 'sp-pin-dot';
+  dot.style.cssText = `position:absolute; width:16px; height:16px; border-radius:50%;
+    border:2px solid #f0c040; background:rgba(240,192,64,0.35);
+    transform:translate(-50%,-50%); pointer-events:none; z-index:10;`;
+  const cx = spPinXNorm * spPinCanvasW * spPinZoomLevel + spPinPanX;
+  const cy = spPinYNorm * spPinCanvasH * spPinZoomLevel + spPinPanY;
+  dot.style.left = cx + 'px'; dot.style.top = cy + 'px';
+  // crosshair center
+  const inner = document.createElement('div');
+  inner.style.cssText = 'position:absolute;top:50%;left:50%;width:4px;height:4px;background:#f0c040;border-radius:50%;transform:translate(-50%,-50%);';
+  dot.appendChild(inner);
+  wrap.appendChild(dot);
+}
+
+async function openServingDemarcModal() {
+  if (!pdfDoc) { alert('Load the PDF first'); return; }
+  const pg  = evalPage || 1;
+  const cv  = document.getElementById('sp-pin-canvas');
+  const wrap = document.getElementById('sp-pin-wrap');
+
+  document.getElementById('sp-pin-title').textContent =
+    `Set Serving Demarc — Page ${pg} · ${passBResult?.demarcation?.label ?? ''}`;
+
+  spPinZoomLevel = 1.0; spPinPanX = 0; spPinPanY = 0;
+
+  const pdfPage = await pdfDoc.getPage(pg);
+  const vp = pdfPage.getViewport({ scale: 2.5 });
+  cv.width = vp.width; cv.height = vp.height;
+  spPinCanvasW = vp.width; spPinCanvasH = vp.height;
+  await pdfPage.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+
+  const initScale = Math.min((wrap.offsetWidth || window.innerWidth*0.88) / vp.width, 1.0);
+  spPinZoomLevel = initScale;
+  spPinApplyTransform();
+
+  // Pre-load existing pin coords from Pass B demarc
+  const d = passBResult?.demarcation;
+  if (d?.found && spPinXNorm == null) {
+    spPinXNorm = d.x; spPinYNorm = d.y;
+    spRedrawPin();
+  }
+
+  // Click to place
+  cv.onclick = (e) => {
+    const r = cv.getBoundingClientRect();
+    spPinXNorm = (e.clientX - r.left) / spPinZoomLevel / spPinCanvasW;
+    spPinYNorm = (e.clientY - r.top)  / spPinZoomLevel / spPinCanvasH;
+    document.getElementById('sp-pin-coords').textContent =
+      `(${spPinXNorm.toFixed(3)}, ${spPinYNorm.toFixed(3)})`;
+    setStatus('sp-pin-status', '✓ Pin placed', 'ok');
+    spRedrawPin();
+  };
+
+  // Scroll zoom
+  wrap.onwheel = (e) => {
+    e.preventDefault();
+    const f = e.deltaY < 0 ? 1.15 : 1/1.15;
+    const wr = wrap.getBoundingClientRect();
+    spPinPanX = (e.clientX-wr.left) - ((e.clientX-wr.left) - spPinPanX)*f;
+    spPinPanY = (e.clientY-wr.top)  - ((e.clientY-wr.top)  - spPinPanY)*f;
+    spPinZoomLevel = Math.min(10, Math.max(0.3, spPinZoomLevel*f));
+    spPinApplyTransform();
+  };
+
+  // Drag pan
+  wrap.onmousedown = (e) => {
+    spPinDragStart = { x:e.clientX, y:e.clientY, px:spPinPanX, py:spPinPanY, moved:false };
+    wrap.style.cursor = 'grabbing';
+  };
+  wrap.onmousemove = (e) => {
+    if (!spPinDragStart || e.buttons!==1) return;
+    const dx = e.clientX-spPinDragStart.x, dy = e.clientY-spPinDragStart.y;
+    if (Math.abs(dx)+Math.abs(dy) > 5) spPinDragStart.moved = true;
+    if (spPinDragStart.moved) { spPinPanX=spPinDragStart.px+dx; spPinPanY=spPinDragStart.py+dy; spPinApplyTransform(); }
+  };
+  wrap.onmouseup = (e) => {
+    if (spPinDragStart?.moved) e.stopPropagation();
+    spPinDragStart = null; wrap.style.cursor = 'crosshair';
+  };
+
+  document.getElementById('sp-pin-modal').style.display = 'flex';
+}
+
+function closeServingPinModal() {
+  document.getElementById('sp-pin-modal').style.display = 'none';
+}
+
+async function confirmServingPin() {
+  if (spPinXNorm == null) { setStatus('sp-pin-status','Click the drawing first','err'); return; }
+  closeServingPinModal();
+  // Update the serving demarc display
+  const label = passBResult?.demarcation?.label ?? 'User pin';
+  document.getElementById('serving-demarc-label').textContent = label;
+  document.getElementById('serving-demarc-coords').textContent =
+    `Pin at (${spPinXNorm.toFixed(3)}, ${spPinYNorm.toFixed(3)})`;
+  setStatus('serving-demarc-status', 'Pin set — click ✓ Save to persist', '');
+}
+
+async function saveServingDemarc() {
+  if (!projectId || !passBResult?.page_id) {
+    setStatus('serving-demarc-status', 'Run Pass B first', 'err'); return;
+  }
+  const stubFt  = parseFloat(document.getElementById('serving-stub-ft').value) || 0;
+  const label   = passBResult?.demarcation?.label ?? 'user_pin';
+  const xNorm   = spPinXNorm ?? passBResult?.demarcation?.x ?? null;
+  const yNorm   = spPinYNorm ?? passBResult?.demarcation?.y ?? null;
+  setStatus('serving-demarc-status', 'Saving…', 'running');
+  try {
+    const r = await fetch(`${base()}/api/pass-demarc`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: projectId,
+        page_id:    passBResult.page_id,
+        name:       label,
+        source:     xNorm != null ? 'user_pin' : 'auto',
+        x_norm:     xNorm,
+        y_norm:     yNorm,
+        stub_ft:    stubFt,
+        note:       'serving demarc'
+      })
+    });
+    const j = await r.json();
+    if (r.ok) {
+      servingDemarcId = j.id;
+      setStatus('serving-demarc-status',
+        `✓ Saved — ${label}${stubFt ? ' + '+stubFt+'ft stub' : ''}`, 'ok');
+    } else {
+      setStatus('serving-demarc-status', 'Error: ' + j.error, 'err');
+    }
+  } catch(e) { setStatus('serving-demarc-status', e.message, 'err'); }
+}
+
 // ── Init defaults ────────────────────────────────────────────────────
 // Wire everything — script is at bottom of body so DOM is ready
 (function init() {
@@ -1496,7 +1789,18 @@ function restorePassBSummaryIfAvailable() {
   if (legendInput) legendInput.addEventListener('change', function() { loadLegendImages(this); });
 
   // Buttons
-  wire('btn-create-project', createProject);
+  wire('btn-create-project', async () => {
+    const id = document.getElementById('project-id')?.value?.trim();
+    if (!id) { setStatus('project-status', 'Enter a project ID', 'err'); return; }
+    projectId = parseInt(id);
+    sessionStorage.setItem('to_project_id', id);
+    sessionStorage.setItem('to_netlify_url', base());
+    document.getElementById('project-card').style.display  = 'block';
+    document.getElementById('project-manual').style.display = 'none';
+    updateDeviceTypesLink();
+    setStatus('project-status', `Project ${id} confirmed`, 'ok');
+    loadProjectCard(parseInt(id));
+  });
   wire('btn-pass-extract',   runPassExtract);
   wire('btn-summary',        fetchSummary);
   wire('btn-scale-apply',    () => applyScaleOverride(false));
