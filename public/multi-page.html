@@ -161,7 +161,19 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
 <!-- ── STEP 2: LOAD PDF + SELECT PAGES ──────────────────────────── -->
 <div class="section">
   <div class="section-title">2 · Load PDF + Select Pages</div>
-  <input type="file" id="pdf-file" accept=".pdf" onchange="loadPDF(this)">
+  <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+    <input type="file" id="pdf-file" accept=".pdf" onchange="loadPDF(this)" style="flex:1; min-width:0;">
+  </div>
+  <div id="pdf-filename-display" style="display:none; margin-top:6px; padding:6px 10px;
+       background:#0a1a0a; border:1px solid #2a4a2a; border-radius:3px;
+       font-size:13px; color:#7af07a; font-family:monospace; word-break:break-all;"></div>
+  <div id="pdf-reattach-bar" style="display:none; margin-top:6px; padding:8px 12px;
+       background:#1a1200; border:1px solid #4a4000; border-radius:3px;
+       font-size:12px; color:#f0c040;">
+    ⚠ <strong id="pdf-last-name"></strong> was used last session.
+    Re-upload it above to run new scans.
+    <span style="color:#666; margin-left:8px;">Existing results are loaded below.</span>
+  </div>
   <div class="status" id="pdf-status">No file loaded</div>
 
   <div style="margin-top:10px; display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
@@ -587,6 +599,14 @@ async function confirmProject() {
 }
 
 // ── Step 2: Load PDF ──────────────────────────────────────────────
+function showPDFFilename(name) {
+  const el = document.getElementById('pdf-filename-display');
+  if (!el || !name) return;
+  el.textContent = '📄 ' + name;
+  el.style.display = 'block';
+  document.getElementById('pdf-reattach-bar').style.display = 'none';
+}
+
 async function loadPDF(input) {
   const file = input.files[0];
   if (!file) return;
@@ -595,7 +615,9 @@ async function loadPDF(input) {
     const ab  = await file.arrayBuffer();
     pdfDoc    = await pdfjsLib.getDocument({ data: ab }).promise;
     totalPages = pdfDoc.numPages;
-    setStatus('pdf-status', `✓ ${totalPages} pages loaded — ${file.name}`, 'ok');
+    setStatus('pdf-status', `✓ ${totalPages} pages loaded`, 'ok');
+    showPDFFilename(file.name);
+    localStorage.setItem('mp_last_pdf_name', file.name);
     await renderThumbnails();
     // Save filename to project record
     if (projectId) {
@@ -1537,7 +1559,14 @@ async function loadProjectCard(pid) {
     if (p.pdf_filename) {
       document.getElementById('project-card-file').textContent = '📄 ' + p.pdf_filename;
       document.getElementById('project-card-file').style.color = '#4a7a4a';
-      setStatus('pdf-status', `⚠ Re-upload ${p.pdf_filename} to run new scans — results below are from last run`, '');
+      // Show re-attach bar in Step 2 with full filename
+      const reBar  = document.getElementById('pdf-reattach-bar');
+      const reName = document.getElementById('pdf-last-name');
+      if (reBar && reName) {
+        reName.textContent = p.pdf_filename;
+        reBar.style.display = 'block';
+      }
+      setStatus('pdf-status', '', '');
     }
   } catch(e) { console.warn('loadProjectCard:', e); }
 }
@@ -1570,7 +1599,8 @@ async function restoreFromSupabase(pid) {
               display_label: `${pg.scale_paper_in}" = ${pg.scale_real_ft}'`
             } : null,
             demarcation: pg.demarc_label
-              ? { found: true, label: pg.demarc_label, x: pg.demarc_x, y: pg.demarc_y }
+              ? { found: true, label: pg.demarc_label, x: pg.demarc_x, y: pg.demarc_y,
+                  is_host: pg.demarc_is_host ?? (pg.demarc_x != null) }
               : { found: false }
           }
         };
@@ -1653,13 +1683,24 @@ async function restoreFromSupabase(pid) {
       }
     }
 
-    const devTotal = Object.values(batchResults).reduce((s,r)=>s+(r.device_count??0),0);
+    const devTotal  = Object.values(batchResults).reduce((s,r)=>s+(r.device_count??0),0);
+    const pageCount = selectedPages.size || projPages.length;
+    const trCount   = Object.keys(trMap).length || demarcs.filter(d => !d.name?.includes('_exit_pg')).length;
     setStatus('project-status',
-      `✓ Project ${pid} restored — ${selectedPages.size} pages · ${Object.keys(trMap).length} TR rooms · ${devTotal} devices`,
+      `✓ Project ${pid} restored — ${pageCount} pages · ${trCount} TR rooms · ${devTotal} devices`,
       'ok');
 
-    if (selectedPages.size > 0)
-      setStatus('pdf-status', '⚠ Re-upload the PDF to run new scans — existing results shown above', '');
+    if (selectedPages.size > 0) {
+      // Show re-attach bar if we have a known filename from localStorage or project record
+      const savedName = localStorage.getItem('mp_last_pdf_name');
+      const reBar  = document.getElementById('pdf-reattach-bar');
+      const reName = document.getElementById('pdf-last-name');
+      if (savedName && reBar && reName && reBar.style.display === 'none') {
+        reName.textContent = savedName;
+        reBar.style.display = 'block';
+      }
+      setStatus('pdf-status', '', '');
+    }
 
   } catch(e) {
     setStatus('project-status', 'Restore error: ' + e.message, 'err');
