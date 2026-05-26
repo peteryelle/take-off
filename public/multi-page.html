@@ -267,35 +267,35 @@ function setStatus(id, msg, cls='') {
 
 // ── Session restore ───────────────────────────────────────────────
 (function init() {
-  // Restore from URL params first (returning from device-types.html)
+  localStorage.setItem('mp_origin', 'multi-page.html');
+
   const params = new URLSearchParams(window.location.search);
   const urlPid = params.get('project_id');
-  if (urlPid) sessionStorage.setItem('to_project_id', urlPid);
+  if (urlPid) localStorage.setItem('mp_project_id', urlPid);
 
-  const stored = urlPid ?? sessionStorage.getItem('to_project_id');
-  const nurl   = sessionStorage.getItem('to_netlify_url');
+  const stored = urlPid ?? localStorage.getItem('mp_project_id');
+  const nurl   = localStorage.getItem('mp_netlify_url');
+
+  if (nurl) document.getElementById('netlify-url').value = nurl;
+
   if (stored) {
     document.getElementById('project-id').value = stored;
     projectId = parseInt(stored);
     updateLinks();
-    // Auto-confirm project if restored
-    setStatus('project-status', `Project ${stored} restored`, 'ok');
     document.getElementById('device-type-bar').style.display = 'block';
+    restoreFromSupabase(parseInt(stored));
   }
-  if (nurl) document.getElementById('netlify-url').value = nurl;
-  sessionStorage.setItem('to_origin_page', 'multi-page.html');
 })();
-
 function updateLinks() {
   const link  = document.getElementById('dt-link');
   const link2 = document.getElementById('dt-link2');
   if (link  && projectId) {
     link.href  = `device-types.html?project_id=${projectId}`;
-    link.onclick  = () => sessionStorage.setItem('to_origin_page', 'multi-page.html');
+    link.onclick  = () => localStorage.setItem('mp_origin', 'multi-page.html');
   }
   if (link2 && projectId) {
     link2.href = `device-types.html?project_id=${projectId}`;
-    link2.onclick = () => sessionStorage.setItem('to_origin_page', 'multi-page.html');
+    link2.onclick = () => localStorage.setItem('mp_origin', 'multi-page.html');
   }
 }
 
@@ -379,7 +379,7 @@ async function confirmProject() {
     if (id) {
       projectId = parseInt(id);
       sessionStorage.setItem('to_project_id',  id);
-      sessionStorage.setItem('to_netlify_url', base());
+      localStorage.setItem('mp_netlify_url', base());
       setStatus('project-status', `✓ Project ${id} confirmed`, 'ok');
       document.getElementById('device-type-bar').style.display = 'block';
     } else {
@@ -390,7 +390,7 @@ async function confirmProject() {
       const j = await r.json();
       projectId = j.id;
       document.getElementById('project-id').value = j.id;
-      sessionStorage.setItem('to_project_id', j.id);
+      localStorage.setItem('mp_project_id', j.id);
       setStatus('project-status', `✓ Created project ${j.id}`, 'ok');
       document.getElementById('device-type-bar').style.display = 'block';
     }
@@ -900,7 +900,10 @@ async function runBatch() {
       const W = viewport.width, H = viewport.height;
       const textItems = [];
       for (const item of tContent.items) {
-        const s = item.str?.trim();
+        const raw = item.str?.trim();
+        if (!raw) continue;
+        // Strip non-ASCII chars (e.g. degree symbol ) before anchor matching
+        const s = raw.replace(/[^\x20-\x7E]/g, '').trim();
         if (!s || !anchorSet.has(s)) continue;
         const tx = item.transform[4], ty = item.transform[5];
         const fs = Math.abs(item.transform[3]);
@@ -1179,6 +1182,131 @@ function renderProjectTotal() {
 
   html += `</tbody></table>`;
   el.innerHTML = html;
+}
+
+// ── Full state restore from Supabase ─────────────────────────────
+async function restoreFromSupabase(pid) {
+  setStatus('project-status', `Restoring project ${pid}…`, 'running');
+  try {
+    const r = await fetch(`${base()}/api/takeoff-summary?project_id=${pid}`);
+    const j = await r.json();
+    if (!r.ok) { setStatus('project-status', 'Restore error: ' + j.error, 'err'); return; }
+
+    const projPages = j.project_pages ?? [];
+    const demarcs   = j.demarcs      ?? [];
+    const instances = j.device_instances ?? [];
+
+    // ── Restore selected pages ────────────────────────────────────
+    if (projPages.length) {
+      selectedPages = new Set(projPages.map(p => p.eval_page_num).filter(Boolean));
+      for (const pg of projPages) {
+        if (!pg.eval_page_num) continue;
+        pageCache[pg.eval_page_num] = {
+          pageId: pg.page_id,
+          passBResult: {
+            page_id:     pg.page_id,
+            sheet_title: pg.sheet_title ?? pg.drawing_number ?? `Page ${pg.eval_page_num}`,
+            scale: pg.scale_paper_in ? {
+              text: { paper_value: pg.scale_paper_in, paper_unit: 'in',
+                      real_value: pg.scale_real_ft, real_unit: 'ft' },
+              display_label: `${pg.scale_paper_in}" = ${pg.scale_real_ft}'`
+            } : null,
+            demarcation: pg.demarc_label
+              ? { found: true, label: pg.demarc_label, x: pg.demarc_x, y: pg.demarc_y }
+              : { found: false }
+          }
+        };
+      }
+      setStatus('selection-status', `${selectedPages.size} pages restored from Supabase`, 'ok');
+    }
+
+    // ── Restore TR map from demarcs ────────────────────────────────
+    trMap = {};
+    for (const d of demarcs) {
+      const isExit = d.name?.includes('_exit_pg');
+      if (isExit) {
+        const parts  = d.name.split('_exit_pg');
+        const trName = parts[0];
+        const pgNum  = parseInt(parts[1]);
+        if (trName && pgNum) {
+          trMap[trName] = trMap[trName] ?? { name: trName, pages: [], extra_pins: {} };
+          trMap[trName].extra_pins = trMap[trName].extra_pins ?? {};
+          trMap[trName].extra_pins[pgNum] = {
+            x_norm: d.x_norm, y_norm: d.y_norm,
+            stub_ft: d.stub_ft, demarc_id: d.id
+          };
+        }
+      } else {
+        trMap[d.name] = trMap[d.name] ?? {};
+        const pageForDemarc = projPages.find(p => p.page_id === d.page_id);
+        Object.assign(trMap[d.name], {
+          name:            d.name,
+          demarc_id:       d.id,
+          pin_x:           d.x_norm,   pin_y: d.y_norm,
+          demarc_x:        d.x_norm,   demarc_y: d.y_norm,
+          stub_ft:         d.stub_ft   ?? 0,
+          building:        d.building,
+          floor:           d.floor,
+          on_sheet:        d.source !== 'off_sheet',
+          status:          d.source !== 'off_sheet' ? 'on_sheet' : 'off_sheet',
+          demarc_page_num: pageForDemarc?.eval_page_num ?? null,
+          demarc_page_id:  d.page_id,
+          pages: projPages
+            .filter(p => p.tr_name === d.name)
+            .map(p => ({ eval_page_num: p.eval_page_num,
+                         building: p.building, floor: p.level ?? p.floor })),
+          extra_pins: trMap[d.name]?.extra_pins ?? {}
+        });
+      }
+    }
+
+    if (Object.keys(trMap).length) {
+      document.getElementById('tr-map-section').style.display = 'block';
+      renderTRMap(Object.values(trMap));
+    }
+
+    // ── Restore batch results ─────────────────────────────────────
+    if (instances.length) {
+      const byPage = {};
+      for (const inst of instances) {
+        const pg = projPages.find(p => p.page_id === inst.page_id);
+        const pgNum = pg?.eval_page_num;
+        if (!pgNum) continue;
+        if (!byPage[pgNum]) byPage[pgNum] = {
+          device_count: 0, by_type: {}, devices: [],
+          tia_violations: 0
+        };
+        byPage[pgNum].device_count++;
+        byPage[pgNum].devices.push(inst);
+        if (inst.tia_flag) byPage[pgNum].tia_violations++;
+        const k = inst.legend_id ?? String(inst.device_type_id);
+        byPage[pgNum].by_type[k] = byPage[pgNum].by_type[k]
+          ?? { legend_id: k, name: inst.name ?? k, count: 0, tia: 0 };
+        byPage[pgNum].by_type[k].count++;
+        if (inst.tia_flag) byPage[pgNum].by_type[k].tia++;
+      }
+      for (const [pgNum, data] of Object.entries(byPage)) {
+        data.by_type = Object.values(data.by_type);
+        batchResults[pgNum] = data;
+      }
+      if (Object.keys(batchResults).length) {
+        document.getElementById('results-section').style.display = 'block';
+        renderResults();
+      }
+    }
+
+    const devTotal = Object.values(batchResults).reduce((s,r)=>s+(r.device_count??0),0);
+    setStatus('project-status',
+      `✓ Project ${pid} restored — ${selectedPages.size} pages · ${Object.keys(trMap).length} TR rooms · ${devTotal} devices`,
+      'ok');
+
+    if (selectedPages.size > 0)
+      setStatus('pdf-status', '⚠ Re-upload the PDF to run new scans — existing results shown above', '');
+
+  } catch(e) {
+    setStatus('project-status', 'Restore error: ' + e.message, 'err');
+    console.error('restoreFromSupabase:', e);
+  }
 }
 </script>
 </body>

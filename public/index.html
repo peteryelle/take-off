@@ -1196,7 +1196,11 @@ async function getDeviceTextItems(pdfPage) {
   const items = [];
 
   for (const item of textContent.items) {
-    const str = item.str?.trim();
+    const raw = item.str?.trim();
+    if (!raw) continue;
+    // Strip non-printable/non-ASCII chars (e.g.  = degree symbol in Windows-1252)
+    // Allows "180" to match anchor "180"
+    const str = raw.replace(/[^\x20-\x7E]/g, '').trim();
     if (!str) continue;
     if (!anchorPatternSet.has(str)) continue;
 
