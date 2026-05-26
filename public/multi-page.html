@@ -335,6 +335,145 @@ function updateDemarcPage(trName, newPageNum) {
   renderTRMap(Object.values(trMap));
 }
 
+async function suggestAllExitPins(trName) {
+  const tr = trMap[trName];
+  if (!tr) return;
+
+  const servingX = tr.pin_x ?? tr.demarc_x;
+  const servingY = tr.pin_y ?? tr.demarc_y;
+
+  if (servingX == null) {
+    alert(`Set the serving demarc pin for ${trName} first.`);
+    return;
+  }
+
+  // Find all served pages that are NOT the demarc page and have no exit pin
+  const servedPages = (tr.pages ?? [])
+    .filter(p => p.eval_page_num !== tr.demarc_page_num);
+
+  if (!servedPages.length) {
+    alert(`No cross-floor pages to suggest for ${trName}.`);
+    return;
+  }
+
+  const missing  = servedPages.filter(p => !tr.extra_pins?.[p.eval_page_num]);
+  const existing = servedPages.filter(p =>  tr.extra_pins?.[p.eval_page_num]);
+
+  let msg = `Suggest exit pins for ${trName}:\n\n`;
+  msg += `Position: (${servingX.toFixed(3)}, ${servingY.toFixed(3)}) — from serving demarc\n`;
+  msg += `Floors: ${servedPages.map(p=>'pg'+p.eval_page_num).join(', ')}\n\n`;
+  if (missing.length)  msg += `Will SET ${missing.length} new pin(s)\n`;
+  if (existing.length) msg += `Will SKIP ${existing.length} already-pinned floor(s)\n`;
+  msg += `\n⚠ Backbone distance must be set separately per floor.\n`;
+  msg += `Assumes riser shaft at same plan position on all floors.`;
+
+  if (!confirm(msg)) return;
+
+  for (const pg of missing) {
+    const pinKey   = `${trName}_pg${pg.eval_page_num}`;
+    const jumperEl = document.getElementById(`jumper-${pinKey}`);
+    const stubFt   = parseFloat(jumperEl?.value ?? 0) || 0;
+    const pageId   = pageCache[pg.eval_page_num]?.pageId ?? null;
+
+    try {
+      const r = await fetch(`${base()}/api/pass-demarc`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project_id: projectId,
+          page_id:    pageId,
+          name:       `${trName}_exit_pg${pg.eval_page_num}`,
+          source:     'suggested',
+          x_norm:     servingX,
+          y_norm:     servingY,
+          stub_ft:    stubFt,
+          note:       `Suggested from ${trName} serving demarc`
+        })
+      });
+      const j = await r.json();
+      if (r.ok) {
+        if (!tr.extra_pins) tr.extra_pins = {};
+        tr.extra_pins[pg.eval_page_num] = {
+          x_norm: servingX, y_norm: servingY,
+          stub_ft: stubFt, demarc_id: j.id, source: 'suggested'
+        };
+      }
+    } catch(e) { console.error(`Suggest failed for pg${pg.eval_page_num}:`, e); }
+  }
+
+  renderTRMap(Object.values(trMap));
+}
+
+async function suggestExitPin(trName, pageNum) {
+  const tr = trMap[trName];
+  if (!tr) return;
+
+  // Get serving demarc coordinates
+  const servingX = tr.pin_x ?? tr.demarc_x;
+  const servingY = tr.pin_y ?? tr.demarc_y;
+
+  if (servingX == null || servingY == null) {
+    alert(`No serving demarc pin set for ${trName} yet.\nSet the serving demarc pin first, then suggest exit pins.`);
+    return;
+  }
+
+  const pageId   = pageCache[pageNum]?.pageId ?? null;
+  const pinKey   = `${trName}_pg${pageNum}`;
+  const jumperEl = document.getElementById(`jumper-${pinKey}`);
+  const stubFt   = parseFloat(jumperEl?.value ?? 0) || 0;
+
+  // Confirm with user — show what we're about to do
+  const confirmed = confirm(
+    `Set exit pin for pg${pageNum} (${tr.name})\n\n` +
+    `Position: (${servingX.toFixed(3)}, ${servingY.toFixed(3)})\n` +
+    `→ Same as serving demarc on pg${tr.demarc_page_num}\n\n` +
+    `This assumes the riser shaft is at the same plan position on both floors.\n` +
+    `You can adjust the pin manually afterwards if needed.\n\n` +
+    `Backbone distance (ft): ${stubFt || '⚠ not set — enter in the field first'}`
+  );
+  if (!confirmed) return;
+
+  try {
+    const pinName = `${trName}_exit_pg${pageNum}`;
+    const r = await fetch(`${base()}/api/pass-demarc`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: projectId,
+        page_id:    pageId,
+        name:       pinName,
+        source:     'suggested',
+        x_norm:     servingX,
+        y_norm:     servingY,
+        stub_ft:    stubFt,
+        note:       `Suggested from ${trName} serving demarc position`
+      })
+    });
+    const j = await r.json();
+    if (!r.ok) { alert('Save error: ' + j.error); return; }
+
+    // Store in trMap
+    if (!tr.extra_pins) tr.extra_pins = {};
+    tr.extra_pins[pageNum] = {
+      x_norm:   servingX,
+      y_norm:   servingY,
+      stub_ft:  stubFt,
+      demarc_id: j.id,
+      source:   'suggested'
+    };
+
+    // Refresh TR map to show pin set
+    renderTRMap(Object.values(trMap));
+
+    // Show a brief confirmation in the batch log if visible
+    const log = document.getElementById('batch-log');
+    if (log) {
+      log.innerHTML += `<div style="color:#7ac0f0;">⚡ Exit pin for ${trName} pg${pageNum} suggested from serving demarc (${servingX.toFixed(3)}, ${servingY.toFixed(3)})</div>`;
+    }
+
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
 function openCopyDevices() {
   const bar = document.getElementById('copy-devices-bar');
   bar.style.display = bar.style.display === 'none' ? 'block' : 'none';
@@ -589,10 +728,15 @@ function renderTRMap(trs) {
         ? '<span style="color:#555;">—</span>'
         : `<input type="number" id="jumper-${tr.name}" value="${tr.stub_ft ?? 0}" min="0" step="5" style="width:70px; background:#1a1a1a; border:1px solid #333; color:#e0e0e0; padding:3px 6px; border-radius:3px; font-size:11px;">`
       }</td>
-      <td>${isOn
-        ? `<button class="info" onclick="movePinModal('${tr.name}', ${tr.demarc_page_num})" style="padding:2px 8px; font-size:10px;">Move pin pg${tr.demarc_page_num}</button>`
-        : `<button class="amber" onclick="openPinModal('${tr.name}')" style="padding:2px 8px; font-size:10px;">Place Pin</button>`
-      }</td>`;
+      <td style="white-space:nowrap;">
+        ${isOn
+          ? `<button class="info" onclick="movePinModal('${tr.name}', ${tr.demarc_page_num})" style="padding:2px 8px; font-size:10px; display:block; margin-bottom:3px;">📍 Serving Demarc pg${tr.demarc_page_num}</button>
+             ${tr.pages?.length > 1
+               ? `<button onclick="suggestAllExitPins('${tr.name}')" style="padding:2px 8px; font-size:10px; display:block; background:#1a2a1a; border:1px solid #3a5a3a; color:#9af09a;">⚡ Suggest All Exit Pins</button>`
+               : ''}`
+          : `<button class="amber" onclick="openPinModal('${tr.name}')" style="padding:2px 8px; font-size:10px;">📍 Set Serving Demarc</button>`
+        }
+      </td>`;
     tbody.appendChild(tr_el);
 
     // Populate demarc page dropdown (nested template literals unreliable)
@@ -632,8 +776,17 @@ function renderTRMap(trs) {
                onchange="this.style.borderColor=(this.value>0?'#3a7a3a':'#7a5000'); this.style.color=(this.value>0?'#7af07a':'#f0c040')">
             <div style="font-size:11px; color:#666; margin-top:2px;">${(hasPin?.stub_ft ?? 0) > 0 ? hasPin.stub_ft + 'ft set' : 'enter distance'}</div>
           </td>
-          <td><button class="amber" onclick="openPinModal('${tr.name}', ${pg.eval_page_num})" 
-               style="padding:2px 8px; font-size:10px;">${hasPin ? 'Move' : 'Place Pin'} pg${pg.eval_page_num}</button></td>`;
+          <td style="white-space:nowrap;">
+            <button class="amber" onclick="openPinModal('${tr.name}', ${pg.eval_page_num})" 
+               style="padding:2px 8px; font-size:10px; margin-bottom:3px; display:block;">
+              ${hasPin ? '📍 Move' : '📍 Place'} Exit Pin pg${pg.eval_page_num}
+            </button>
+            <button class="info" onclick="suggestExitPin('${tr.name}', ${pg.eval_page_num})"
+               style="padding:2px 8px; font-size:10px; display:block;"
+               title="Copy serving demarc coordinates to this floor as exit pin">
+              ⚡ Suggest from ${tr.name}
+            </button>
+          </td>`;
         tbody.appendChild(subRow);
       }
     }
