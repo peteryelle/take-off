@@ -16,32 +16,110 @@ export default async function handler(req) {
   const supabase = getSupabase();
 
   // Run all queries in parallel
-  const [devicesRes, pagesRes, rollupRes, pageSummaryRes, violationsRes, flaggedRes] =
-    await Promise.all([
-      // Use slim fields by default to keep response small
-      // Pass C loads full description directly from DB when needed
-      supabase.from("device_types")
-        .select("id, legend_id, name, discipline, category, human_description, llm_description, text_anchors, example_image_base64")
-        .eq("project_id", project_id)
-        .order("legend_id"),
-      supabase.from("pages")
-        .select("id, pdf_page_number, sheet_title, scale_label, demarc_label, demarc_type, pass_b_complete")
-        .eq("project_id", project_id)
-        .order("pdf_page_number"),
-      supabase.from("v_project_rollup").select("*"),
-      supabase.from("v_page_summary").select("*"),
-      supabase.from("v_tia_violations").select("*"),
-      supabase.from("v_flagged").select("*")
-    ]);
+  const [
+    devicesRes, pagesRes, rollupRes, pageSummaryRes, violationsRes, flaggedRes,
+    projectPagesRes, demarcsRes, instancesRes
+  ] = await Promise.all([
+
+    // Device types — full fields needed for detection and restore
+    supabase.from("device_types")
+      .select("id, legend_id, name, discipline, category, human_description, llm_description, text_anchors, example_image_base64")
+      .eq("project_id", project_id)
+      .order("legend_id"),
+
+    // Pages — slim summary (used by existing single-page views)
+    supabase.from("pages")
+      .select("id, pdf_page_number, sheet_title, scale_label, demarc_label, demarc_type, pass_b_complete")
+      .eq("project_id", project_id)
+      .order("pdf_page_number"),
+
+    // Views
+    supabase.from("v_project_rollup").select("*"),
+    supabase.from("v_page_summary").select("*"),
+    supabase.from("v_tia_violations").select("*"),
+    supabase.from("v_flagged").select("*"),
+
+    // ── Restore fields — what multi-page restore function reads ───
+    // project_pages joined with pages for full page metadata
+    supabase.from("project_pages")
+      .select(`
+        eval_page_num,
+        page_id,
+        pages (
+          id, pdf_page_number, sheet_title, drawing_number,
+          building, level, area, tr_name,
+          scale_paper_in, scale_real_ft,
+          demarc_label, demarc_x, demarc_y, demarc_is_host,
+          demarc_type, demarc_source
+        )
+      `)
+      .eq("project_id", project_id)
+      .order("eval_page_num"),
+
+    // Demarcs — TR room pins and exit pins
+    supabase.from("demarcs")
+      .select("id, name, page_id, x_norm, y_norm, stub_ft, source, building, floor, area")
+      .eq("project_id", project_id)
+      .order("name"),
+
+    // Device instances — for batch result restore
+    supabase.from("device_instances")
+      .select(`
+        id, page_id, device_type_id, detection_method,
+        x_norm, y_norm, x_ft, y_ft,
+        raw_labels, data_ports, voice_ports,
+        port_count_data, port_count_voice,
+        run_length_ft, total_ft, tia_flag, tia_reason,
+        demarc_id, confidence,
+        device_types ( id, legend_id, name )
+      `)
+      .in("page_id",
+        // subquery: all page_ids for this project
+        (await supabase.from("pages").select("id").eq("project_id", project_id)).data?.map(p => p.id) ?? []
+      )
+  ]);
+
+  // Flatten project_pages rows — lift nested pages fields to top level
+  const projectPages = (projectPagesRes.data ?? []).map(pp => ({
+    eval_page_num:   pp.eval_page_num,
+    page_id:         pp.page_id,
+    sheet_title:     pp.pages?.sheet_title     ?? null,
+    drawing_number:  pp.pages?.drawing_number  ?? null,
+    building:        pp.pages?.building        ?? null,
+    level:           pp.pages?.level           ?? null,
+    area:            pp.pages?.area            ?? null,
+    tr_name:         pp.pages?.tr_name         ?? null,
+    scale_paper_in:  pp.pages?.scale_paper_in  ?? null,
+    scale_real_ft:   pp.pages?.scale_real_ft   ?? null,
+    demarc_label:    pp.pages?.demarc_label     ?? null,
+    demarc_x:        pp.pages?.demarc_x        ?? null,
+    demarc_y:        pp.pages?.demarc_y        ?? null,
+    demarc_is_host:  pp.pages?.demarc_is_host  ?? null,
+    demarc_type:     pp.pages?.demarc_type     ?? null,
+    demarc_source:   pp.pages?.demarc_source   ?? null,
+  }));
+
+  // Flatten device instances — lift nested device_types fields
+  const instances = (instancesRes.data ?? []).map(inst => ({
+    ...inst,
+    legend_id: inst.device_types?.legend_id ?? null,
+    name:      inst.device_types?.name      ?? null,
+    device_types: undefined   // strip nested object
+  }));
 
   return ok({
     project_id,
+    // Existing fields — unchanged for backward compat
     device_types:   devicesRes.data     ?? [],
     pages:          pagesRes.data       ?? [],
     rollup:         rollupRes.data      ?? [],
     page_summary:   pageSummaryRes.data ?? [],
     tia_violations: violationsRes.data  ?? [],
-    flagged:        flaggedRes.data     ?? []
+    flagged:        flaggedRes.data     ?? [],
+    // New restore fields
+    project_pages:    projectPages,
+    demarcs:          demarcsRes.data   ?? [],
+    device_instances: instances
   });
 }
 
