@@ -566,6 +566,17 @@ function openCopyDevices() {
   bar.style.display = bar.style.display === 'none' ? 'block' : 'none';
 }
 
+// Show the device-type bar in "ready" state with a short message
+function setDeviceTypeBarReady(msg) {
+  const bar = document.getElementById('device-type-bar');
+  if (!bar) return;
+  bar.style.display      = 'block';
+  bar.style.background   = '#001a00';
+  bar.style.borderColor  = '#007a00';
+  bar.style.opacity      = '1';
+  bar.innerHTML = `<span style="color:#7af07a; font-size:12px;">✓ ${msg}</span>`;
+}
+
 async function copyDeviceTypes() {
   const sourceId = document.getElementById('copy-from-id').value.trim();
   if (!sourceId) { setStatus('copy-dt-status', 'Enter source project ID', 'err'); return; }
@@ -582,14 +593,15 @@ async function copyDeviceTypes() {
     const j = await r.json();
     if (r.ok) {
       const msg = j.copied > 0
-        ? `✓ ${j.copied} device types copied from project ${sourceId}`
-        : `✓ All device types already exist in this project (${j.message ?? 'no new types needed'})`;
-      setStatus('copy-dt-status', msg, 'ok');
+        ? `✓ ${j.copied} device type${j.copied !== 1 ? 's' : ''} copied from Project ${sourceId}`
+        : `✓ Device types already configured — no changes needed`;
       document.getElementById('copy-devices-bar').style.display = 'none';
-      document.getElementById('device-type-bar').style.background = '#001a00';
-      document.getElementById('device-type-bar').style.borderColor = '#007a00';
-      document.getElementById('device-type-bar').innerHTML =
-        `<span style="color:#7af07a;">✓ Device types ready — ${msg}</span>`;
+      setDeviceTypeBarReady(msg);
+      // Auto-fade the bar after 6 seconds — it's transient confirmation
+      setTimeout(() => {
+        const bar = document.getElementById('device-type-bar');
+        if (bar) bar.style.opacity = '0.4';
+      }, 6000);
     } else {
       setStatus('copy-dt-status', 'Error: ' + (j.error ?? r.status), 'err');
     }
@@ -1764,12 +1776,23 @@ async function restoreFromSupabase(pid) {
       }
     }
 
-    const devTotal  = Object.values(batchResults).reduce((s,r)=>s+(r.device_count??0),0);
+    // Counts — use restored in-memory state; fall back to raw array lengths
+    // if batchResults wasn't populated (e.g. takeoff-summary returned no instances)
+    const devTotal  = Object.values(batchResults).reduce((s,r)=>s+(r.device_count??0),0)
+                      || instances.length;
     const pageCount = selectedPages.size || projPages.length;
-    const trCount   = Object.keys(trMap).length || demarcs.filter(d => !d.name?.includes('_exit_pg')).length;
+    const trCount   = Object.keys(trMap).length
+                      || demarcs.filter(d => !d.name?.includes('_exit_pg')).length;
     setStatus('project-status',
-      `✓ Project ${pid} restored — ${pageCount} pages · ${trCount} TR rooms · ${devTotal} devices`,
+      `✓ Project ${pid} restored — ${pageCount} page${pageCount !== 1 ? 's' : ''} · ${trCount} TR room${trCount !== 1 ? 's' : ''} · ${devTotal} device${devTotal !== 1 ? 's' : ''}`,
       'ok');
+
+    // Show device type bar in quiet ready state if types are configured.
+    // takeoff-summary already returns device_types — use j directly.
+    const dtCount = j.device_types?.length ?? 0;
+    if (dtCount > 0) {
+      setDeviceTypeBarReady(`${dtCount} device type${dtCount !== 1 ? 's' : ''} configured`);
+    }
 
     if (selectedPages.size > 0) {
       // Show re-attach bar if we have a known filename from localStorage or project record
