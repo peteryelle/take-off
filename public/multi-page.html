@@ -50,6 +50,13 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
 .tr-table td { padding: 8px 10px; border-bottom: 1px solid #1a1a1a; vertical-align: top; }
 
 /* ── TR Room Cards ── */
+.pa-row { border-bottom: 1px solid #111; }
+.pa-row:hover { background: #0a0a0a; }
+.pa-role-host { color:#7af07a; background:#0a1a0a; border:1px solid #2a4a2a; padding:2px 8px; border-radius:3px; font-size:11px; }
+.pa-role-served { color:#aaa; background:#111; border:1px solid #222; padding:2px 8px; border-radius:3px; font-size:11px; }
+.pa-role-offsheet { color:#f0c040; background:#1a1200; border:1px solid #4a4000; padding:2px 8px; border-radius:3px; font-size:11px; }
+.pa-role-split { color:#f07a40; background:#1a0e00; border:1px solid #4a2a00; padding:2px 8px; border-radius:3px; font-size:11px; }
+.pa-tr-select { background:#1a1a1a; border:1px solid #333; color:#eee; padding:3px 6px; border-radius:3px; font-size:12px; font-family:monospace; width:110px; }
 .tr-card { background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 6px; overflow: hidden; }
 .tr-card-header { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: #111; border-bottom: 1px solid #2a2a2a; }
 .tr-badge { font-size: 15px; font-weight: bold; color: #f0c040; letter-spacing: 1px; }
@@ -216,6 +223,29 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
       <span id="tr-summary-text" style="color:#aaa; flex:1;">—</span>
       <span id="tr-warnings-text" style="color:#f0c040;"></span>
     </div>
+    <!-- Page → TR Assignment Table -->
+    <div id="pa-table-wrap" style="display:none; margin-bottom:16px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+        <div style="font-size:12px; color:#888; text-transform:uppercase; letter-spacing:1px;">
+          Page → TR Assignment <span style="color:#555; text-transform:none; letter-spacing:0;">— review and correct before confirming</span>
+        </div>
+        <button class="info" onclick="collapseAssignmentTable()" id="pa-collapse-btn"
+          style="font-size:11px; padding:3px 10px;">▲ Hide</button>
+      </div>
+      <table style="width:100%; border-collapse:collapse; font-size:12px; font-family:monospace;">
+        <thead>
+          <tr style="border-bottom:1px solid #2a2a2a; color:#666; text-align:left;">
+            <th style="padding:6px 10px; width:52px;">PDF pg</th>
+            <th style="padding:6px 10px;">Drawing</th>
+            <th style="padding:6px 10px; width:130px;">TR Room</th>
+            <th style="padding:6px 10px; width:160px;">Role</th>
+          </tr>
+        </thead>
+        <tbody id="pa-tbody"></tbody>
+      </table>
+      <div id="pa-split-notes" style="margin-top:6px; font-size:11px; color:#888;"></div>
+    </div>
+
     <div id="tr-cards" style="display:flex; flex-direction:column; gap:12px; margin-top:4px;"></div>
     <div style="margin-top:14px;">
       <button class="amber" onclick="lockDemarcs()">✓ Confirm Demarc Config → Start Batch</button>
@@ -809,7 +839,171 @@ async function runDemarcScan() {
   trMap = {};
   for (const tr of (scanResult.tr_map ?? [])) trMap[tr.name] = tr;
 
+  renderPageAssignmentTable(scanResult.tr_map ?? []);
   renderTRMap(scanResult.tr_map ?? []);
+}
+
+// ── Page → TR Assignment Table ────────────────────────────────────
+// pageAssignments: { pageNum → { trName, secondaryTR, isHost, hostInDataset } }
+let pageAssignments = {};
+
+function buildPageAssignments(trs) {
+  pageAssignments = {};
+  const trNames = trs.map(t => t.name);
+
+  // Build reverse map: which TR owns each page
+  for (const tr of trs) {
+    for (const pg of (tr.pages ?? [])) {
+      const n = pg.eval_page_num;
+      if (!pageAssignments[n]) pageAssignments[n] = {};
+      pageAssignments[n].trName       = tr.name;
+      pageAssignments[n].isHost       = (tr.demarc_page_num === n && tr.on_sheet);
+      pageAssignments[n].hostInDataset = tr.on_sheet;
+    }
+  }
+
+  // Detect split pages: Pass B description may contain a second TR name
+  for (const pgNum of [...selectedPages]) {
+    const d = pageCache[pgNum]?.passBResult?.demarcation;
+    const desc = (d?.description ?? '') + ' ' + (d?.label ?? '');
+    const trPattern = /([A-Z]{1,4}\d{2,4}[A-Z]?)/g;
+    const found = [...new Set([...desc.matchAll(trPattern)].map(m => m[1]))].filter(n => trNames.includes(n));
+    if (found.length > 1 && pageAssignments[pgNum]) {
+      pageAssignments[pgNum].secondaryTR = found.find(n => n !== pageAssignments[pgNum].trName) ?? null;
+    }
+  }
+}
+
+function renderPageAssignmentTable(trs) {
+  buildPageAssignments(trs);
+  const wrap  = document.getElementById('pa-table-wrap');
+  const tbody = document.getElementById('pa-tbody');
+  const notes = document.getElementById('pa-split-notes');
+  if (!tbody) return;
+
+  wrap.style.display = 'block';
+  tbody.innerHTML    = '';
+  notes.innerHTML    = '';
+
+  const trNames   = trs.map(t => t.name);
+  const splitNotes = [];
+  const sortedPgs = [...selectedPages].sort((a,b) => a-b);
+
+  for (const pgNum of sortedPgs) {
+    const cache   = pageCache[pgNum] ?? {};
+    const assign  = pageAssignments[pgNum] ?? {};
+    const trName  = assign.trName ?? '—';
+    const isHost  = assign.isHost;
+    const hasHost = assign.hostInDataset;
+    const split   = assign.secondaryTR;
+
+    const raw   = cache.passBResult?.sheet_title ?? `Page ${pgNum}`;
+    // Trim "TELECOMMUNICATIONS PLAN" and long suffixes for display
+    const title = raw.replace(/[-–]\s*TELECOMMUNICATIONS.*/i, '').trim().replace(/[-–·]+$/, '').trim();
+
+    // Role
+    let roleHtml;
+    if (isHost) {
+      roleHtml = `<span class="pa-role-host">✓ host</span>`;
+    } else if (split) {
+      roleHtml = `<span class="pa-role-split">⚠ split</span>`;
+      splitNotes.push(`pg${pgNum} references both <strong>${trName}</strong> and <strong>${split}</strong>`);
+    } else if (!hasHost) {
+      roleHtml = `<span class="pa-role-offsheet">off-sheet TR</span>
+                  <div style="font-size:10px; color:#666; margin-top:2px;">host page not in dataset</div>`;
+    } else {
+      roleHtml = `<span class="pa-role-served">served</span>`;
+    }
+
+    // TR dropdown
+    const opts = trNames.map(n =>
+      `<option value="${n}" ${n === trName ? 'selected' : ''}>${n}</option>`
+    ).join('');
+    const dropdown = `<select class="pa-tr-select" onchange="reassignPage(${pgNum}, this.value)">
+      <option value="">— unassigned —</option>${opts}
+    </select>`;
+
+    const tr = document.createElement('tr');
+    tr.className = 'pa-row';
+    tr.id = `pa-row-${pgNum}`;
+    tr.innerHTML = `
+      <td style="padding:7px 10px; color:#f0c040; font-weight:bold;">pg${pgNum}</td>
+      <td style="padding:7px 10px; color:#aaa; max-width:320px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${raw}">${title}</td>
+      <td style="padding:7px 10px;">${dropdown}</td>
+      <td style="padding:7px 10px;" id="pa-role-${pgNum}">${roleHtml}</td>`;
+    tbody.appendChild(tr);
+  }
+
+  if (splitNotes.length) {
+    notes.innerHTML = '⚠ Split pages: ' + splitNotes.join(' · ');
+  }
+}
+
+function reassignPage(pgNum, newTR) {
+  // Move page from its current TR to newTR in trMap
+  const oldAssign = pageAssignments[pgNum];
+  const oldTR     = oldAssign?.trName;
+
+  if (oldTR && trMap[oldTR]) {
+    trMap[oldTR].pages = (trMap[oldTR].pages ?? []).filter(p => p.eval_page_num !== pgNum);
+    // If this was the host page, clear host status
+    if (trMap[oldTR].demarc_page_num === pgNum) {
+      trMap[oldTR].demarc_page_num = null;
+      trMap[oldTR].on_sheet        = false;
+      trMap[oldTR].host_confirmed  = false;
+      trMap[oldTR].pin_x = trMap[oldTR].pin_y = null;
+      trMap[oldTR].demarc_x = trMap[oldTR].demarc_y = null;
+    }
+  }
+
+  if (newTR && trMap[newTR]) {
+    const pg = pageCache[pgNum];
+    trMap[newTR].pages = trMap[newTR].pages ?? [];
+    if (!trMap[newTR].pages.find(p => p.eval_page_num === pgNum)) {
+      trMap[newTR].pages.push({
+        eval_page_num: pgNum,
+        building: pg?.passBResult?.building ?? null,
+        floor:    pg?.passBResult?.level    ?? null
+      });
+    }
+  }
+
+  // Update local assignment
+  if (pageAssignments[pgNum]) pageAssignments[pgNum].trName = newTR;
+
+  // Re-render TR cards (table stays, just cards update)
+  renderTRMap(Object.values(trMap));
+  // Update role badge for this row
+  updatePageRoleBadge(pgNum);
+}
+
+function updatePageRoleBadge(pgNum) {
+  const el     = document.getElementById(`pa-role-${pgNum}`);
+  if (!el) return;
+  const assign = pageAssignments[pgNum] ?? {};
+  const tr     = trMap[assign.trName];
+  const isHost = tr?.demarc_page_num === pgNum && tr?.on_sheet;
+  const hasHost = tr?.on_sheet;
+
+  if (isHost) {
+    el.innerHTML = `<span class="pa-role-host">✓ host</span>`;
+  } else if (!hasHost) {
+    el.innerHTML = `<span class="pa-role-offsheet">off-sheet TR</span>
+      <div style="font-size:10px; color:#666; margin-top:2px;">host page not in dataset</div>`;
+  } else {
+    el.innerHTML = `<span class="pa-role-served">served</span>`;
+  }
+}
+
+let paTableVisible = true;
+function collapseAssignmentTable() {
+  const tbody = document.getElementById('pa-tbody');
+  const btn   = document.getElementById('pa-collapse-btn');
+  const notes = document.getElementById('pa-split-notes');
+  paTableVisible = !paTableVisible;
+  tbody.style.display = paTableVisible ? '' : 'none';
+  if (notes) notes.style.display = paTableVisible ? '' : 'none';
+  btn.textContent = paTableVisible ? '▲ Hide' : '▼ Show';
 }
 
 function renderTRMap(trs) {
@@ -1743,6 +1937,7 @@ async function restoreFromSupabase(pid) {
 
     if (Object.keys(trMap).length) {
       document.getElementById('tr-map-section').style.display = 'block';
+      renderPageAssignmentTable(Object.values(trMap));
       renderTRMap(Object.values(trMap));
     }
 
