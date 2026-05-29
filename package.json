@@ -2,10 +2,12 @@
   "name": "take-off-functions",
   "version": "1.0.0",
   "description": "Schematic Device Analyzer — Netlify Functions",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",
-    "@supabase/supabase-js": "^2.49.0",
+    "@supabase/supabase-js": "^2.106.1",
     "sharp": "^0.34.0"
   }
 }
