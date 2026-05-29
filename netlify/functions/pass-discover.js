@@ -520,3 +520,5 @@ LOCATION: [where it typically appears — walls, ceiling grid, corridors, etc]
 LOOK-ALIKES: [other symbols it might be confused with, and how to tell them apart]
 
 Return only the structured description — no preamble, no explanation.`;
+
+export const config = { path: "/api/pass-discover" };
