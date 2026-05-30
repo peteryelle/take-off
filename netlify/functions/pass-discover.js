@@ -38,14 +38,18 @@ export default async function handler(req) {
 
   try {
     switch (action) {
-      case "scan_strip":    return await actionScanStrip(body);
-      case "reconcile":     return await actionReconcile(body);
-      case "store_session": return await actionStoreSession(body);
-      case "approve":       return await actionApprove(body);
-      case "reject":        return await actionReject(body);
-      case "skip":          return await actionSkip(body);
-      case "complete":      return await actionComplete(body);
-      case "load_session":  return await actionLoadSession(body);
+      case "read_legend":     return await actionReadLegend(body);
+      case "scan_for_symbol": return await actionScanForSymbol(body);
+      case "build_device":    return await actionBuildDevice(body);
+      case "scan_strip":      return await actionScanStrip(body);
+      case "detect_bounds":   return await actionDetectBounds(body);
+      case "reconcile":       return await actionReconcile(body);
+      case "store_session":   return await actionStoreSession(body);
+      case "approve":         return await actionApprove(body);
+      case "reject":          return await actionReject(body);
+      case "skip":            return await actionSkip(body);
+      case "complete":        return await actionComplete(body);
+      case "load_session":    return await actionLoadSession(body);
       default: return respond(400, { error: `Unknown action: ${action}` });
     }
   } catch (e) {
@@ -122,6 +126,60 @@ function normalizeAnchors(nearbyText) {
     }
   });
   return { primary: [...new Set(primary)], associated: [...new Set(associated)] };
+}
+
+// ═════════════════════════════════════════════════════════════════
+// ACTION: DETECT_BOUNDS
+// One call on a low-res thumbnail of the first sample page.
+// Returns y_start_frac and y_end_frac — the vertical extent of
+// the actual floor plan drawing area, excluding grid headers
+// at the top and title block at the bottom.
+// Used to calibrate strip slicing for this drawing set.
+// ═════════════════════════════════════════════════════════════════
+async function actionDetectBounds(body) {
+  const { page_image } = body;
+  if (!page_image) return respond(400, { error: "page_image required" });
+
+  const prompt = `This is a full engineering drawing sheet.
+
+The sheet has three vertical zones:
+1. TOP: A coordinate grid header row — circles containing letters (A, B, C, E, F, G...)
+   or numbers arranged in a horizontal row, with vertical lines extending downward.
+2. MIDDLE: The actual floor plan drawing content — walls, rooms, device symbols, dimensions.
+3. BOTTOM: A title block — company name, project title, sheet number, engineer stamps,
+   revision table. This is a structured table, usually dark-bordered.
+
+Identify exactly where the floor plan content area begins and ends vertically.
+
+Return ONLY valid JSON — no markdown, no preamble:
+{
+  "y_start_frac": 0.07,
+  "y_end_frac": 0.91,
+  "top_description": "what you found at the top",
+  "bottom_description": "what you found at the bottom"
+}
+
+y_start_frac: fraction from top of image where floor plan content begins (0.0 = very top)
+y_end_frac:   fraction from top of image where floor plan content ends (1.0 = very bottom)`;
+
+  try {
+    const raw    = await claudeVision([page_image], prompt, 400);
+    const parsed = parseJSON(raw);
+    // Clamp to reasonable range
+    const yStart = Math.max(0.02, Math.min(0.20, parsed.y_start_frac ?? 0.07));
+    const yEnd   = Math.max(0.70, Math.min(0.98, parsed.y_end_frac   ?? 0.91));
+    return respond(200, {
+      y_start_frac:      yStart,
+      y_end_frac:        yEnd,
+      top_description:   parsed.top_description   || "",
+      bottom_description:parsed.bottom_description|| ""
+    });
+  } catch (e) {
+    console.warn("detect_bounds failed:", e.message);
+    return respond(200, { y_start_frac: 0.07, y_end_frac: 0.91,
+      top_description: "detection failed — using defaults",
+      bottom_description: "" });
+  }
 }
 
 // ═════════════════════════════════════════════════════════════════
@@ -457,6 +515,208 @@ async function actionLoadSession(body) {
     .order("cluster_index");
   if (error) return respond(500, { error: error.message });
   return respond(200, { clusters: clusters || [] });
+}
+
+// ═════════════════════════════════════════════════════════════════
+// ACTION: READ_LEGEND
+// Reads the legend page and returns every device entry with its
+// approximate position in the legend image (for crop extraction).
+// This is the queue — it defines what CAN be detected.
+// ═════════════════════════════════════════════════════════════════
+async function actionReadLegend(body) {
+  const { legend_image } = body;
+  if (!legend_image) return respond(400, { error: "legend_image required" });
+
+  const prompt = `This is a legend page from a telecommunications engineering drawing set.
+
+Identify every device symbol entry shown in this legend.
+For each entry provide:
+1. name: the official device name as written in the legend
+2. short_description: what this device is (one sentence)
+3. category: one of — telecom | security | fire_alarm | av | nurse_call | osp | other
+4. x_frac: horizontal position of the symbol graphic (0.0=left, 1.0=right)
+5. y_frac: vertical position of the symbol graphic (0.0=top, 1.0=bottom)
+6. text_anchors: any code labels shown with the symbol (e.g. DD, DV, WAP, N, CAM)
+7. legend_description: the full description text as written in the legend
+
+Important: x_frac and y_frac should point to the SYMBOL GRAPHIC, not the text.
+
+Return ONLY valid JSON — no markdown, no preamble:
+{
+  "devices": [
+    {
+      "id": "LEG_001",
+      "name": "Data Outlet",
+      "short_description": "Wall-mounted Cat6A data outlet",
+      "category": "telecom",
+      "x_frac": 0.08,
+      "y_frac": 0.12,
+      "text_anchors": ["DD"],
+      "legend_description": "OUTLET DATA OR VOIP TELEPHONE..."
+    }
+  ]
+}`;
+
+  try {
+    const raw    = await claudeVision([legend_image], prompt, 4000);
+    const parsed = parseJSON(raw);
+    return respond(200, { devices: parsed.devices || [] });
+  } catch (e) {
+    return respond(500, { error: e.message });
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════
+// ACTION: SCAN_FOR_SYMBOL
+// Targeted strip scan for ONE specific symbol.
+// Takes a legend crop as the visual reference and finds every
+// instance of that symbol in the strip.
+// Far more reliable than autonomous "find all" scanning.
+// ═════════════════════════════════════════════════════════════════
+async function actionScanForSymbol(body) {
+  const { strip_image, symbol_crop, symbol_name, y_start_frac, y_end_frac } = body;
+  if (!strip_image)  return respond(400, { error: "strip_image required" });
+  if (!symbol_crop)  return respond(400, { error: "symbol_crop required" });
+
+  const yStart = y_start_frac || 0;
+  const yRange = (y_end_frac  || 1) - yStart;
+
+  const prompt = `The first image is a reference example of a "${symbol_name}" symbol from the engineering legend.
+The second image is a horizontal band from a telecommunications floor plan.
+
+Find every instance of THIS SPECIFIC symbol in the floor plan band.
+Match by shape, size, and visual characteristics — not by text label alone.
+
+For each instance found:
+- x_frac: horizontal position (0.0=left edge, 1.0=right edge)
+- y_frac_strip: vertical position within this band (0.0=top, 1.0=bottom)
+- nearby_text: device label text directly adjacent (e.g. DD2, DV1, WAP, N2)
+  Strip numeric suffix to base: DD2 → "DD", N2 → "N", WAP → "WAP"
+- visual_notes: any variation from the reference (rotated, smaller, partially obscured)
+
+If this symbol does not appear in this band, return an empty instances array.
+Do not return instances of other symbol types.
+
+Return ONLY valid JSON — no markdown, no preamble:
+{
+  "instances": [
+    {
+      "x_frac": 0.35,
+      "y_frac_strip": 0.4,
+      "nearby_text": ["DD"],
+      "visual_notes": "same as reference, pointing left"
+    }
+  ]
+}`;
+
+  try {
+    const raw    = await claudeVision([symbol_crop, strip_image], prompt, 1500);
+    const parsed = parseJSON(raw);
+
+    const instances = (parsed.instances || []).map(inst => ({
+      ...inst,
+      y_frac_full_page: yStart + ((inst.y_frac_strip ?? 0.5) * yRange)
+    }));
+
+    return respond(200, { instances });
+  } catch (e) {
+    console.warn("scan_for_symbol failed:", e.message);
+    return respond(200, { instances: [] }); // soft fail
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════
+// ACTION: BUILD_DEVICE
+// Takes all scan observations for one device type, generates
+// a calibrated llm_description from real drawing appearances,
+// and stores to device_types.
+// ═════════════════════════════════════════════════════════════════
+async function actionBuildDevice(body) {
+  const {
+    project_id, legend_entry, all_instances,
+    drawing_crop_base64, legend_crop_base64
+  } = body;
+
+  if (!project_id)   return respond(400, { error: "project_id required" });
+  if (!legend_entry) return respond(400, { error: "legend_entry required" });
+
+  // Aggregate text anchors from all observed instances
+  const allNearbyText = [...new Set(
+    all_instances.flatMap(i => i.nearby_text || [])
+  )];
+
+  // Collect visual variation notes
+  const visualNotes = all_instances
+    .map(i => i.visual_notes).filter(Boolean)
+    .slice(0, 8).join("; ");
+
+  const instanceCount = all_instances.length;
+
+  const descPrompt = `Write a visual detection description for an AI system that will find this device symbol on engineering drawings.
+
+Device: ${legend_entry.name}
+Legend description: ${legend_entry.legend_description || legend_entry.short_description || "not available"}
+
+Observed on actual floor plan drawings (${instanceCount} instance${instanceCount !== 1 ? "s" : ""} found):
+${visualNotes || "Symbol appears consistent with legend reference"}
+
+Text labels consistently found adjacent to this symbol: ${allNearbyText.join(", ") || "none observed"}
+
+Write in this exact format — be precise and calibrated to production drawing scale:
+
+SHAPE: [geometric shape]
+SIZE: [approximate size as drawn on floor plan]
+FILL: [solid/outline/hatched/etc]
+BORDER: [line weight and style]
+INTERNAL MARKS: [internal detail or none]
+TEXT NEARBY: [text labels consistently adjacent]
+LOCATION: [where it typically appears — walls, ceiling, corridors, etc]
+LOOK-ALIKES: [similar symbols and how to distinguish]
+
+Return only the structured description — no preamble, no explanation.`;
+
+  let llm_description = "";
+  try {
+    llm_description = (await claudeText(descPrompt, 800)).trim();
+  } catch (e) {
+    llm_description = `SHAPE: See legend\nTEXT NEARBY: ${allNearbyText.join(", ") || "none"}`;
+  }
+
+  // Normalize text anchors — prefer observed over legend
+  const anchorSource = allNearbyText.length
+    ? allNearbyText
+    : (legend_entry.text_anchors || []);
+  const text_anchors = normalizeAnchors(anchorSource);
+
+  // Upsert to device_types
+  const legend_id = legend_entry.id ||
+    `LEG_${legend_entry.name.replace(/[^A-Z0-9]/gi, "_").toUpperCase().slice(0, 30)}`;
+
+  const { data: dt, error: dtErr } = await supabase
+    .from("device_types")
+    .upsert({
+      project_id,
+      legend_id,
+      name:                 legend_entry.name,
+      human_description:    legend_entry.legend_description || legend_entry.short_description || "",
+      llm_description,
+      text_anchors,
+      example_image_base64: drawing_crop_base64 || legend_crop_base64 || null,
+      updated_at:           new Date()
+    }, { onConflict: "project_id,legend_id" })
+    .select("id")
+    .single();
+
+  if (dtErr) return respond(500, { error: "device_types upsert failed: " + dtErr.message });
+
+  return respond(200, {
+    device_type_id:  dt.id,
+    legend_id,
+    name:            legend_entry.name,
+    instances_found: instanceCount,
+    llm_description,
+    text_anchors
+  });
 }
 
 // ═════════════════════════════════════════════════════════════════
