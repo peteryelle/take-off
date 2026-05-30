@@ -1858,6 +1858,67 @@ async function loadProjectCard(pid) {
   } catch(e) { console.warn('loadProjectCard:', e); }
 }
 
+
+// ── Proximity deduplication ───────────────────────────────────────
+// Collapses device_instances that are within DEDUP_THRESH normalized
+// units of each other on the same page into one entry.
+// Handles DV#+DD#+N# stacked labels at the same outlet location.
+const DEDUP_THRESH = 0.012;
+
+function deduplicateInstances(instances) {
+  if (!instances?.length) return [];
+
+  // Group by page
+  const byPage = {};
+  instances.forEach(inst => {
+    const k = inst.page_id ?? 'unknown';
+    if (!byPage[k]) byPage[k] = [];
+    byPage[k].push(inst);
+  });
+
+  const result = [];
+
+  for (const pageInsts of Object.values(byPage)) {
+    const used = new Set();
+
+    for (let i = 0; i < pageInsts.length; i++) {
+      if (used.has(i)) continue;
+      const a = pageInsts[i];
+      const group = [a];
+      used.add(i);
+
+      for (let j = i + 1; j < pageInsts.length; j++) {
+        if (used.has(j)) continue;
+        const b = pageInsts[j];
+        const dx = Math.abs((a.x_norm ?? 0) - (b.x_norm ?? 0));
+        const dy = Math.abs((a.y_norm ?? 0) - (b.y_norm ?? 0));
+        if (dx <= DEDUP_THRESH && dy <= DEDUP_THRESH) {
+          group.push(b);
+          used.add(j);
+        }
+      }
+
+      // Pick the representative: prefer instance with more labels
+      const primary = group.reduce((best, inst) => {
+        const bestN = (best.data_ports?.length  ?? 0)
+                    + (best.voice_ports?.length ?? 0)
+                    + (best.node_labels?.length ?? 0);
+        const thisN = (inst.data_ports?.length  ?? 0)
+                    + (inst.voice_ports?.length ?? 0)
+                    + (inst.node_labels?.length ?? 0);
+        return thisN > bestN ? inst : best;
+      }, group[0]);
+
+      // Merge all raw_labels from the group
+      const allLabels = [...new Set(group.flatMap(g => g.raw_labels ?? []))];
+
+      result.push({ ...primary, raw_labels: allLabels });
+    }
+  }
+
+  return result;
+}
+
 // ── Full state restore from Supabase ─────────────────────────────
 async function restoreFromSupabase(pid) {
   setStatus('project-status', `Restoring project ${pid}…`, 'running');
@@ -1868,7 +1929,7 @@ async function restoreFromSupabase(pid) {
 
     const projPages = j.project_pages ?? [];
     const demarcs   = j.demarcs      ?? [];
-    const instances = j.device_instances ?? [];
+    const instances = deduplicateInstances(j.device_instances ?? []);
 
     // ── Restore selected pages ────────────────────────────────────
     if (projPages.length) {
