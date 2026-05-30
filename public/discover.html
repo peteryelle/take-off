@@ -688,111 +688,244 @@ function updateSelectionSummary() {
 // ── Render page hi-res for API ────────────────────────────────────
 async function renderPageHiRes(pageNum) {
   if (S.pageImages[pageNum]) return S.pageImages[pageNum];
-
   const page = await S.pdf.getPage(pageNum);
   const vp   = page.getViewport({ scale: 1.4 }); // ~100 DPI
   const cv   = document.createElement('canvas');
   cv.width  = vp.width;
   cv.height = vp.height;
   await page.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
-
-  // Convert to JPEG base64
   const b64 = cv.toDataURL('image/jpeg', 0.82).split(',')[1];
   S.pageImages[pageNum] = b64;
   return b64;
 }
 
-// ── Start discovery ───────────────────────────────────────────────
+// ── Strip slicing ─────────────────────────────────────────────────
+const NUM_STRIPS = 6;
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload  = () => resolve(img);
+    img.onerror = reject;
+    img.src = src;
+  });
+}
+
+async function slicePageIntoStrips(hiResB64) {
+  const img = await loadImage('data:image/jpeg;base64,' + hiResB64);
+  const stripH = Math.floor(img.height / NUM_STRIPS);
+  const strips = [];
+
+  for (let i = 0; i < NUM_STRIPS; i++) {
+    const yStart = i * stripH;
+    const yEnd   = (i === NUM_STRIPS - 1) ? img.height : (i + 1) * stripH;
+    const height = yEnd - yStart;
+
+    const cv = document.createElement('canvas');
+    cv.width  = img.width;
+    cv.height = height;
+    cv.getContext('2d').drawImage(img, 0, yStart, img.width, height, 0, 0, img.width, height);
+
+    strips.push({
+      index:       i,
+      y_start_frac: yStart / img.height,
+      y_end_frac:   yEnd   / img.height,
+      b64: cv.toDataURL('image/jpeg', 0.82).split(',')[1]
+    });
+  }
+  return strips;
+}
+
+// ── Crop extraction ───────────────────────────────────────────────
+async function extractCropsFromPositions(hiResB64, positions) {
+  const img  = await loadImage('data:image/jpeg;base64,' + hiResB64);
+  const CROP = 220;
+  const crops = {};
+
+  positions.forEach(pos => {
+    const cx = pos.x_frac * img.width;
+    const cy = pos.y_frac * img.height;
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = CROP;
+    const ctx = cv.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, CROP, CROP);
+    ctx.drawImage(img,
+      Math.max(0, cx - CROP/2), Math.max(0, cy - CROP/2),
+      CROP, CROP, 0, 0, CROP, CROP
+    );
+    crops[pos.cluster_id] = cv.toDataURL('image/jpeg', 0.88).split(',')[1];
+  });
+  return crops;
+}
+
+// ── Merge clusters across strips ──────────────────────────────────
+function mergeClusters(rawClusters) {
+  const map = {};
+  rawClusters.forEach(c => {
+    if (!map[c.cluster_id]) {
+      map[c.cluster_id] = { ...c };
+    } else {
+      // Accumulate count; keep first position
+      map[c.cluster_id].approximate_count =
+        (map[c.cluster_id].approximate_count || 0) + (c.approximate_count || 0);
+    }
+  });
+  return Object.values(map);
+}
+
+// ── Start discovery (strip-based orchestration) ───────────────────
 async function startDiscovery() {
   S.projectId = projId();
   if (!S.projectId) { setStatus('setup-status', 'Enter Project ID', 'err'); return; }
-
   S.baseUrl = base();
   showPhase('scanning');
 
-  // Step 1: Render pages
-  setStep('step-render', 'active');
-  setProgress(10);
-
   const sampleNums = [...S.samplePages].sort((a,b) => a-b);
   const legendNums = [...S.legendPages].sort((a,b) => a-b);
-  const sampleImgs = [];
-  const legendImgs = [];
 
-  for (const n of sampleNums) sampleImgs.push(await renderPageHiRes(n));
+  // ── Step 1: Render hi-res pages ───────────────────────────────
+  setStep('step-render', 'active');
+  setProgress(5);
+  document.getElementById('scan-label').textContent = 'Rendering pages…';
+
+  const sampleHiRes = [];
+  for (const n of sampleNums) sampleHiRes.push(await renderPageHiRes(n));
+  const legendImgs = [];
   for (const n of legendNums) legendImgs.push(await renderPageHiRes(n));
 
-  S.sampleImg = sampleImgs[0];
   S.legendImg = legendImgs[0];
 
   setStep('step-render', 'done');
-  setProgress(25);
+  setProgress(10);
 
-  // Step 2: Scan
+  // ── Step 2: Strip scan ────────────────────────────────────────
   setStep('step-scan', 'active');
-  document.getElementById('scan-label').textContent = 'Scanning floor plan for symbols…';
-  setProgress(40);
+  const allRawClusters = [];
+  const positions = {};  // cluster_id → { x_frac, y_frac } of first example found
 
-  // Step 3 + 4 happen inside pass-discover scan action
+  const totalStrips = sampleHiRes.length * NUM_STRIPS;
+  let stripsDone = 0;
+
+  for (let pi = 0; pi < sampleHiRes.length; pi++) {
+    const strips = await slicePageIntoStrips(sampleHiRes[pi]);
+
+    for (const strip of strips) {
+      const pct = 10 + Math.round(55 * stripsDone / totalStrips);
+      setProgress(pct);
+      document.getElementById('scan-label').textContent =
+        `Scanning floor plan — strip ${stripsDone + 1} of ${totalStrips}…`;
+
+      try {
+        const resp = await fetch(`${S.baseUrl}/api/pass-discover`, {
+          method:  'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            action:       'scan_strip',
+            project_id:   S.projectId,
+            strip_image:  strip.b64,
+            strip_index:  strip.index,
+            y_start_frac: strip.y_start_frac,
+            y_end_frac:   strip.y_end_frac
+          })
+        });
+        const data = await resp.json();
+        if (resp.ok && data.symbols?.length) {
+          data.symbols.forEach(sym => {
+            allRawClusters.push({ ...sym, source_page: pi, source_strip: strip.index });
+            // Store first example position per cluster
+            if (!positions[sym.cluster_id] && sym.x_frac != null && sym.y_frac_full_page != null) {
+              positions[sym.cluster_id] = { x_frac: sym.x_frac, y_frac: sym.y_frac_full_page };
+            }
+          });
+        }
+      } catch (e) {
+        console.warn(`Strip ${strip.index} scan failed:`, e.message);
+      }
+      stripsDone++;
+    }
+  }
+
+  setStep('step-scan', 'done');
+  setProgress(65);
+
+  // ── Step 3: Extract symbol crops ─────────────────────────────
+  document.getElementById('scan-label').textContent = 'Extracting symbol samples…';
+  const mergedClusters = mergeClusters(allRawClusters);
+
+  // Build position array for crop extraction
+  const positionArray = Object.entries(positions).map(([cluster_id, pos]) => ({
+    cluster_id, ...pos
+  }));
+  const crops = positionArray.length
+    ? await extractCropsFromPositions(sampleHiRes[0], positionArray)
+    : {};
+
+  // Store first sample page for review display
+  S.sampleImg = sampleHiRes[0];
+
+  setProgress(72);
+
+  // ── Step 4: Legend reconciliation ────────────────────────────
   setStep('step-legend', 'active');
   document.getElementById('scan-label').textContent = 'Reading legend…';
-  setProgress(55);
 
-  let data;
+  let legendMatches = [];
   try {
     const resp = await fetch(`${S.baseUrl}/api/pass-discover`, {
       method:  'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        action:              'scan',
-        project_id:          S.projectId,
-        sample_images:       sampleImgs,
-        legend_images:       legendImgs,
-        sample_page_numbers: sampleNums,
-        legend_page_numbers: legendNums
+        action:        'reconcile',
+        project_id:    S.projectId,
+        clusters:      mergedClusters,
+        legend_images: legendImgs
       })
     });
-    data = await resp.json();
-    if (!resp.ok) throw new Error(data.error || resp.status);
+    const data = await resp.json();
+    if (resp.ok) legendMatches = data.matches || [];
   } catch (e) {
-    showPhase('setup');
-    setStatus('setup-status', 'Scan failed: ' + e.message, 'err');
-    return;
+    console.warn('Reconciliation failed:', e.message);
   }
 
   setStep('step-legend', 'done');
-  setStep('step-build', 'active');
   setProgress(85);
 
-  S.sessionId = data.session_id;
+  // ── Step 5: Store session ─────────────────────────────────────
+  setStep('step-build', 'active');
+  document.getElementById('scan-label').textContent = 'Building device library…';
 
-  // Load clusters with DB ids via load_session
-  const loaded = await loadSession(S.sessionId);
-  if (!loaded) {
-    showPhase('setup');
-    setStatus('setup-status', 'Failed to load session clusters', 'err');
-    return;
-  }
-
-  setStep('step-build', 'done');
-  setProgress(100);
-
-  // Short pause then show review
-  setTimeout(() => setupReview(data.summary), 600);
-}
-
-async function loadSession(sessionId) {
+  let storeData;
   try {
     const resp = await fetch(`${S.baseUrl}/api/pass-discover`, {
       method:  'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ action: 'load_session', project_id: S.projectId, session_id: sessionId })
+      body: JSON.stringify({
+        action:              'store_session',
+        project_id:          S.projectId,
+        clusters:            mergedClusters,
+        legend_matches:      legendMatches,
+        crops,
+        legend_crop_b64:     legendImgs[0],
+        sample_page_numbers: sampleNums,
+        legend_page_numbers: legendNums
+      })
     });
-    const data = await resp.json();
-    if (!resp.ok) return false;
-    S.clusters = data.clusters || [];
-    return true;
-  } catch { return false; }
+    storeData = await resp.json();
+    if (!resp.ok) throw new Error(storeData.error || resp.status);
+  } catch (e) {
+    showPhase('setup');
+    setStatus('setup-status', 'Failed to store session: ' + e.message, 'err');
+    return;
+  }
+
+  S.sessionId = storeData.session_id;
+  S.clusters  = storeData.clusters || [];
+
+  setStep('step-build', 'done');
+  setProgress(100);
+
+  setTimeout(() => setupReview(storeData.summary), 600);
 }
 
 // ── Review setup ──────────────────────────────────────────────────
@@ -919,9 +1052,7 @@ function showReview(cluster) {
   document.getElementById('review-visual-desc').textContent =
     cluster.visual_description || '—';
   document.getElementById('review-match-reason').textContent =
-    cluster.match_reason
-      ? `Why this match: ${cluster.match_reason}`
-      : '';
+    cluster.match_reason ? `Why this match: ${cluster.match_reason}` : '';
 
   document.getElementById('review-name').textContent =
     cluster.legend_name || 'No match found';
@@ -929,13 +1060,18 @@ function showReview(cluster) {
     `~${cluster.approximate_count} found · ` +
     (cluster.nearby_text?.length ? `Labels: ${cluster.nearby_text.join(', ')}` : 'No text labels');
 
-  // Show images
-  if (S.sampleImg) {
-    document.getElementById('review-drawing-img').src = 'data:image/jpeg;base64,' + S.sampleImg;
-  }
-  if (S.legendImg) {
-    document.getElementById('review-legend-img').src = 'data:image/jpeg;base64,' + S.legendImg;
-  }
+  // Drawing: use tight crop if available, else full sample page
+  const drawingSrc = cluster.drawing_crop_base64
+    ? 'data:image/jpeg;base64,' + cluster.drawing_crop_base64
+    : (S.sampleImg ? 'data:image/jpeg;base64,' + S.sampleImg : '');
+  document.getElementById('review-drawing-img').src = drawingSrc;
+
+  // Legend: always full page (estimator reads name and finds it)
+  const legendSrc = cluster.legend_crop_base64
+    ? 'data:image/jpeg;base64,' + cluster.legend_crop_base64
+    : (S.legendImg ? 'data:image/jpeg;base64,' + S.legendImg : '');
+  document.getElementById('review-legend-img').src = legendSrc;
+
   setStatus('review-status', '');
 }
 
