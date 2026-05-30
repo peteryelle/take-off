@@ -38,6 +38,7 @@ export default async function handler(req) {
 
   try {
     switch (action) {
+      case "analyze_crop":    return await actionAnalyzeCrop(body);
       case "read_legend":     return await actionReadLegend(body);
       case "scan_for_symbol": return await actionScanForSymbol(body);
       case "build_device":    return await actionBuildDevice(body);
@@ -518,28 +519,106 @@ async function actionLoadSession(body) {
 }
 
 // ═════════════════════════════════════════════════════════════════
+// ACTION: ANALYZE_CROP
+// Takes a crop the estimator drew on the floor plan.
+// Pass 1: describe the symbol visually.
+// Pass 2: match to legend for the official name.
+// Returns both so the estimator can confirm.
+// ═════════════════════════════════════════════════════════════════
+async function actionAnalyzeCrop(body) {
+  const { crop_image, legend_image } = body;
+  if (!crop_image) return respond(400, { error: "crop_image required" });
+
+  // Pass 1 — describe the symbol from the crop
+  const descPrompt = `This is a cropped region from a telecommunications engineering floor plan.
+An estimator selected this area because it contains a device symbol they want to count.
+
+Describe what you see:
+1. The exact shape, fill, border, and size of the device symbol
+2. Any text labels visible directly next to the symbol (DD2, DV1, WAP, N2, etc.)
+3. What type of device this appears to be
+
+Return ONLY valid JSON — no markdown:
+{
+  "visual_description": "precise description of the symbol shape and appearance",
+  "nearby_text": ["DD"],
+  "device_guess": "informal name e.g. data outlet, WAP, camera"
+}`;
+
+  let visual_description = "", nearby_text = [], device_guess = "";
+  try {
+    const raw    = await claudeVision([crop_image], descPrompt, 600);
+    const parsed = parseJSON(raw);
+    visual_description = parsed.visual_description || "";
+    nearby_text        = parsed.nearby_text        || [];
+    device_guess       = parsed.device_guess       || "";
+  } catch (e) { console.warn("Crop description failed:", e.message); }
+
+  // Pass 2 — match to legend (if legend provided)
+  let legend_name = null, legend_description = "", match_confidence = "low", match_reason = "";
+  if (legend_image && visual_description) {
+    const matchPrompt = `The first image is a device symbol selected directly from a floor plan drawing.
+The second image is the legend page for the same drawing set.
+
+Find the legend entry that best matches this symbol.
+
+Return ONLY valid JSON — no markdown:
+{
+  "legend_name": "exact name as written in legend",
+  "legend_description": "description from legend",
+  "match_confidence": "high|medium|low",
+  "match_reason": "one sentence"
+}
+
+If no match found, set legend_name to null and match_confidence to "low".`;
+
+    try {
+      const raw    = await claudeVision([crop_image, legend_image], matchPrompt, 600);
+      const parsed = parseJSON(raw);
+      legend_name        = parsed.legend_name        || null;
+      legend_description = parsed.legend_description || "";
+      match_confidence   = parsed.match_confidence   || "low";
+      match_reason       = parsed.match_reason       || "";
+    } catch (e) { console.warn("Legend match failed:", e.message); }
+  }
+
+  return respond(200, {
+    visual_description, nearby_text, device_guess,
+    legend_name, legend_description, match_confidence, match_reason
+  });
+}
+
+// ═════════════════════════════════════════════════════════════════
 // ACTION: READ_LEGEND
 // Reads the legend page and returns every device entry with its
 // approximate position in the legend image (for crop extraction).
 // This is the queue — it defines what CAN be detected.
 // ═════════════════════════════════════════════════════════════════
 async function actionReadLegend(body) {
-  const { legend_image } = body;
+  const { legend_image, scope } = body;
   if (!legend_image) return respond(400, { error: "legend_image required" });
+
+  const scopeText = scope || "telecom devices";
 
   const prompt = `This is a legend page from a telecommunications engineering drawing set.
 
-Identify every device symbol entry shown in this legend.
-For each entry provide:
-1. name: the official device name as written in the legend
-2. short_description: what this device is (one sentence)
+The estimator needs to count: ${scopeText}
+
+Find the 3-6 legend entries that best match what the estimator needs.
+Do NOT return fire alarm devices, section markers, detail references, or other unrelated symbols
+unless explicitly requested.
+
+For each matching entry provide:
+1. name: official device name as written in the legend
+2. short_description: one sentence describing the device
 3. category: one of — telecom | security | fire_alarm | av | nurse_call | osp | other
-4. x_frac: horizontal position of the symbol graphic (0.0=left, 1.0=right)
-5. y_frac: vertical position of the symbol graphic (0.0=top, 1.0=bottom)
-6. text_anchors: any code labels shown with the symbol (e.g. DD, DV, WAP, N, CAM)
+4. x_frac: horizontal position of the SYMBOL GRAPHIC (0.0=left, 1.0=right)
+5. y_frac: vertical position of the SYMBOL GRAPHIC (0.0=top, 1.0=bottom)
+6. text_anchors: code labels shown with the symbol (e.g. DD, DV, WAP, N)
 7. legend_description: the full description text as written in the legend
 
-Important: x_frac and y_frac should point to the SYMBOL GRAPHIC, not the text.
+Focus on x_frac / y_frac pointing to the actual drawn symbol, not the text description.
+Return at most 6 entries — only the most relevant matches.
 
 Return ONLY valid JSON — no markdown, no preamble:
 {
@@ -558,9 +637,9 @@ Return ONLY valid JSON — no markdown, no preamble:
 }`;
 
   try {
-    const raw    = await claudeVision([legend_image], prompt, 4000);
+    const raw    = await claudeVision([legend_image], prompt, 3000);
     const parsed = parseJSON(raw);
-    return respond(200, { devices: parsed.devices || [] });
+    return respond(200, { devices: (parsed.devices || []).slice(0, 6) });
   } catch (e) {
     return respond(500, { error: e.message });
   }

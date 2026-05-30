@@ -8,657 +8,643 @@
 <script>pdfjsLib.GlobalWorkerOptions.workerSrc =
   'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
 <style>
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: monospace; background: #0d0d0d; color: #e0e0e0; padding: 20px; font-size: 13px; }
-h1  { color: #f0c040; font-size: 16px; margin-bottom: 4px; letter-spacing: 2px; text-transform: uppercase; }
-h2  { color: #f0c040; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 12px; }
-a   { color: #7ac0f0; text-decoration: none; }
-.subtitle { color: #666; font-size: 11px; margin-bottom: 20px; }
+* { box-sizing:border-box; margin:0; padding:0; }
+body { font-family:monospace; background:#0d0d0d; color:#e0e0e0; font-size:13px; }
+h1  { color:#f0c040; font-size:16px; letter-spacing:2px; text-transform:uppercase; }
+h2  { color:#f0c040; font-size:11px; letter-spacing:1px; text-transform:uppercase; margin-bottom:10px; }
+a   { color:#7ac0f0; text-decoration:none; }
 
-.config-bar { display:flex; gap:10px; align-items:center; background:#111; border:1px solid #2a2a2a; border-radius:4px; padding:10px 14px; margin-bottom:16px; flex-wrap:wrap; }
-.config-bar label { color:#888; font-size:11px; margin-right:4px; }
-input[type="text"], input[type="number"] { background:#1a1a1a; border:1px solid #333; color:#e0e0e0; padding:5px 8px; border-radius:3px; font-family:monospace; font-size:12px; width:120px; }
+/* layout */
+.top-bar { padding:16px 20px 8px; border-bottom:1px solid #1e1e1e; }
+.subtitle { color:#555; font-size:11px; margin-top:3px; }
+.config-bar { display:flex; gap:10px; align-items:center; padding:8px 20px;
+              background:#0a0a0a; border-bottom:1px solid #1e1e1e; flex-wrap:wrap; }
+.config-bar label { color:#666; font-size:11px; }
+input[type="text"],input[type="number"] { background:#111; border:1px solid #2a2a2a;
+  color:#e0e0e0; padding:4px 8px; border-radius:3px; font-family:monospace; font-size:12px; }
 
-button { background:#1e3a1e; border:1px solid #3a7a3a; color:#7af07a; padding:6px 14px; border-radius:3px; cursor:pointer; font-family:monospace; font-size:12px; transition:background 0.15s; white-space:nowrap; }
-button:hover { background:#2a4a2a; }
+/* buttons */
+button { background:#1e3a1e; border:1px solid #3a7a3a; color:#7af07a; padding:5px 12px;
+         border-radius:3px; cursor:pointer; font-family:monospace; font-size:12px;
+         transition:background 0.12s; white-space:nowrap; }
+button:hover  { background:#2a4a2a; }
 button:disabled { opacity:0.3; cursor:not-allowed; }
-button.amber { background:#2a2000; border-color:#7a6000; color:#f0c040; }
+button.amber  { background:#2a2000; border-color:#6a5000; color:#f0c040; }
 button.amber:hover { background:#332800; }
 button.danger { background:#3a1e1e; border-color:#7a3a3a; color:#f07a7a; }
-button.large  { padding:10px 24px; font-size:13px; }
+button.danger:hover { background:#4a2020; }
+button.lg { padding:8px 20px; font-size:13px; }
 
-.status { font-size:11px; color:#aaa; min-height:16px; }
+.status { font-size:11px; color:#666; }
 .status.ok  { color:#7af07a; }
 .status.err { color:#f07a7a; }
 .status.run { color:#f0c040; }
 
-.progress-bar { height:3px; background:#1a1a1a; border-radius:2px; margin:8px 0; }
-.progress-bar .fill { height:100%; background:#f0c040; border-radius:2px; transition:width 0.4s ease; }
+/* phases */
+.phase { display:none; }
+.phase.active { display:block; }
 
-.section { background:#111; border:1px solid #2a2a2a; border-radius:4px; padding:16px; margin-bottom:16px; }
-
-.upload-zone { border:1px dashed #444; border-radius:4px; padding:24px; text-align:center; cursor:pointer; color:#666; font-size:11px; transition:border-color 0.15s; margin-bottom:12px; }
-.upload-zone:hover { border-color:#888; }
+/* setup phase */
+.setup-body { padding:20px; max-width:720px; }
+.card { background:#111; border:1px solid #2a2a2a; border-radius:4px; padding:16px; margin-bottom:14px; }
+.upload-zone { border:1px dashed #3a3a3a; border-radius:4px; padding:28px; text-align:center;
+               cursor:pointer; color:#555; font-size:12px; transition:border-color 0.15s; }
+.upload-zone:hover { border-color:#666; }
 .upload-zone.loaded { border-color:#3a7a3a; color:#7af07a; }
 
-.page-grid { display:flex; flex-wrap:wrap; gap:8px; max-height:260px; overflow-y:auto; padding:8px; background:#0a0a0a; border:1px solid #1e1e1e; border-radius:4px; margin-bottom:12px; }
-.page-thumb { position:relative; cursor:pointer; border:2px solid #222; border-radius:3px; transition:border-color 0.15s; background:#000; }
-.page-thumb canvas { display:block; }
-.page-thumb .page-num { position:absolute; bottom:0; left:0; right:0; background:rgba(0,0,0,0.7); color:#888; font-size:9px; text-align:center; padding:2px; }
-.page-thumb.sample { border-color:#3a7a3a; }
-.page-thumb.sample .page-num { background:#1e3a1e; color:#7af07a; }
-.page-thumb.legend { border-color:#7a6000; }
-.page-thumb.legend .page-num { background:#2a2000; color:#f0c040; }
-.page-thumb .badge { position:absolute; top:2px; right:2px; font-size:9px; padding:1px 4px; border-radius:2px; font-weight:bold; }
-.page-thumb.sample .badge { background:#3a7a3a; color:#7af07a; }
-.page-thumb.legend .badge { background:#7a6000; color:#f0c040; }
-
-.page-legend { display:flex; gap:16px; font-size:10px; color:#666; margin-bottom:8px; }
+.page-legend { display:flex; gap:14px; font-size:10px; color:#555; margin-bottom:8px; }
 .page-legend span { display:flex; align-items:center; gap:4px; }
-.dot { width:8px; height:8px; border-radius:1px; }
-.dot.sample { background:#3a7a3a; border:1px solid #7af07a; }
-.dot.legend-dot { background:#2a2000; border:1px solid #f0c040; }
+.dot { width:7px; height:7px; border-radius:1px; }
+.dot-fp  { background:#1e3a1e; border:1px solid #3a7a3a; }
+.dot-leg { background:#2a2000; border:1px solid #6a5000; }
 
-/* scanning */
-.scan-status { text-align:center; padding:40px 20px; }
-.scan-label  { font-size:14px; color:#f0c040; margin-bottom:8px; letter-spacing:1px; }
+.thumb-grid { display:flex; flex-wrap:wrap; gap:6px; max-height:220px; overflow-y:auto;
+              padding:8px; background:#0a0a0a; border:1px solid #1a1a1a; border-radius:4px; margin-bottom:10px; }
+.thumb { position:relative; cursor:pointer; border:2px solid #1a1a1a; border-radius:3px; background:#000; }
+.thumb canvas { display:block; }
+.thumb .pnum { position:absolute; bottom:0; left:0; right:0; background:rgba(0,0,0,.75);
+               color:#666; font-size:9px; text-align:center; padding:1px; }
+.thumb.fp  { border-color:#3a7a3a; } .thumb.fp  .pnum { color:#7af07a; background:#0d200d; }
+.thumb.leg { border-color:#6a5000; } .thumb.leg .pnum { color:#f0c040; background:#1a1000; }
+.badge { position:absolute; top:2px; right:2px; font-size:9px; padding:1px 4px;
+         border-radius:2px; font-weight:bold; }
+.thumb.fp  .badge { background:#3a7a3a; color:#7af07a; }
+.thumb.leg .badge { background:#6a5000; color:#f0c040; }
 
-/* legend checklist */
-.cat-tabs { display:flex; gap:4px; margin-bottom:12px; flex-wrap:wrap; }
-.cat-tab  { padding:4px 12px; border-radius:3px; cursor:pointer; font-size:11px;
-            background:#1a1a1a; border:1px solid #333; color:#888; }
-.cat-tab.active { background:#1e3a1e; border-color:#3a7a3a; color:#7af07a; }
+/* crop phase — two column */
+.crop-layout { display:grid; grid-template-columns:1fr 320px; height:calc(100vh - 90px); overflow:hidden; }
 
-.device-checklist { display:flex; flex-direction:column; gap:4px; max-height:420px; overflow-y:auto; margin-bottom:14px; }
-.device-row { display:flex; align-items:center; gap:10px; padding:7px 10px;
-              background:#0a0a0a; border:1px solid #1e1e1e; border-radius:3px;
-              cursor:pointer; transition:border-color 0.15s; }
-.device-row:hover { border-color:#333; }
-.device-row.checked { border-color:#2a3a2a; background:#0d160d; }
-.device-row input[type="checkbox"] { accent-color:#7af07a; width:14px; height:14px; flex-shrink:0; cursor:pointer; }
-.device-crop { width:40px; height:40px; object-fit:contain; background:#fff; border-radius:2px; flex-shrink:0; }
-.device-crop.empty { background:#1a1a1a; border:1px solid #2a2a2a; }
-.device-info { flex:1; min-width:0; }
-.device-name { font-size:11px; color:#e0e0e0; font-weight:bold; }
-.device-desc { font-size:10px; color:#555; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.device-cat  { font-size:9px; color:#3a6a3a; background:#0d1a0d; border:1px solid #1a3a1a;
-               border-radius:2px; padding:1px 5px; flex-shrink:0; }
-.device-anchors { display:flex; gap:2px; flex-shrink:0; }
-.anchor-pill { background:#1a2a1a; border:1px solid #2a4a2a; color:#7af07a;
-               border-radius:2px; padding:1px 5px; font-size:9px; }
+/* left: floor plan viewer */
+.viewer-col { display:flex; flex-direction:column; border-right:1px solid #1e1e1e; overflow:hidden; }
+.viewer-toolbar { display:flex; align-items:center; gap:8px; padding:8px 12px;
+                  background:#0a0a0a; border-bottom:1px solid #1e1e1e; flex-shrink:0; }
+.viewer-toolbar .hint { color:#555; font-size:11px; flex:1; }
+.page-nav { display:flex; align-items:center; gap:6px; color:#888; font-size:11px; }
+.page-nav button { padding:2px 8px; font-size:11px; }
+.canvas-wrap { flex:1; overflow:auto; background:#1a1a1a; position:relative; cursor:crosshair; }
+#floor-canvas   { display:block; }
+#overlay-canvas { position:absolute; top:0; left:0; cursor:crosshair; }
 
-.select-row { display:flex; gap:8px; align-items:center; margin-bottom:8px; font-size:11px; color:#666; }
+/* right: analysis + device list */
+.right-col { display:flex; flex-direction:column; overflow:hidden; }
+.right-top { flex:1; overflow-y:auto; padding:14px; border-bottom:1px solid #1e1e1e; }
+.right-bottom { padding:12px 14px; flex-shrink:0; }
 
-/* processing progress */
-.process-list { display:flex; flex-direction:column; gap:6px; }
-.process-item { display:flex; align-items:center; gap:10px; padding:8px 12px;
-                background:#0a0a0a; border:1px solid #1e1e1e; border-radius:3px; }
-.process-icon { font-size:14px; width:20px; flex-shrink:0; }
-.process-name { flex:1; font-size:11px; color:#e0e0e0; }
-.process-count { font-size:10px; color:#555; flex-shrink:0; }
-.process-item.done   { border-color:#2a3a2a; }
-.process-item.active { border-color:#7a6000; background:#1a1200; }
-.process-item.done .process-icon   { color:#7af07a; }
-.process-item.active .process-icon { color:#f0c040; }
-.process-item.waiting .process-icon{ color:#333; }
+.hint-box { border:1px dashed #2a2a2a; border-radius:4px; padding:20px 16px;
+            text-align:center; color:#444; font-size:11px; line-height:1.6; }
+
+.analysis-box { background:#0a0a0a; border:1px solid #2a2a2a; border-radius:4px; overflow:hidden; margin-bottom:10px; }
+.analysis-box .crop-preview { width:100%; max-height:140px; object-fit:contain;
+                               background:#fff; display:block; }
+.analysis-box .analysis-body { padding:10px 12px; }
+.proposed-label { color:#666; font-size:10px; text-transform:uppercase; letter-spacing:1px; margin-bottom:4px; }
+.proposed-name  { color:#f0c040; font-size:14px; margin-bottom:4px; font-weight:bold; }
+.proposed-meta  { color:#555; font-size:10px; line-height:1.5; margin-bottom:10px; }
+.name-input { width:100%; font-size:12px; margin-bottom:8px; }
+.confirm-row { display:flex; gap:6px; }
+
+.device-list { display:flex; flex-direction:column; gap:5px; margin-bottom:10px; }
+.device-item { display:flex; align-items:center; gap:8px; padding:7px 10px;
+               background:#0a0a0a; border:1px solid #1e3a1e; border-radius:3px; }
+.device-item img { width:36px; height:36px; object-fit:contain; background:#fff; border-radius:2px; flex-shrink:0; }
+.device-item .di-name { flex:1; font-size:11px; color:#e0e0e0; }
+.device-item .di-count { font-size:10px; color:#555; }
+.device-item .di-remove { color:#7a3a3a; cursor:pointer; font-size:14px; padding:0 3px; }
+.device-item .di-remove:hover { color:#f07a7a; }
+
+.analyzing-msg { text-align:center; padding:30px 10px; color:#f0c040; font-size:11px; }
+.analyzing-msg .spinner { font-size:24px; display:block; margin-bottom:8px; animation:spin 1s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
 
 /* complete */
-.complete-panel { text-align:center; padding:32px 20px; }
-.device-scope-list { text-align:left; max-width:440px; margin:20px auto; background:#0a0a0a; border:1px solid #2a2a2a; border-radius:4px; overflow:hidden; }
-.device-scope-item { display:flex; justify-content:space-between; align-items:center; padding:8px 14px; border-bottom:1px solid #1a1a1a; font-size:11px; }
-.device-scope-item:last-child { border-bottom:none; }
+.complete-body { padding:40px 20px; text-align:center; }
+.scope-list { max-width:400px; margin:20px auto; background:#0a0a0a;
+              border:1px solid #2a2a2a; border-radius:4px; overflow:hidden; text-align:left; }
+.scope-row { display:flex; justify-content:space-between; padding:8px 14px;
+             border-bottom:1px solid #1a1a1a; font-size:11px; }
+.scope-row:last-child { border-bottom:none; }
 
 /* lightbox */
-#lightbox { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.92); z-index:1000; cursor:zoom-out; align-items:center; justify-content:center; }
-#lightbox.open { display:flex; }
-#lightbox img  { max-width:94vw; max-height:94vh; object-fit:contain; border:1px solid #333; border-radius:4px; }
-#lightbox-label { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:rgba(0,0,0,0.8); color:#888; font-size:11px; padding:4px 12px; border-radius:3px; font-family:monospace; }
+#lb { display:none; position:fixed; inset:0; background:rgba(0,0,0,.93);
+      z-index:999; align-items:center; justify-content:center; cursor:zoom-out; }
+#lb.open { display:flex; }
+#lb img { max-width:94vw; max-height:94vh; object-fit:contain; }
 </style>
 </head>
 <body>
 
-<h1>⚡ Symbol Discovery</h1>
-<p class="subtitle"><a href="multi-page.html">← Back to Pipeline</a> &nbsp;·&nbsp; Legend-guided device library builder</p>
+<div class="top-bar">
+  <h1>⚡ Symbol Discovery</h1>
+  <div class="subtitle"><a href="multi-page.html">← Back to Pipeline</a> &nbsp;·&nbsp; Drag to select device symbols you want to count</div>
+</div>
 
 <div class="config-bar">
   <label>Netlify URL</label>
   <input type="text" id="netlify-url" value="https://winquest-take-off.netlify.app" style="width:260px">
   <label>Project ID</label>
-  <input type="number" id="project-id" placeholder="4" style="width:70px">
+  <input type="number" id="project-id" placeholder="4" style="width:65px">
 </div>
 
-<!-- ── PHASE: SETUP ── -->
-<div id="phase-setup">
-  <div class="section">
+<!-- ══ PHASE: SETUP ══════════════════════════════════════════════ -->
+<div class="phase active" id="phase-setup">
+<div class="setup-body">
+
+  <div class="card">
     <h2>1 · Upload Drawing Set</h2>
     <div class="upload-zone" id="upload-zone" onclick="document.getElementById('pdf-input').click()">
-      <div>📄 Click to upload PDF drawing set</div>
-      <div style="margin-top:6px;font-size:10px;">Supports single or multi-page PDFs</div>
+      <div>📄 Click to upload PDF</div>
+      <div style="margin-top:5px;font-size:10px;">Multi-page drawing sets supported</div>
     </div>
-    <input type="file" id="pdf-input" accept=".pdf" style="display:none" onchange="handlePdfUpload(this)">
-    <div class="status" id="upload-status"></div>
+    <input type="file" id="pdf-input" accept=".pdf" style="display:none" onchange="handleUpload(this)">
+    <div class="status" id="upload-status" style="margin-top:6px;"></div>
   </div>
 
-  <div class="section" id="page-select-section" style="display:none">
+  <div class="card" id="page-card" style="display:none">
     <h2>2 · Select Pages</h2>
     <div class="page-legend">
-      <span><span class="dot sample"></span>Click once — floor plan (for calibration)</span>
-      <span><span class="dot legend-dot"></span>Click twice — legend page</span>
-      <span style="color:#555;">Click three times — deselect</span>
+      <span><span class="dot dot-fp"></span>Click once — floor plan</span>
+      <span><span class="dot dot-leg"></span>Click twice — legend</span>
+      <span style="color:#333">Click 3× — deselect</span>
     </div>
-    <div class="page-grid" id="page-grid"></div>
-    <div id="selection-summary" style="color:#666;font-size:11px;margin-bottom:12px;">Select at least 1 floor plan page and 1 legend page to continue.</div>
-    <button class="amber large" id="start-btn" onclick="startLegendRead()" disabled>✦ Read Legend</button>
-    <div class="status" id="setup-status" style="margin-top:8px;"></div>
+    <div class="thumb-grid" id="thumb-grid"></div>
+    <div class="status" id="page-status" style="margin-bottom:10px;">Select at least 1 floor plan and 1 legend page.</div>
+    <button class="amber lg" id="go-btn" onclick="goCrop()" disabled>✦ Open Crop Tool</button>
+    <div class="status" id="go-status" style="margin-top:6px;"></div>
   </div>
+
+</div>
 </div>
 
-<!-- ── PHASE: READING LEGEND ── -->
-<div id="phase-reading" style="display:none">
-  <div class="section">
-    <div class="scan-status">
-      <div class="scan-label" id="reading-label">Reading legend…</div>
-      <div class="progress-bar" style="max-width:300px;margin:0 auto;">
-        <div class="fill" id="reading-progress" style="width:0%"></div>
+<!-- ══ PHASE: CROP ═══════════════════════════════════════════════ -->
+<div class="phase" id="phase-crop">
+<div class="crop-layout">
+
+  <!-- Left: floor plan viewer -->
+  <div class="viewer-col">
+    <div class="viewer-toolbar">
+      <span class="hint">Drag a box around a device symbol to identify it</span>
+      <div class="page-nav">
+        <button onclick="navPage(-1)">◀</button>
+        <span id="page-indicator">—</span>
+        <button onclick="navPage(1)">▶</button>
+      </div>
+    </div>
+    <div class="canvas-wrap" id="canvas-wrap">
+      <canvas id="floor-canvas"></canvas>
+      <canvas id="overlay-canvas"
+        onmousedown="selStart(event)"
+        onmousemove="selMove(event)"
+        onmouseup="selEnd(event)"
+        onmouseleave="selCancel(event)">
+      </canvas>
+    </div>
+  </div>
+
+  <!-- Right: analysis panel + device list -->
+  <div class="right-col">
+    <div class="right-top" id="right-top">
+
+      <!-- hint (before first crop) -->
+      <div id="hint-state">
+        <div class="hint-box">
+          ← Scroll the drawing to find a device symbol, then click and drag a box around it.
+          <br><br>
+          The system will identify the symbol and propose a name from the legend.
+        </div>
+      </div>
+
+      <!-- analyzing spinner -->
+      <div id="analyzing-state" style="display:none">
+        <div class="analyzing-msg">
+          <span class="spinner">⟳</span>
+          Identifying symbol…
+        </div>
+      </div>
+
+      <!-- result -->
+      <div id="result-state" style="display:none">
+        <div class="analysis-box">
+          <img id="crop-preview" class="crop-preview" src="" alt="" onclick="openLB(this.src)">
+          <div class="analysis-body">
+            <div class="proposed-label">Proposed name</div>
+            <div class="proposed-name" id="proposed-name">—</div>
+            <div class="proposed-meta" id="proposed-meta">—</div>
+            <input type="text" class="name-input" id="name-override" placeholder="Edit name if needed">
+            <div class="confirm-row">
+              <button class="lg" onclick="confirmDevice()">✓ Add to Library</button>
+              <button class="danger" onclick="discardCrop()">✗ Discard</button>
+            </div>
+            <div class="status" id="confirm-status" style="margin-top:6px;"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- error -->
+      <div id="error-state" style="display:none">
+        <div class="hint-box" style="border-color:#7a3a3a; color:#f07a7a;">
+          Analysis failed. Try a larger crop or crop closer to the symbol.
+          <br><br>
+          <button onclick="resetToHint()">Try again</button>
+        </div>
+      </div>
+
+      <!-- device list -->
+      <div id="device-list" style="margin-top:12px;"></div>
+
+    </div>
+
+    <div class="right-bottom">
+      <div style="color:#555; font-size:10px; margin-bottom:8px;" id="device-count-label">0 device types added</div>
+      <div style="display:flex; gap:6px;">
+        <button class="amber lg" id="done-btn" onclick="finishCrop()" disabled>Continue to Takeoff →</button>
       </div>
     </div>
   </div>
+
+</div>
 </div>
 
-<!-- ── PHASE: CHECKLIST ── -->
-<div id="phase-checklist" style="display:none">
-  <div class="section">
-    <h2>3 · Select Devices to Detect</h2>
-    <p style="color:#666;font-size:11px;margin-bottom:12px;">
-      These device types were found in the legend.
-      Check the ones you need to count on this project.
-    </p>
-
-    <div class="cat-tabs" id="cat-tabs"></div>
-
-    <div class="select-row">
-      <button onclick="checkAll()" style="padding:3px 10px;font-size:10px;">Check All</button>
-      <button onclick="uncheckAll()" class="danger" style="padding:3px 10px;font-size:10px;">Uncheck All</button>
-      <span id="checked-count">0 selected</span>
-    </div>
-
-    <div class="device-checklist" id="device-checklist"></div>
-
-    <div style="display:flex;gap:8px;align-items:center;">
-      <button class="amber large" onclick="buildLibrary()">✦ Build Device Library</button>
-      <div class="status" id="checklist-status"></div>
-    </div>
-  </div>
-</div>
-
-<!-- ── PHASE: PROCESSING ── -->
-<div id="phase-processing" style="display:none">
-  <div class="section">
+<!-- ══ PHASE: BUILDING ════════════════════════════════════════════ -->
+<div class="phase" id="phase-building">
+<div class="setup-body">
+  <div class="card">
     <h2>Building Device Library</h2>
-    <p style="color:#666;font-size:11px;margin-bottom:14px;" id="processing-subtitle">Scanning floor plans for each device type…</p>
-    <div class="process-list" id="process-list"></div>
-    <div class="progress-bar" style="margin-top:12px;">
-      <div class="fill" id="process-progress" style="width:0%"></div>
+    <div id="build-list" style="display:flex;flex-direction:column;gap:6px;"></div>
+    <div style="height:3px;background:#1a1a1a;border-radius:2px;margin-top:12px;">
+      <div id="build-progress" style="height:100%;background:#f0c040;border-radius:2px;width:0%;transition:width 0.4s;"></div>
     </div>
   </div>
 </div>
+</div>
 
-<!-- ── PHASE: COMPLETE ── -->
-<div id="phase-complete" style="display:none">
-  <div class="section">
-    <div class="complete-panel">
-      <div style="font-size:32px;margin-bottom:12px;">✓</div>
-      <h2>Device library ready</h2>
-      <p style="color:#666;font-size:11px;margin-bottom:20px;">These device types will be detected across your drawing set.</p>
-      <div class="device-scope-list" id="scope-list"></div>
-      <div style="margin-top:24px;">
-        <button class="large amber" onclick="continueToPipeline()">Continue to Takeoff →</button>
-      </div>
-    </div>
+<!-- ══ PHASE: COMPLETE ════════════════════════════════════════════ -->
+<div class="phase" id="phase-complete">
+<div class="complete-body">
+  <div style="font-size:32px;margin-bottom:12px;">✓</div>
+  <h2>Device library ready</h2>
+  <p style="color:#555;font-size:11px;margin-bottom:20px;">These device types will be detected across your drawing set.</p>
+  <div class="scope-list" id="scope-list"></div>
+  <div style="margin-top:24px;">
+    <button class="lg amber" onclick="continuePipeline()">Continue to Takeoff →</button>
   </div>
+</div>
 </div>
 
 <!-- lightbox -->
-<div id="lightbox" onclick="closeLightbox()">
-  <img id="lightbox-img" src="" alt="">
-  <div id="lightbox-label">Click to close</div>
-</div>
+<div id="lb" onclick="closeLB()"><img id="lb-img" src="" alt=""></div>
 
 <script>
 // ── State ─────────────────────────────────────────────────────────
 const S = {
-  baseUrl:      'https://winquest-take-off.netlify.app',
-  projectId:    null,
-  pdf:          null,
-  pageCount:    0,
-  pageImages:   {},
-  samplePages:  new Set(),
-  legendPages:  new Set(),
-  legendImg:    null,   // hi-res legend base64
-  sampleHiRes:  [],     // hi-res floor plan pages
-  legendDevices:[],     // from read_legend
-  bounds:       { yStart: 0.07, yEnd: 0.91 },
-  activeCategory: 'all',
-  results:      []      // per-device build results
+  baseUrl:   'https://winquest-take-off.netlify.app',
+  projectId: null,
+  pdf:       null,
+  pageCount: 0,
+  fpPages:   new Set(),   // floor plan page numbers
+  legPages:  new Set(),   // legend page numbers
+  legendImg: null,        // hi-res legend base64
+  fpNums:    [],          // ordered floor plan page numbers
+  curPageIdx:0,           // current viewer page index
+  devices:   [],          // confirmed device types
+  sel: { active:false, x0:0, y0:0, x1:0, y1:0 },
+  analyzing: false,
+  lastCropB64: null,
+  lastAnalysis: null
 };
 
 // ── Init ──────────────────────────────────────────────────────────
-(function() {
-  const p = new URLSearchParams(window.location.search);
-  const pid = p.get('project_id') || sessionStorage.getItem('to_project_id');
-  if (pid) { document.getElementById('project-id').value = pid; S.projectId = parseInt(pid); }
-  const nu = sessionStorage.getItem('to_netlify_url');
-  if (nu)  { document.getElementById('netlify-url').value = nu; S.baseUrl = nu; }
+(function(){
+  const p=new URLSearchParams(window.location.search);
+  const pid=p.get('project_id')||sessionStorage.getItem('to_project_id');
+  if (pid) { document.getElementById('project-id').value=pid; S.projectId=parseInt(pid); }
+  const nu=sessionStorage.getItem('to_netlify_url');
+  if (nu)  { document.getElementById('netlify-url').value=nu; S.baseUrl=nu; }
 })();
 
-function base()   { return document.getElementById('netlify-url').value.replace(/\/$/,''); }
-function projId() { return parseInt(document.getElementById('project-id').value.trim()); }
+function base()    { return document.getElementById('netlify-url').value.replace(/\/$/,''); }
+function projId()  { return parseInt(document.getElementById('project-id').value)||0; }
+function setStatus(id,msg,cls='') { const e=document.getElementById(id); if(!e) return; e.textContent=msg; e.className='status '+cls; }
+function showPhase(p) { document.querySelectorAll('.phase').forEach(el=>el.classList.remove('active')); document.getElementById('phase-'+p).classList.add('active'); }
+function esc(s)    { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
-function setStatus(id, msg, cls='') { const el=document.getElementById(id); if(!el) return; el.textContent=msg; el.className='status '+cls; }
-function showPhase(p) { ['setup','reading','checklist','processing','complete'].forEach(x => { document.getElementById('phase-'+x).style.display = x===p?'block':'none'; }); }
-function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-
-// ── PDF upload ────────────────────────────────────────────────────
-async function handlePdfUpload(input) {
-  const file = input.files[0]; if (!file) return;
-  document.getElementById('upload-zone').classList.add('loaded');
-  document.getElementById('upload-zone').innerHTML = `📄 ${file.name}`;
-  setStatus('upload-status','Loading PDF…','run');
-  const buf = await file.arrayBuffer();
-  S.pdf = await pdfjsLib.getDocument({ data: buf }).promise;
-  S.pageCount = S.pdf.numPages;
-  setStatus('upload-status',`✓ ${S.pageCount} pages loaded`,'ok');
-  document.getElementById('page-select-section').style.display = 'block';
-  renderThumbnails();
+async function api(body) {
+  const r=await fetch(`${S.baseUrl}/api/pass-discover`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+  const d=await r.json(); if(!r.ok) throw new Error(d.error||r.status); return d;
 }
 
-async function renderThumbnails() {
-  const grid = document.getElementById('page-grid'); grid.innerHTML = '';
-  for (let i=1; i<=S.pageCount; i++) {
-    const w = document.createElement('div'); w.className='page-thumb'; w.dataset.page=i; w.onclick=()=>togglePage(i);
-    const cv = document.createElement('canvas'); w.appendChild(cv);
-    const num = document.createElement('div'); num.className='page-num'; num.textContent=i; w.appendChild(num);
+// ── PDF upload ────────────────────────────────────────────────────
+async function handleUpload(input) {
+  const file=input.files[0]; if(!file) return;
+  document.getElementById('upload-zone').classList.add('loaded');
+  document.getElementById('upload-zone').innerHTML=`📄 ${file.name}`;
+  setStatus('upload-status','Loading…','run');
+  const buf=await file.arrayBuffer();
+  S.pdf=await pdfjsLib.getDocument({data:buf}).promise;
+  S.pageCount=S.pdf.numPages;
+  setStatus('upload-status',`✓ ${S.pageCount} pages`,'ok');
+  document.getElementById('page-card').style.display='block';
+  renderThumbs();
+}
+
+async function renderThumbs() {
+  const grid=document.getElementById('thumb-grid'); grid.innerHTML='';
+  for (let i=1;i<=S.pageCount;i++) {
+    const w=document.createElement('div'); w.className='thumb'; w.dataset.page=i; w.onclick=()=>togglePage(i);
+    const cv=document.createElement('canvas'); w.appendChild(cv);
+    const n=document.createElement('div'); n.className='pnum'; n.textContent=i; w.appendChild(n);
     grid.appendChild(w);
-    const page = await S.pdf.getPage(i);
-    const vp = page.getViewport({scale:0.12});
+    const pg=await S.pdf.getPage(i), vp=pg.getViewport({scale:0.12});
     cv.width=vp.width; cv.height=vp.height;
-    await page.render({canvasContext:cv.getContext('2d'), viewport:vp}).promise;
+    await pg.render({canvasContext:cv.getContext('2d'),viewport:vp}).promise;
   }
 }
 
 function togglePage(n) {
-  const el = document.querySelector(`.page-thumb[data-page="${n}"]`); if (!el) return;
-  const badge = el.querySelector('.badge'); if (badge) badge.remove();
-  if (S.samplePages.has(n) && !S.legendPages.has(n)) {
-    S.samplePages.delete(n); S.legendPages.add(n);
-    el.className='page-thumb legend';
+  const el=document.querySelector(`.thumb[data-page="${n}"]`); if(!el) return;
+  const b=el.querySelector('.badge'); if(b) b.remove();
+  if (S.fpPages.has(n)&&!S.legPages.has(n)) {
+    S.fpPages.delete(n); S.legPages.add(n);
+    el.className='thumb leg';
     const b=document.createElement('span'); b.className='badge'; b.textContent='LEG'; el.appendChild(b);
-  } else if (S.legendPages.has(n)) {
-    S.legendPages.delete(n); el.className='page-thumb';
+  } else if (S.legPages.has(n)) {
+    S.legPages.delete(n); el.className='thumb';
   } else {
-    S.samplePages.add(n); el.className='page-thumb sample';
+    S.fpPages.add(n); el.className='thumb fp';
     const b=document.createElement('span'); b.className='badge'; b.textContent='FP'; el.appendChild(b);
   }
-  updateSelectionSummary();
+  const ok=S.fpPages.size>=1&&S.legPages.size>=1;
+  setStatus('page-status', ok ? `${S.fpPages.size} floor plan · ${S.legPages.size} legend` : 'Select at least 1 floor plan and 1 legend page.', ok?'ok':'');
+  document.getElementById('go-btn').disabled=!ok;
 }
 
-function updateSelectionSummary() {
-  const s=S.samplePages.size, l=S.legendPages.size, ready=s>=1&&l>=1;
-  document.getElementById('selection-summary').textContent =
-    `${s} floor plan page${s!==1?'s':''} · ${l} legend page${l!==1?'s':''}` +
-    (ready?'':' — select at least 1 of each');
-  document.getElementById('start-btn').disabled = !ready;
+// ── Open crop tool ────────────────────────────────────────────────
+async function goCrop() {
+  S.projectId=projId();
+  if (!S.projectId) { setStatus('go-status','Enter Project ID','err'); return; }
+  S.baseUrl=base();
+  setStatus('go-status','Rendering pages…','run');
+
+  S.fpNums=[...S.fpPages].sort((a,b)=>a-b);
+  const legNum=[...S.legPages].sort((a,b)=>a-b)[0];
+
+  // Render legend hi-res (for legend matching)
+  const legPage=await S.pdf.getPage(legNum);
+  const legVP=legPage.getViewport({scale:1.4});
+  const legCV=document.createElement('canvas'); legCV.width=legVP.width; legCV.height=legVP.height;
+  await legPage.render({canvasContext:legCV.getContext('2d'),viewport:legVP}).promise;
+  S.legendImg=legCV.toDataURL('image/jpeg',0.82).split(',')[1];
+
+  showPhase('crop');
+  await loadViewerPage(0);
 }
 
-// ── Render helpers ────────────────────────────────────────────────
-async function renderPageHiRes(n) {
-  if (S.pageImages[n]) return S.pageImages[n];
-  const page=await S.pdf.getPage(n), vp=page.getViewport({scale:1.4});
-  const cv=document.createElement('canvas'); cv.width=vp.width; cv.height=vp.height;
-  await page.render({canvasContext:cv.getContext('2d'),viewport:vp}).promise;
-  S.pageImages[n] = cv.toDataURL('image/jpeg',0.82).split(',')[1];
-  return S.pageImages[n];
+// ── Viewer page rendering ─────────────────────────────────────────
+const VIEW_SCALE = 2.5;
+
+async function loadViewerPage(idx) {
+  S.curPageIdx = Math.max(0, Math.min(idx, S.fpNums.length-1));
+  const pageNum = S.fpNums[S.curPageIdx];
+  document.getElementById('page-indicator').textContent =
+    `Page ${pageNum}  (${S.curPageIdx+1} of ${S.fpNums.length})`;
+
+  const page=await S.pdf.getPage(pageNum);
+  const vp=page.getViewport({scale:VIEW_SCALE});
+  const fc=document.getElementById('floor-canvas');
+  const oc=document.getElementById('overlay-canvas');
+  fc.width=oc.width=vp.width;
+  fc.height=oc.height=vp.height;
+  await page.render({canvasContext:fc.getContext('2d'),viewport:vp}).promise;
+  resetToHint();
 }
 
-async function renderPageThumbnail(n) {
-  const page=await S.pdf.getPage(n), vp=page.getViewport({scale:0.35});
-  const cv=document.createElement('canvas'); cv.width=vp.width; cv.height=vp.height;
-  await page.render({canvasContext:cv.getContext('2d'),viewport:vp}).promise;
-  return cv.toDataURL('image/jpeg',0.75).split(',')[1];
+function navPage(dir) { loadViewerPage(S.curPageIdx+dir); }
+
+// ── Selection (crop drawing) ──────────────────────────────────────
+function canvasPos(e) {
+  const oc=document.getElementById('overlay-canvas');
+  const r=oc.getBoundingClientRect();
+  // Account for scrolling within canvas-wrap
+  const wrap=document.getElementById('canvas-wrap');
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
 }
 
-function loadImage(src) {
-  return new Promise((res,rej)=>{ const i=new Image(); i.onload=()=>res(i); i.onerror=rej; i.src=src; });
+function selStart(e) {
+  if (S.analyzing) return;
+  const p=canvasPos(e);
+  S.sel={active:true, x0:p.x, y0:p.y, x1:p.x, y1:p.y};
 }
 
-async function cropImage(b64, xFrac, yFrac, size=120) {
-  const img = await loadImage('data:image/jpeg;base64,'+b64);
-  const cx=xFrac*img.width, cy=yFrac*img.height;
-  const cv=document.createElement('canvas'); cv.width=cv.height=size;
-  const ctx=cv.getContext('2d');
-  ctx.fillStyle='#fff'; ctx.fillRect(0,0,size,size);
-  ctx.drawImage(img,Math.max(0,cx-size/2),Math.max(0,cy-size/2),size,size,0,0,size,size);
-  return cv.toDataURL('image/jpeg',0.88).split(',')[1];
+function selMove(e) {
+  if (!S.sel.active) return;
+  const p=canvasPos(e);
+  S.sel.x1=p.x; S.sel.y1=p.y;
+  drawOverlay();
 }
 
-async function cropImageWide(b64, xFrac, yFrac, w=180, h=100) {
-  const img = await loadImage('data:image/jpeg;base64,'+b64);
-  const cx=xFrac*img.width, cy=yFrac*img.height;
-  const cv=document.createElement('canvas'); cv.width=w; cv.height=h;
-  const ctx=cv.getContext('2d');
-  ctx.fillStyle='#fff'; ctx.fillRect(0,0,w,h);
-  ctx.drawImage(img,Math.max(0,cx-w/2),Math.max(0,cy-h/2),w,h,0,0,w,h);
-  return cv.toDataURL('image/jpeg',0.88).split(',')[1];
+function selEnd(e) {
+  if (!S.sel.active) return;
+  S.sel.active=false;
+  const w=Math.abs(S.sel.x1-S.sel.x0), h=Math.abs(S.sel.y1-S.sel.y0);
+  clearOverlay();
+  if (w<15||h<15) return; // too small
+  extractAndAnalyze();
 }
 
-// ── Strip slicing ─────────────────────────────────────────────────
-const NUM_STRIPS = 6;
-
-async function slicePageIntoStrips(hiResB64, yStart=0.07, yEnd=0.91) {
-  const img=await loadImage('data:image/jpeg;base64,'+hiResB64);
-  const startPx=Math.floor(img.height*yStart), endPx=Math.floor(img.height*yEnd);
-  const contentH=endPx-startPx, stripH=Math.floor(contentH/NUM_STRIPS);
-  const strips=[];
-  for (let i=0;i<NUM_STRIPS;i++) {
-    const y0=startPx+(i*stripH), y1=(i===NUM_STRIPS-1)?endPx:startPx+((i+1)*stripH);
-    const cv=document.createElement('canvas'); cv.width=img.width; cv.height=y1-y0;
-    cv.getContext('2d').drawImage(img,0,y0,img.width,y1-y0,0,0,img.width,y1-y0);
-    strips.push({ index:i, y_start_frac:y0/img.height, y_end_frac:y1/img.height,
-                  b64:cv.toDataURL('image/jpeg',0.82).split(',')[1] });
-  }
-  return strips;
+function selCancel(e) {
+  if (!S.sel.active) return;
+  S.sel.active=false; clearOverlay();
 }
 
-// ── API calls ─────────────────────────────────────────────────────
-async function api(body) {
-  const resp = await fetch(`${S.baseUrl}/api/pass-discover`, {
-    method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(body)
-  });
-  const data = await resp.json();
-  if (!resp.ok) throw new Error(data.error || resp.status);
-  return data;
+function drawOverlay() {
+  const oc=document.getElementById('overlay-canvas');
+  const ctx=oc.getContext('2d');
+  const x=Math.min(S.sel.x0,S.sel.x1), y=Math.min(S.sel.y0,S.sel.y1);
+  const w=Math.abs(S.sel.x1-S.sel.x0), h=Math.abs(S.sel.y1-S.sel.y0);
+  ctx.clearRect(0,0,oc.width,oc.height);
+  ctx.fillStyle='rgba(0,0,0,0.35)';
+  ctx.fillRect(0,0,oc.width,oc.height);
+  ctx.clearRect(x,y,w,h);
+  ctx.strokeStyle='#f0c040'; ctx.lineWidth=2; ctx.setLineDash([5,3]);
+  ctx.strokeRect(x,y,w,h);
 }
 
-// ── Start: read legend ────────────────────────────────────────────
-async function startLegendRead() {
-  S.projectId = projId();
-  if (!S.projectId) { setStatus('setup-status','Enter Project ID','err'); return; }
-  S.baseUrl = base();
-  showPhase('reading');
+function clearOverlay() {
+  const oc=document.getElementById('overlay-canvas');
+  oc.getContext('2d').clearRect(0,0,oc.width,oc.height);
+}
 
-  const legendNums  = [...S.legendPages].sort((a,b)=>a-b);
-  const sampleNums  = [...S.samplePages].sort((a,b)=>a-b);
+async function extractAndAnalyze() {
+  const x=Math.min(S.sel.x0,S.sel.x1), y=Math.min(S.sel.y0,S.sel.y1);
+  const w=Math.abs(S.sel.x1-S.sel.x0), h=Math.abs(S.sel.y1-S.sel.y0);
 
-  // Render pages
-  document.getElementById('reading-label').textContent = 'Rendering pages…';
-  document.getElementById('reading-progress').style.width = '15%';
+  // Extract crop from floor canvas at 2x the selection (for detail)
+  const padding = 20; // add some context around the selection
+  const fc=document.getElementById('floor-canvas');
+  const cx=Math.max(0,x-padding), cy=Math.max(0,y-padding);
+  const cw=Math.min(fc.width-cx, w+padding*2);
+  const ch=Math.min(fc.height-cy, h+padding*2);
 
-  for (const n of sampleNums) S.sampleHiRes.push(await renderPageHiRes(n));
-  S.legendImg = await renderPageHiRes(legendNums[0]);
+  const cv=document.createElement('canvas'); cv.width=cw; cv.height=ch;
+  cv.getContext('2d').drawImage(fc,cx,cy,cw,ch,0,0,cw,ch);
+  S.lastCropB64=cv.toDataURL('image/jpeg',0.92).split(',')[1];
 
-  document.getElementById('reading-progress').style.width = '35%';
+  // Show analyzing state
+  S.analyzing=true;
+  showResultState('analyzing');
 
-  // Detect drawing bounds
-  document.getElementById('reading-label').textContent = 'Detecting drawing area…';
+  // Show crop preview immediately while analyzing
+  document.getElementById('crop-preview').src='data:image/jpeg;base64,'+S.lastCropB64;
+
   try {
-    const thumb = await renderPageThumbnail(sampleNums[0]);
-    const bd    = await api({ action:'detect_bounds', project_id:S.projectId, page_image:thumb });
-    S.bounds = { yStart: bd.y_start_frac, yEnd: bd.y_end_frac };
-  } catch (e) { /* use defaults */ }
+    const data=await api({
+      action:       'analyze_crop',
+      project_id:   S.projectId,
+      crop_image:   S.lastCropB64,
+      legend_image: S.legendImg
+    });
+    S.lastAnalysis=data;
+    showAnalysisResult(data);
+  } catch(e) {
+    showResultState('error');
+  }
+  S.analyzing=false;
+}
 
-  document.getElementById('reading-progress').style.width = '55%';
+// ── Analysis result display ───────────────────────────────────────
+function showResultState(state) {
+  ['hint-state','analyzing-state','result-state','error-state'].forEach(id=>{
+    document.getElementById(id).style.display='none';
+  });
+  document.getElementById(state+'-state').style.display='block';
+}
 
-  // Read legend
-  document.getElementById('reading-label').textContent = 'Reading legend symbols…';
-  let devices = [];
+function showAnalysisResult(data) {
+  showResultState('result');
+  document.getElementById('crop-preview').src='data:image/jpeg;base64,'+S.lastCropB64;
+
+  const name = data.legend_name || data.device_guess || 'Unknown Device';
+  const conf = data.match_confidence;
+  const confLabel = conf==='high'?'✓ High confidence match':conf==='medium'?'⚠ Medium confidence — verify':' Low confidence — edit name';
+
+  document.getElementById('proposed-name').textContent = name;
+  document.getElementById('proposed-meta').textContent =
+    (data.match_reason||'') + (data.nearby_text?.length ? `  ·  Labels: ${data.nearby_text.join(', ')}` : '');
+  document.getElementById('name-override').value = name;
+  setStatus('confirm-status', confLabel, conf==='high'?'ok':conf==='medium'?'run':'err');
+}
+
+function resetToHint() { showResultState('hint'); S.lastCropB64=null; S.lastAnalysis=null; }
+function discardCrop() { resetToHint(); }
+
+// ── Confirm device ────────────────────────────────────────────────
+async function confirmDevice() {
+  const name = document.getElementById('name-override').value.trim();
+  if (!name) { setStatus('confirm-status','Enter a name','err'); return; }
+
+  setStatus('confirm-status','Adding…','run');
+
+  // Build a legend_entry structure for build_device
+  const legendEntry = {
+    id:                 `CROP_${Date.now()}`,
+    name,
+    short_description:  S.lastAnalysis?.device_guess || '',
+    legend_description: S.lastAnalysis?.legend_description || '',
+    text_anchors:       S.lastAnalysis?.nearby_text || [],
+    category:           'telecom'
+  };
+
+  // Fake "instance" from the crop itself for description generation
+  const fakeInstance = {
+    x_frac:           0.5,
+    y_frac_full_page: 0.5,
+    nearby_text:      S.lastAnalysis?.nearby_text || [],
+    visual_notes:     S.lastAnalysis?.visual_description || ''
+  };
+
   try {
-    const data = await api({ action:'read_legend', project_id:S.projectId, legend_image:S.legendImg });
-    devices = data.devices || [];
-  } catch (e) {
-    showPhase('setup');
-    setStatus('setup-status','Legend read failed: '+e.message,'err');
-    return;
+    const result = await api({
+      action:              'build_device',
+      project_id:          S.projectId,
+      legend_entry:        legendEntry,
+      all_instances:       [fakeInstance],
+      drawing_crop_base64: S.lastCropB64,
+      legend_crop_base64:  null
+    });
+
+    S.devices.push({ name, crop:S.lastCropB64, device_type_id:result.device_type_id });
+    renderDeviceList();
+    resetToHint();
+    setStatus('confirm-status','');
+  } catch(e) {
+    setStatus('confirm-status','Error: '+e.message,'err');
   }
-
-  document.getElementById('reading-progress').style.width = '80%';
-
-  // Crop each legend symbol thumbnail
-  for (let i=0; i<devices.length; i++) {
-    const d = devices[i];
-    if (d.x_frac != null && d.y_frac != null) {
-      try { d._crop = await cropImage(S.legendImg, d.x_frac, d.y_frac, 80); }
-      catch(e) { d._crop = null; }
-    }
-    if (i % 5 === 0) {
-      document.getElementById('reading-progress').style.width =
-        (80 + Math.round(18*(i/devices.length))) + '%';
-    }
-  }
-
-  S.legendDevices = devices;
-  document.getElementById('reading-progress').style.width = '100%';
-
-  setTimeout(() => showChecklist(), 400);
 }
 
-// ── Checklist ─────────────────────────────────────────────────────
-const CATEGORY_LABELS = {
-  telecom:'Telecom', security:'Security', fire_alarm:'Fire Alarm',
-  av:'AV', nurse_call:'Nurse Call', osp:'OSP', other:'Other', all:'All'
-};
-const CATEGORY_ORDER = ['all','telecom','security','fire_alarm','av','nurse_call','osp','other'];
+function renderDeviceList() {
+  const list=document.getElementById('device-list');
+  const label=document.getElementById('device-count-label');
+  label.textContent=`${S.devices.length} device type${S.devices.length!==1?'s':''} added`;
+  document.getElementById('done-btn').disabled=S.devices.length===0;
 
-function showChecklist() {
-  showPhase('checklist');
+  if (!S.devices.length) { list.innerHTML=''; return; }
+  list.innerHTML=`<div style="color:#555;font-size:10px;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">Added to library</div>`;
+  const dl=document.createElement('div'); dl.className='device-list';
+  S.devices.forEach((d,i)=>{
+    const row=document.createElement('div'); row.className='device-item';
+    row.innerHTML=`
+      <img src="data:image/jpeg;base64,${d.crop}" onclick="openLB(this.src)">
+      <div class="di-name">${esc(d.name)}</div>
+      <div class="di-remove" onclick="removeDevice(${i})" title="Remove">×</div>`;
+    dl.appendChild(row);
+  });
+  list.appendChild(dl);
+}
 
-  // Build category counts
-  const cats = {};
-  S.legendDevices.forEach(d => { cats[d.category] = (cats[d.category]||0)+1; });
+function removeDevice(i) {
+  S.devices.splice(i,1);
+  renderDeviceList();
+}
 
-  // Render tabs
-  const tabBar = document.getElementById('cat-tabs'); tabBar.innerHTML = '';
-  ['all', ...Object.keys(cats).sort()].forEach(cat => {
-    const tab = document.createElement('div');
-    tab.className = 'cat-tab' + (cat===S.activeCategory?' active':'');
-    tab.textContent = (CATEGORY_LABELS[cat]||cat) + (cat!=='all'?` (${cats[cat]||0})`:'');
-    tab.onclick = () => { S.activeCategory=cat; showChecklist(); };
-    tabBar.appendChild(tab);
+// ── Finish crop → build library ───────────────────────────────────
+async function finishCrop() {
+  if (!S.devices.length) return;
+
+  // If devices were already built via build_device in confirmDevice,
+  // we can go straight to complete
+  showPhase('building');
+  const bl=document.getElementById('build-list'); bl.innerHTML='';
+
+  S.devices.forEach((d,i)=>{
+    const row=document.createElement('div');
+    row.style.cssText='display:flex;align-items:center;gap:10px;padding:8px 12px;background:#0a0a0a;border:1px solid #2a3a2a;border-radius:3px;font-size:11px;';
+    row.innerHTML=`<span style="color:#7af07a;">✓</span><span>${esc(d.name)}</span>`;
+    bl.appendChild(row);
+    document.getElementById('build-progress').style.width=((i+1)/S.devices.length*100)+'%';
   });
 
-  // Default: telecom checked, others unchecked
-  S.legendDevices.forEach(d => {
-    if (d._checked === undefined) d._checked = (d.category === 'telecom');
-  });
-
-  renderDeviceChecklist();
+  setTimeout(()=>showComplete(), 800);
 }
 
-function renderDeviceChecklist() {
-  const list = document.getElementById('device-checklist'); list.innerHTML='';
-  const filtered = S.activeCategory==='all'
-    ? S.legendDevices
-    : S.legendDevices.filter(d=>d.category===S.activeCategory);
-
-  filtered.forEach(d => {
-    const row = document.createElement('div');
-    row.className = 'device-row' + (d._checked?' checked':'');
-
-    const anchors = (d.text_anchors||[]).map(a=>`<span class="anchor-pill">${esc(a)}</span>`).join('');
-    const cropHtml = d._crop
-      ? `<img class="device-crop" src="data:image/jpeg;base64,${d._crop}"
-             onclick="event.stopPropagation();openLightbox(this.src,'${esc(d.name)}')" title="Click to zoom">`
-      : `<div class="device-crop empty"></div>`;
-
-    row.innerHTML = `
-      <input type="checkbox" ${d._checked?'checked':''} onclick="event.stopPropagation()">
-      ${cropHtml}
-      <div class="device-info">
-        <div class="device-name">${esc(d.name)}</div>
-        <div class="device-desc">${esc(d.short_description||'')}</div>
-        ${anchors?`<div class="device-anchors" style="margin-top:3px;">${anchors}</div>`:''}
-      </div>
-      <div class="device-cat">${esc(CATEGORY_LABELS[d.category]||d.category)}</div>`;
-
-    row.querySelector('input').onchange = (e) => {
-      d._checked = e.target.checked;
-      row.classList.toggle('checked', d._checked);
-      updateCheckedCount();
-    };
-    row.onclick = () => {
-      const cb = row.querySelector('input');
-      cb.checked = !cb.checked;
-      d._checked = cb.checked;
-      row.classList.toggle('checked', d._checked);
-      updateCheckedCount();
-    };
-    list.appendChild(row);
-  });
-  updateCheckedCount();
-}
-
-function updateCheckedCount() {
-  const n = S.legendDevices.filter(d=>d._checked).length;
-  document.getElementById('checked-count').textContent = `${n} selected`;
-}
-
-function checkAll()   { S.legendDevices.forEach(d=>d._checked=true);  renderDeviceChecklist(); }
-function uncheckAll() { S.legendDevices.forEach(d=>d._checked=false); renderDeviceChecklist(); }
-
-// ── Build library ─────────────────────────────────────────────────
-async function buildLibrary() {
-  const selected = S.legendDevices.filter(d=>d._checked);
-  if (!selected.length) { setStatus('checklist-status','Select at least one device','err'); return; }
-
-  // Build progress list
-  showPhase('processing');
-  document.getElementById('processing-subtitle').textContent =
-    `Building descriptions for ${selected.length} device type${selected.length!==1?'s':''}…`;
-
-  const list = document.getElementById('process-list'); list.innerHTML='';
-  selected.forEach((d,i) => {
-    const item = document.createElement('div');
-    item.className = 'process-item waiting';
-    item.id = `proc-${i}`;
-    item.innerHTML = `<div class="process-icon">○</div>
-      <div class="process-name">${esc(d.name)}</div>
-      <div class="process-count" id="proc-count-${i}">waiting</div>`;
-    list.appendChild(item);
-  });
-
-  S.results = [];
-
-  for (let i=0; i<selected.length; i++) {
-    const device = selected[i];
-    const item   = document.getElementById(`proc-${i}`);
-    const countEl= document.getElementById(`proc-count-${i}`);
-
-    item.className = 'process-item active';
-    item.querySelector('.process-icon').textContent = '⟳';
-    countEl.textContent = 'scanning…';
-
-    document.getElementById('process-progress').style.width =
-      Math.round(100 * i / selected.length) + '%';
-
-    try {
-      const result = await processOneDevice(device);
-      S.results.push(result);
-      item.className = 'process-item done';
-      item.querySelector('.process-icon').textContent = '✓';
-      countEl.textContent = result.instances_found
-        ? `${result.instances_found} instances found`
-        : 'no instances on sample pages';
-    } catch (e) {
-      item.className = 'process-item';
-      item.querySelector('.process-icon').style.color='#f07a7a';
-      item.querySelector('.process-icon').textContent = '✗';
-      countEl.textContent = 'error: '+e.message;
-    }
-  }
-
-  document.getElementById('process-progress').style.width = '100%';
-  setTimeout(() => showComplete(), 600);
-}
-
-async function processOneDevice(device) {
-  const allInstances = [];
-  let   drawingCrop  = null;
-
-  // Get legend crop for this device
-  const legendCrop = device._crop || null;
-
-  // Scan each sample page in strips
-  for (const hiRes of S.sampleHiRes) {
-    const strips = await slicePageIntoStrips(hiRes, S.bounds.yStart, S.bounds.yEnd);
-
-    for (const strip of strips) {
-      try {
-        const data = await api({
-          action:       'scan_for_symbol',
-          project_id:   S.projectId,
-          strip_image:  strip.b64,
-          symbol_crop:  legendCrop,
-          symbol_name:  device.name,
-          y_start_frac: strip.y_start_frac,
-          y_end_frac:   strip.y_end_frac
-        });
-        if (data.instances?.length) {
-          allInstances.push(...data.instances);
-          // Grab a drawing crop from first instance found
-          if (!drawingCrop && data.instances[0].x_frac != null) {
-            try {
-              drawingCrop = await cropImageWide(
-                hiRes,
-                data.instances[0].x_frac,
-                data.instances[0].y_frac_full_page,
-                220, 180
-              );
-            } catch(e) { /* skip */ }
-          }
-        }
-      } catch (e) { /* soft fail per strip */ }
-    }
-  }
-
-  // Build device type from observations
-  const result = await api({
-    action:              'build_device',
-    project_id:          S.projectId,
-    legend_entry:        device,
-    all_instances:       allInstances,
-    drawing_crop_base64: drawingCrop,
-    legend_crop_base64:  legendCrop
-  });
-
-  result.instances_found = allInstances.length;
-  return result;
-}
-
-// ── Complete ──────────────────────────────────────────────────────
 function showComplete() {
   showPhase('complete');
-  const list = document.getElementById('scope-list'); list.innerHTML='';
-  S.results.forEach(r => {
-    const row=document.createElement('div'); row.className='device-scope-item';
-    row.innerHTML=`<span style="color:#e0e0e0">${esc(r.name)}</span>
-      <span style="color:#555">${r.instances_found?r.instances_found+' found on sample':'calibrated from legend'}</span>`;
+  const list=document.getElementById('scope-list'); list.innerHTML='';
+  S.devices.forEach(d=>{
+    const row=document.createElement('div'); row.className='scope-row';
+    row.innerHTML=`<span>${esc(d.name)}</span><span style="color:#555">ready to detect</span>`;
     list.appendChild(row);
   });
 }
 
-function continueToPipeline() {
-  sessionStorage.setItem('to_project_id', S.projectId);
-  sessionStorage.setItem('to_netlify_url', S.baseUrl);
-  window.location.href = `multi-page.html?project_id=${S.projectId}`;
+function continuePipeline() {
+  sessionStorage.setItem('to_project_id',S.projectId);
+  sessionStorage.setItem('to_netlify_url',S.baseUrl);
+  window.location.href=`multi-page.html?project_id=${S.projectId}`;
 }
 
 // ── Lightbox ──────────────────────────────────────────────────────
-function openLightbox(src, label) {
-  document.getElementById('lightbox-img').src = src;
-  document.getElementById('lightbox-label').textContent = (label||'') + ' · Click to close';
-  document.getElementById('lightbox').classList.add('open');
-}
-function closeLightbox() { document.getElementById('lightbox').classList.remove('open'); }
-document.addEventListener('keydown', e => { if (e.key==='Escape') closeLightbox(); });
+function openLB(src) { document.getElementById('lb-img').src=src; document.getElementById('lb').classList.add('open'); }
+function closeLB()   { document.getElementById('lb').classList.remove('open'); }
+document.addEventListener('keydown',e=>{ if(e.key==='Escape') closeLB(); });
 </script>
 </body>
 </html>
