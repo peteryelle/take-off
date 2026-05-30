@@ -478,7 +478,7 @@ async function extractAndAnalyze() {
   const w=Math.abs(S.sel.x1-S.sel.x0), h=Math.abs(S.sel.y1-S.sel.y0);
 
   // Extract crop from floor canvas at 2x the selection (for detail)
-  const padding = 20; // add some context around the selection
+  const padding = 8; // tight crop around selection
   const fc=document.getElementById('floor-canvas');
   const cx=Math.max(0,x-padding), cy=Math.max(0,y-padding);
   const cw=Math.min(fc.width-cx, w+padding*2);
