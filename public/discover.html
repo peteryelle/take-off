@@ -272,6 +272,53 @@ button.large  { padding: 10px 24px; font-size: 13px; }
 
 /* ── Anchor pills row ── */
 .anchors-row { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 8px; }
+
+/* ── Symbol context box ── */
+.symbol-context {
+  background: #0a0a0a; border: 1px solid #2a3a2a;
+  border-radius: 4px; padding: 12px 14px;
+  margin-bottom: 12px;
+}
+.symbol-context .ctx-label {
+  color: #555; font-size: 10px; text-transform: uppercase;
+  letter-spacing: 1px; margin-bottom: 4px;
+}
+.symbol-context .ctx-desc {
+  color: #c0d8c0; font-size: 12px; line-height: 1.5;
+}
+.symbol-context .ctx-reason {
+  color: #888; font-size: 11px; margin-top: 8px;
+  padding-top: 8px; border-top: 1px solid #1e2e1e;
+  line-height: 1.5;
+}
+
+/* ── Click-to-zoom hint ── */
+.zoom-hint {
+  text-align: center; font-size: 10px; color: #444;
+  padding: 4px; cursor: zoom-in;
+}
+.two-up-panel img { cursor: zoom-in; }
+
+/* ── Lightbox overlay ── */
+#lightbox {
+  display: none; position: fixed;
+  inset: 0; background: rgba(0,0,0,0.92);
+  z-index: 1000; cursor: zoom-out;
+  align-items: center; justify-content: center;
+}
+#lightbox.open { display: flex; }
+#lightbox img {
+  max-width: 94vw; max-height: 94vh;
+  object-fit: contain; border: 1px solid #333;
+  border-radius: 4px;
+}
+#lightbox-label {
+  position: fixed; bottom: 20px; left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0,0,0,0.8); color: #888;
+  font-size: 11px; padding: 4px 12px; border-radius: 3px;
+  font-family: monospace;
+}
 </style>
 </head>
 <body>
@@ -382,6 +429,13 @@ button.large  { padding: 10px 24px; font-size: 13px; }
   <div class="section" id="section-b" style="display:none">
     <h2 id="section-b-title">B · Review This Match</h2>
 
+    <!-- What to look for -->
+    <div class="symbol-context">
+      <div class="ctx-label">What to look for on the drawing</div>
+      <div class="ctx-desc" id="review-visual-desc">—</div>
+      <div class="ctx-reason" id="review-match-reason">—</div>
+    </div>
+
     <div class="device-name-bar">
       <div class="proposed">Proposed match</div>
       <div class="name" id="review-name">—</div>
@@ -391,11 +445,13 @@ button.large  { padding: 10px 24px; font-size: 13px; }
     <div class="two-up">
       <div class="two-up-panel">
         <div class="two-up-label">Drawing — floor plan</div>
-        <img id="review-drawing-img" src="" alt="">
+        <img id="review-drawing-img" src="" alt="" onclick="openLightbox(this.src, 'Floor plan — find the symbol described above')">
+        <div class="zoom-hint">Click image to zoom</div>
       </div>
       <div class="two-up-panel">
-        <div class="two-up-label">Legend match</div>
-        <img id="review-legend-img" src="" alt="">
+        <div class="two-up-label">Legend — proposed match highlighted by name above</div>
+        <img id="review-legend-img" src="" alt="" onclick="openLightbox(this.src, 'Legend page — find the proposed match by name')">
+        <div class="zoom-hint">Click image to zoom</div>
       </div>
     </div>
 
@@ -434,11 +490,13 @@ button.large  { padding: 10px 24px; font-size: 13px; }
     <div class="two-up">
       <div class="two-up-panel">
         <div class="two-up-label">Drawing — floor plan</div>
-        <img id="unmatched-drawing-img" src="" alt="">
+        <img id="unmatched-drawing-img" src="" alt="" onclick="openLightbox(this.src, 'Floor plan — find the unmatched symbol')">
+        <div class="zoom-hint">Click image to zoom</div>
       </div>
       <div class="two-up-panel">
         <div class="two-up-label">Legend — find the matching entry</div>
-        <img id="unmatched-legend-img" src="" alt="">
+        <img id="unmatched-legend-img" src="" alt="" onclick="openLightbox(this.src, 'Legend page — find the correct entry and type its name below')">
+        <div class="zoom-hint">Click image to zoom</div>
       </div>
     </div>
 
@@ -478,6 +536,12 @@ button.large  { padding: 10px 24px; font-size: 13px; }
       </div>
     </div>
   </div>
+</div>
+
+<!-- ── Lightbox overlay ── -->
+<div id="lightbox" onclick="closeLightbox()">
+  <img id="lightbox-img" src="" alt="">
+  <div id="lightbox-label">Click anywhere to close · Scroll to zoom</div>
 </div>
 
 <script>
@@ -850,6 +914,15 @@ function showReview(cluster) {
     ? 'B · Review This Match'
     : 'B · Confirm Match';
   document.getElementById('section-b-title').textContent = title;
+
+  // What to look for
+  document.getElementById('review-visual-desc').textContent =
+    cluster.visual_description || '—';
+  document.getElementById('review-match-reason').textContent =
+    cluster.match_reason
+      ? `Why this match: ${cluster.match_reason}`
+      : '';
+
   document.getElementById('review-name').textContent =
     cluster.legend_name || 'No match found';
   document.getElementById('review-meta').textContent =
@@ -1051,6 +1124,22 @@ function esc(str) {
     .replace(/&/g,'&amp;').replace(/</g,'&lt;')
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
+
+// ── Lightbox ──────────────────────────────────────────────────────
+function openLightbox(src, label) {
+  document.getElementById('lightbox-img').src = src;
+  document.getElementById('lightbox-label').textContent =
+    (label || '') + ' · Click anywhere to close';
+  document.getElementById('lightbox').classList.add('open');
+}
+
+function closeLightbox() {
+  document.getElementById('lightbox').classList.remove('open');
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeLightbox();
+});
 </script>
 </body>
 </html>
