@@ -711,25 +711,64 @@ function loadImage(src) {
   });
 }
 
-async function slicePageIntoStrips(hiResB64) {
-  const img = await loadImage('data:image/jpeg;base64,' + hiResB64);
-  const stripH = Math.floor(img.height / NUM_STRIPS);
-  const strips = [];
+// Low-res thumbnail for bounds detection only
+async function renderPageThumbnail(pageNum) {
+  const page = await S.pdf.getPage(pageNum);
+  const vp   = page.getViewport({ scale: 0.35 });
+  const cv   = document.createElement('canvas');
+  cv.width  = vp.width;
+  cv.height = vp.height;
+  await page.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+  return cv.toDataURL('image/jpeg', 0.75).split(',')[1];
+}
+
+// Detect drawing content bounds (excludes grid headers + title block)
+async function detectDrawingBounds(thumbnailB64) {
+  try {
+    const resp = await fetch(`${S.baseUrl}/api/pass-discover`, {
+      method:  'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        action:     'detect_bounds',
+        project_id: S.projectId,
+        page_image: thumbnailB64
+      })
+    });
+    const data = await resp.json();
+    if (resp.ok && data.y_start_frac != null) {
+      console.log(`Bounds detected: ${data.y_start_frac} → ${data.y_end_frac}`);
+      console.log(`  Top: ${data.top_description}`);
+      console.log(`  Bottom: ${data.bottom_description}`);
+      return { yStart: data.y_start_frac, yEnd: data.y_end_frac };
+    }
+  } catch (e) {
+    console.warn('Bounds detection failed:', e.message);
+  }
+  return { yStart: 0.07, yEnd: 0.91 }; // safe fallback
+}
+
+async function slicePageIntoStrips(hiResB64, yStart = 0.07, yEnd = 0.91) {
+  const img      = await loadImage('data:image/jpeg;base64,' + hiResB64);
+  const startPx  = Math.floor(img.height * yStart);
+  const endPx    = Math.floor(img.height * yEnd);
+  const contentH = endPx - startPx;
+  const stripH   = Math.floor(contentH / NUM_STRIPS);
+  const strips   = [];
 
   for (let i = 0; i < NUM_STRIPS; i++) {
-    const yStart = i * stripH;
-    const yEnd   = (i === NUM_STRIPS - 1) ? img.height : (i + 1) * stripH;
-    const height = yEnd - yStart;
+    const yStartPx = startPx + (i * stripH);
+    const yEndPx   = (i === NUM_STRIPS - 1) ? endPx : startPx + ((i + 1) * stripH);
+    const height   = yEndPx - yStartPx;
 
     const cv = document.createElement('canvas');
     cv.width  = img.width;
     cv.height = height;
-    cv.getContext('2d').drawImage(img, 0, yStart, img.width, height, 0, 0, img.width, height);
+    cv.getContext('2d').drawImage(img, 0, yStartPx, img.width, height, 0, 0, img.width, height);
 
     strips.push({
-      index:       i,
-      y_start_frac: yStart / img.height,
-      y_end_frac:   yEnd   / img.height,
+      index:        i,
+      y_start_frac: yStartPx / img.height,
+      y_end_frac:   yEndPx   / img.height,
       b64: cv.toDataURL('image/jpeg', 0.82).split(',')[1]
     });
   }
@@ -799,6 +838,12 @@ async function startDiscovery() {
   setStep('step-render', 'done');
   setProgress(10);
 
+  // ── Detect drawing content bounds (once, from first sample page) ─
+  document.getElementById('scan-label').textContent = 'Detecting drawing area…';
+  const thumbnail = await renderPageThumbnail(sampleNums[0]);
+  const bounds    = await detectDrawingBounds(thumbnail);
+  // bounds.yStart and bounds.yEnd are now calibrated to this drawing set
+
   // ── Step 2: Strip scan ────────────────────────────────────────
   setStep('step-scan', 'active');
   const allRawClusters = [];
@@ -808,7 +853,7 @@ async function startDiscovery() {
   let stripsDone = 0;
 
   for (let pi = 0; pi < sampleHiRes.length; pi++) {
-    const strips = await slicePageIntoStrips(sampleHiRes[pi]);
+    const strips = await slicePageIntoStrips(sampleHiRes[pi], bounds.yStart, bounds.yEnd);
 
     for (const strip of strips) {
       const pct = 10 + Math.round(55 * stripsDone / totalStrips);
