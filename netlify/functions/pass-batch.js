@@ -215,9 +215,10 @@ export default async function handler(req) {
       tia_violations: instances.filter(i => i.tia_flag).length,
       max_run_ft:    Math.max(0, ...instances.map(i => i.total_ft ?? 0)) || null,
       devices:       instances.map((inst, j) => ({
-        id:           inserted?.[j]?.id,
-        legend_id:    inst._legend_id,
-        name:         inst._name,
+        id:            inserted?.[j]?.id,
+        device_type_id: inst.device_type_id,
+        legend_id:     inst._legend_id,
+        name:          inst._name,
         x_norm:       inst.x_norm,
         y_norm:       inst.y_norm,
         x_ft:         inst.x_ft,

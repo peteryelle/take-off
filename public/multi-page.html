@@ -1897,7 +1897,10 @@ function deduplicateInstances(instances) {
 
         // Only cluster instances of the same device type
         // Prevents WAPs from absorbing nearby outlet labels
-        if (a.device_type_id !== b.device_type_id) continue;
+        // Falls back to legend_id for live batch path (device_type_id not always present)
+        const aType = a.device_type_id ?? a.legend_id;
+        const bType = b.device_type_id ?? b.legend_id;
+        if (aType == null || aType !== bType) continue;
 
         const dx = Math.abs((a.x_norm ?? 0) - (b.x_norm ?? 0));
         const dy = Math.abs((a.y_norm ?? 0) - (b.y_norm ?? 0));
