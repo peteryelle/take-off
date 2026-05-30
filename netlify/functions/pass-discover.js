@@ -143,24 +143,31 @@ For EACH symbol type found:
 1. Describe EXACTLY what you see — shape, fill, size, line weight, internal marks
 2. Note the device label text DIRECTLY adjacent to the symbol (within 1-2 symbol widths).
    Valid device labels look like: DD1, DD2, DV1, N2, WAP, AP, J-BOX, CAM, PTZ
-   Strip trailing numbers to get the base pattern: DD1/DD2/DD3 → "DD", N1/N2 → "N"
+   Strip trailing numbers to get base pattern: DD1/DD2/DD3 → "DD", N1/N2 → "N"
 3. Count how many instances appear in this image
 4. Estimate position of one clear example:
    - x_frac: 0.0 (left edge) to 1.0 (right edge)
    - y_frac_strip: 0.0 (top) to 1.0 (bottom)
 
-EXCLUDE — these are NOT device symbols:
-- Dashed lines, solid lines, conduit runs, cable routing paths
-- Circles or bubbles containing only numerals (keynote callouts, detail references)
-- Directional arrows or triangular routing indicators
-- Room name text, general notes, dimension strings
+CRITICAL — DRAWING COORDINATE GRID HEADERS (these are NOT device symbols):
+Engineering drawings have a coordinate reference grid along their borders. You will see:
+- A horizontal row of circles running across the TOP or BOTTOM edge of the image.
+  Each circle contains a letter (E, F, G, H, I, J, K, L, M, N...) or letter-number
+  combination (K.9, L.1, i.2, 17.1) with vertical lines extending from each circle.
+- A row of numerals (4, 5, 6, 7, 8, 9, 10...) along the left or right edge.
+These LOOK like device symbols but are the sheet coordinate reference system.
+EXCLUDE them entirely. Do not count them. Do not include their letters as text anchors.
 
-EXCLUDE as nearby_text — these are NOT device labels:
-- Single uppercase letters (A B C D E F G H I J K L M N O P Q R S T) arranged
-  in a regular spaced grid along the top or bottom border of the drawing.
-  These are drawing coordinate grid references, not device labels.
-- Numerals (1 2 3 4 5 6...) arranged in a regular grid along drawing borders.
-- Room names, area descriptions, general annotation.
+EXCLUDE — also not device symbols:
+- Dashed lines, solid lines, conduit runs, cable routing paths
+- Circles containing only plain numerals — keynote callouts
+- Directional arrows or triangular routing indicators with no device label
+- Room name text, general notes, dimension strings, title block elements
+
+EXCLUDE from nearby_text — not device labels:
+- Single alphabet letters in evenly spaced rows at drawing edges (grid coordinates)
+- Letter-number grid codes: K.9, L.1, i.2, 17.1, 19.1
+- Room names, area labels, general annotation text
 
 Only include symbols appearing 2 or more times.
 
