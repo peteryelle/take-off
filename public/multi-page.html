@@ -1581,7 +1581,11 @@ async function runBatch() {
       });
       const j = await r.json();
 
-      batchResults[pageNum] = j;
+      batchResults[pageNum] = {
+        ...j,
+        devices: deduplicateInstances(j.devices ?? []),
+        device_count: deduplicateInstances(j.devices ?? []).length
+      };
       const msg = r.ok
         ? `pg${pageNum}: ${j.device_count} devices${j.tia_violations ? ' ⚠'+j.tia_violations+' TIA' : ''}`
         : `pg${pageNum}: ERROR — ${j.error}`;
@@ -1863,7 +1867,7 @@ async function loadProjectCard(pid) {
 // Collapses device_instances that are within DEDUP_THRESH normalized
 // units of each other on the same page into one entry.
 // Handles DV#+DD#+N# stacked labels at the same outlet location.
-const DEDUP_THRESH = 0.012;
+const DEDUP_THRESH = 0.018;
 
 function deduplicateInstances(instances) {
   if (!instances?.length) return [];
@@ -2005,7 +2009,7 @@ async function restoreFromSupabase(pid) {
     // ── Restore batch results ─────────────────────────────────────
     if (instances.length) {
       const byPage = {};
-      for (const inst of instances) {
+      for (const inst of deduplicateInstances(instances)) {
         const pg = projPages.find(p => p.page_id === inst.page_id);
         const pgNum = pg?.eval_page_num;
         if (!pgNum) continue;
