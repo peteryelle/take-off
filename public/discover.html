@@ -1,0 +1,1056 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Symbol Discovery — Take-off</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>pdfjsLib.GlobalWorkerOptions.workerSrc =
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: monospace;
+  background: #0d0d0d;
+  color: #e0e0e0;
+  padding: 20px;
+  font-size: 13px;
+}
+h1 { color: #f0c040; font-size: 16px; margin-bottom: 4px; letter-spacing: 2px; text-transform: uppercase; }
+h2 { color: #f0c040; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 12px; }
+.subtitle { color: #666; font-size: 11px; margin-bottom: 20px; }
+a { color: #7ac0f0; text-decoration: none; }
+
+/* ── Config bar ── */
+.config-bar {
+  display: flex; gap: 10px; align-items: center;
+  background: #111; border: 1px solid #2a2a2a;
+  border-radius: 4px; padding: 10px 14px;
+  margin-bottom: 16px; flex-wrap: wrap;
+}
+.config-bar label { color: #888; font-size: 11px; margin-right: 4px; }
+input[type="text"], input[type="number"] {
+  background: #1a1a1a; border: 1px solid #333;
+  color: #e0e0e0; padding: 5px 8px;
+  border-radius: 3px; font-family: monospace; font-size: 12px; width: 120px;
+}
+
+/* ── Buttons ── */
+button {
+  background: #1e3a1e; border: 1px solid #3a7a3a;
+  color: #7af07a; padding: 6px 14px;
+  border-radius: 3px; cursor: pointer;
+  font-family: monospace; font-size: 12px;
+  transition: background 0.15s; white-space: nowrap;
+}
+button:hover { background: #2a4a2a; }
+button:disabled { opacity: 0.3; cursor: not-allowed; }
+button.amber  { background: #2a2000; border-color: #7a6000; color: #f0c040; }
+button.amber:hover { background: #332800; }
+button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
+button.danger:hover { background: #4a2020; }
+button.info   { background: #1e2d3a; border-color: #3a6a8a; color: #7ac0f0; }
+button.info:hover { background: #253545; }
+button.large  { padding: 10px 24px; font-size: 13px; }
+
+/* ── Status ── */
+.status { font-size: 11px; color: #aaa; min-height: 16px; }
+.status.ok  { color: #7af07a; }
+.status.err { color: #f07a7a; }
+.status.run { color: #f0c040; }
+
+/* ── Progress bar ── */
+.progress-bar {
+  height: 3px; background: #1a1a1a; border-radius: 2px;
+  margin: 8px 0;
+}
+.progress-bar .fill {
+  height: 100%; background: #f0c040; border-radius: 2px;
+  transition: width 0.4s ease;
+}
+
+/* ── Section box ── */
+.section {
+  background: #111; border: 1px solid #2a2a2a;
+  border-radius: 4px; padding: 16px; margin-bottom: 16px;
+}
+
+/* ── PDF upload zone ── */
+.upload-zone {
+  border: 1px dashed #444; border-radius: 4px;
+  padding: 24px; text-align: center;
+  cursor: pointer; color: #666; font-size: 11px;
+  transition: border-color 0.15s; margin-bottom: 12px;
+}
+.upload-zone:hover { border-color: #888; }
+.upload-zone.loaded { border-color: #3a7a3a; color: #7af07a; }
+
+/* ── Page thumbnail grid ── */
+.page-grid {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  max-height: 340px; overflow-y: auto;
+  padding: 8px; background: #0a0a0a;
+  border: 1px solid #1e1e1e; border-radius: 4px;
+  margin-bottom: 12px;
+}
+.page-thumb {
+  position: relative; cursor: pointer;
+  border: 2px solid #222; border-radius: 3px;
+  transition: border-color 0.15s;
+  background: #000;
+}
+.page-thumb canvas { display: block; }
+.page-thumb .page-num {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  background: rgba(0,0,0,0.7); color: #888;
+  font-size: 9px; text-align: center; padding: 2px;
+}
+.page-thumb.sample  { border-color: #3a7a3a; }
+.page-thumb.sample .page-num { background: #1e3a1e; color: #7af07a; }
+.page-thumb.legend  { border-color: #7a6000; }
+.page-thumb.legend .page-num { background: #2a2000; color: #f0c040; }
+.page-thumb .badge {
+  position: absolute; top: 2px; right: 2px;
+  font-size: 9px; padding: 1px 4px;
+  border-radius: 2px; font-weight: bold;
+}
+.page-thumb.sample .badge { background: #3a7a3a; color: #7af07a; }
+.page-thumb.legend .badge { background: #7a6000; color: #f0c040; }
+
+/* ── Page selection legend ── */
+.page-legend {
+  display: flex; gap: 16px; font-size: 10px; color: #666;
+  margin-bottom: 8px;
+}
+.page-legend span { display: flex; align-items: center; gap: 4px; }
+.dot { width: 8px; height: 8px; border-radius: 1px; }
+.dot.sample { background: #3a7a3a; border: 1px solid #7af07a; }
+.dot.legend { background: #2a2000; border: 1px solid #f0c040; }
+
+/* ── Scanning phase ── */
+.scan-status {
+  text-align: center; padding: 40px 20px;
+}
+.scan-status .big-label {
+  font-size: 14px; color: #f0c040;
+  margin-bottom: 8px; letter-spacing: 1px;
+}
+.scan-steps { text-align: left; max-width: 320px; margin: 24px auto 0; }
+.scan-step {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 0; font-size: 11px; color: #555;
+  border-bottom: 1px solid #1a1a1a;
+}
+.scan-step.active { color: #f0c040; }
+.scan-step.done   { color: #7af07a; }
+.scan-step .dot2  { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+
+/* ── Review summary bar ── */
+.review-summary {
+  display: flex; gap: 16px; align-items: center;
+  background: #0a0a0a; border: 1px solid #1e1e1e;
+  border-radius: 4px; padding: 10px 14px;
+  margin-bottom: 16px; flex-wrap: wrap;
+}
+.review-summary .chip {
+  font-size: 10px; padding: 2px 8px;
+  border-radius: 3px; border: 1px solid;
+}
+.chip.high   { background: #1e3a1e; border-color: #3a7a3a; color: #7af07a; }
+.chip.medium { background: #2a2000; border-color: #7a6000; color: #f0c040; }
+.chip.low    { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
+
+/* ── Section A: batch grid ── */
+.batch-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px; margin-bottom: 12px;
+}
+.batch-card {
+  background: #0a0a0a; border: 1px solid #2a3a2a;
+  border-radius: 4px; padding: 10px;
+  cursor: pointer; transition: border-color 0.15s;
+  position: relative;
+}
+.batch-card:hover { border-color: #4a7a4a; }
+.batch-card.selected-for-review { border-color: #7a6000; background: #1a1200; }
+.batch-card .card-name {
+  color: #e0e0e0; font-size: 11px;
+  margin-bottom: 6px; font-weight: bold;
+}
+.batch-card .card-count {
+  color: #888; font-size: 10px; margin-bottom: 6px;
+}
+.batch-card .card-anchors { display: flex; flex-wrap: wrap; gap: 2px; }
+.anchor-pill {
+  background: #1a2a1a; border: 1px solid #2a4a2a;
+  color: #7af07a; border-radius: 2px;
+  padding: 1px 5px; font-size: 9px;
+}
+.batch-card .review-flag {
+  position: absolute; top: 6px; right: 6px;
+  font-size: 9px; color: #f0c040;
+}
+
+/* ── Section B/C: individual review ── */
+.two-up {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: 12px; margin-bottom: 16px;
+}
+.two-up-panel {
+  background: #0a0a0a; border: 1px solid #1e1e1e;
+  border-radius: 4px; overflow: hidden;
+}
+.two-up-label {
+  background: #111; padding: 6px 10px;
+  font-size: 10px; color: #666;
+  text-transform: uppercase; letter-spacing: 1px;
+  border-bottom: 1px solid #1e1e1e;
+}
+.two-up-panel img {
+  width: 100%; display: block;
+  max-height: 320px; object-fit: contain;
+  background: #050505;
+}
+.two-up-panel .no-img {
+  height: 200px; display: flex; align-items: center;
+  justify-content: center; color: #333; font-size: 11px;
+}
+.device-name-bar {
+  background: #111; border: 1px solid #2a2a2a;
+  border-radius: 4px; padding: 12px 14px;
+  margin-bottom: 12px;
+}
+.device-name-bar .proposed {
+  color: #888; font-size: 10px; margin-bottom: 4px;
+  text-transform: uppercase; letter-spacing: 1px;
+}
+.device-name-bar .name {
+  color: #f0c040; font-size: 14px;
+}
+.device-name-bar .meta {
+  color: #555; font-size: 10px; margin-top: 4px;
+}
+.action-row {
+  display: flex; gap: 8px; align-items: center;
+  margin-bottom: 12px;
+}
+
+/* ── Pick different panel ── */
+.pick-panel {
+  background: #111; border: 1px solid #7a6000;
+  border-radius: 4px; padding: 14px;
+  margin-bottom: 12px; display: none;
+}
+.pick-panel.open { display: block; }
+.pick-panel label { color: #888; font-size: 10px; display: block; margin-bottom: 6px; }
+.pick-panel input[type="text"] {
+  width: 100%; margin-bottom: 8px; font-size: 12px;
+}
+.pick-panel .hint {
+  color: #555; font-size: 10px; margin-bottom: 10px;
+  line-height: 1.5;
+}
+
+/* ── Complete screen ── */
+.complete-panel { text-align: center; padding: 32px 20px; }
+.complete-panel .big-check { font-size: 32px; margin-bottom: 12px; }
+.complete-panel h2 { font-size: 15px; margin-bottom: 8px; }
+.device-scope-list {
+  text-align: left; max-width: 400px; margin: 20px auto;
+  background: #0a0a0a; border: 1px solid #2a2a2a;
+  border-radius: 4px; overflow: hidden;
+}
+.device-scope-item {
+  display: flex; justify-content: space-between;
+  padding: 8px 14px; border-bottom: 1px solid #1a1a1a;
+  font-size: 11px;
+}
+.device-scope-item:last-child { border-bottom: none; }
+.device-scope-item .dev-name { color: #e0e0e0; }
+.device-scope-item .dev-count { color: #555; }
+
+/* ── Anchor pills row ── */
+.anchors-row { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<h1>⚡ Symbol Discovery</h1>
+<p class="subtitle">
+  <a href="multi-page.html" id="back-link">← Back to Pipeline</a>
+  &nbsp;·&nbsp; Drawing-first device library builder
+</p>
+
+<!-- ── Config bar ── -->
+<div class="config-bar">
+  <label>Netlify URL</label>
+  <input type="text" id="netlify-url" value="https://winquest-take-off.netlify.app" style="width:260px;">
+  <label>Project ID</label>
+  <input type="number" id="project-id" placeholder="4" style="width:70px;">
+  <div class="status" id="config-status">—</div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<!-- PHASE: SETUP                                                  -->
+<!-- ══════════════════════════════════════════════════════════════ -->
+<div id="phase-setup">
+
+  <div class="section">
+    <h2>1 · Upload Drawing Set</h2>
+
+    <div class="upload-zone" id="upload-zone" onclick="document.getElementById('pdf-input').click()">
+      <div>📄 Click to upload PDF drawing set</div>
+      <div style="margin-top:6px; font-size:10px;">Supports single or multi-page PDFs</div>
+    </div>
+    <input type="file" id="pdf-input" accept=".pdf" style="display:none" onchange="handlePdfUpload(this)">
+
+    <div class="status" id="upload-status"></div>
+  </div>
+
+  <div class="section" id="page-select-section" style="display:none">
+    <h2>2 · Select Pages</h2>
+
+    <div class="page-legend">
+      <span><span class="dot sample"></span> Click once — floor plan sample</span>
+      <span><span class="dot legend"></span> Click twice — legend page</span>
+      <span style="color:#555;">Click three times — deselect</span>
+    </div>
+
+    <div class="page-grid" id="page-grid"></div>
+
+    <div id="selection-summary" style="color:#666; font-size:11px; margin-bottom:12px;">
+      Select at least 1 floor plan page and 1 legend page to continue.
+    </div>
+
+    <button class="amber large" id="start-btn" onclick="startDiscovery()" disabled>
+      ✦ Start Symbol Discovery
+    </button>
+    <div class="status" id="setup-status" style="margin-top:8px;"></div>
+  </div>
+
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<!-- PHASE: SCANNING                                               -->
+<!-- ══════════════════════════════════════════════════════════════ -->
+<div id="phase-scanning" style="display:none">
+  <div class="section">
+    <div class="scan-status">
+      <div class="big-label" id="scan-label">Analyzing drawing…</div>
+      <div class="progress-bar" style="max-width:300px; margin:0 auto;">
+        <div class="fill" id="scan-progress" style="width:0%"></div>
+      </div>
+      <div class="scan-steps" id="scan-steps">
+        <div class="scan-step" id="step-render"><span class="dot2"></span> Rendering pages</div>
+        <div class="scan-step" id="step-scan"><span class="dot2"></span> Scanning floor plan for symbols</div>
+        <div class="scan-step" id="step-legend"><span class="dot2"></span> Reading legend</div>
+        <div class="scan-step" id="step-build"><span class="dot2"></span> Building device library</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<!-- PHASE: REVIEW                                                 -->
+<!-- ══════════════════════════════════════════════════════════════ -->
+<div id="phase-review" style="display:none">
+
+  <!-- Progress -->
+  <div class="review-summary" id="review-summary">
+    <span style="color:#888; font-size:11px;" id="review-progress-text">—</span>
+    <span class="chip high"   id="chip-high">0 ready</span>
+    <span class="chip medium" id="chip-medium">0 to review</span>
+    <span class="chip low"    id="chip-low">0 flagged</span>
+  </div>
+
+  <!-- Section A: Batch approval -->
+  <div class="section" id="section-a" style="display:none">
+    <h2>A · Ready to Approve</h2>
+    <p style="color:#666; font-size:11px; margin-bottom:12px;">
+      These were matched with high confidence. Scan the cards and click Approve All,
+      or click any card to review it individually.
+    </p>
+    <div class="batch-grid" id="batch-grid"></div>
+    <div style="display:flex; gap:8px; align-items:center;">
+      <button class="large" id="approve-all-btn" onclick="approveAll()">✓ Approve All</button>
+      <div class="status" id="batch-status"></div>
+    </div>
+  </div>
+
+  <!-- Section B: Individual review -->
+  <div class="section" id="section-b" style="display:none">
+    <h2 id="section-b-title">B · Review This Match</h2>
+
+    <div class="device-name-bar">
+      <div class="proposed">Proposed match</div>
+      <div class="name" id="review-name">—</div>
+      <div class="meta" id="review-meta">—</div>
+    </div>
+
+    <div class="two-up">
+      <div class="two-up-panel">
+        <div class="two-up-label">Drawing — floor plan</div>
+        <img id="review-drawing-img" src="" alt="">
+      </div>
+      <div class="two-up-panel">
+        <div class="two-up-label">Legend match</div>
+        <img id="review-legend-img" src="" alt="">
+      </div>
+    </div>
+
+    <div class="action-row">
+      <button class="large" onclick="confirmCurrent()">✓ Confirm</button>
+      <button class="amber" onclick="openPickDifferent()">↕ Pick Different</button>
+      <button class="danger" onclick="rejectCurrent()">✗ Reject</button>
+      <button class="info" onclick="skipCurrent()">— Skip</button>
+    </div>
+
+    <!-- Pick different panel -->
+    <div class="pick-panel" id="pick-panel">
+      <label>Type the correct name from the legend:</label>
+      <input type="text" id="pick-name-input" placeholder="e.g. Wireless Access Point">
+      <div class="hint">
+        Look at the legend image above and find the correct entry.<br>
+        Type its name exactly as shown, then click Confirm with New Name.
+      </div>
+      <div style="display:flex; gap:8px;">
+        <button onclick="confirmWithNewName()">✓ Confirm with New Name</button>
+        <button class="danger" onclick="closePickDifferent()">Cancel</button>
+      </div>
+    </div>
+
+    <div class="status" id="review-status"></div>
+  </div>
+
+  <!-- Section C: No match / manual input -->
+  <div class="section" id="section-c" style="display:none">
+    <h2>C · Name This Symbol</h2>
+    <p style="color:#666; font-size:11px; margin-bottom:12px;">
+      This symbol was found but could not be matched to a legend entry.
+      Look at the legend image and type its name, or skip it.
+    </p>
+
+    <div class="two-up">
+      <div class="two-up-panel">
+        <div class="two-up-label">Drawing — floor plan</div>
+        <img id="unmatched-drawing-img" src="" alt="">
+      </div>
+      <div class="two-up-panel">
+        <div class="two-up-label">Legend — find the matching entry</div>
+        <img id="unmatched-legend-img" src="" alt="">
+      </div>
+    </div>
+
+    <div class="device-name-bar">
+      <div class="proposed">Found ~<span id="unmatched-count">0</span> times on sample pages</div>
+      <div class="meta" id="unmatched-desc" style="color:#888; margin-top:4px;">—</div>
+    </div>
+
+    <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+      <input type="text" id="unmatched-name-input"
+             placeholder="Type name from legend…"
+             style="width:280px; font-size:12px;">
+      <button onclick="confirmUnmatched()">✓ Add to Library</button>
+      <button class="danger" onclick="skipUnmatched()">— Skip</button>
+    </div>
+    <div class="status" id="unmatched-status"></div>
+  </div>
+
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<!-- PHASE: COMPLETE                                               -->
+<!-- ══════════════════════════════════════════════════════════════ -->
+<div id="phase-complete" style="display:none">
+  <div class="section">
+    <div class="complete-panel">
+      <div class="big-check">✓</div>
+      <h2>Device library ready</h2>
+      <p style="color:#666; font-size:11px; margin-bottom:20px;">
+        These device types will be detected across your drawing set.
+      </p>
+      <div class="device-scope-list" id="scope-list"></div>
+      <div style="margin-top:24px;">
+        <button class="large amber" id="continue-btn" onclick="continueToPipeline()">
+          Continue to Takeoff →
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── App state ─────────────────────────────────────────────────────
+const S = {
+  baseUrl:        'https://winquest-take-off.netlify.app',
+  projectId:      null,
+  phase:          'setup',
+  pdf:            null,
+  pageCount:      0,
+  pageCanvases:   {},   // pageNum → rendered canvas (thumbnail)
+  pageImages:     {},   // pageNum → base64 JPEG (hi-res for API)
+  samplePages:    new Set(),
+  legendPages:    new Set(),
+  sessionId:      null,
+  clusters:       [],   // all non-noise clusters (with db_id)
+  batchClusters:  [],   // high confidence
+  reviewQueue:    [],   // medium + low
+  reviewIdx:      0,
+  approved:       0,
+  rejected:       0,
+  skipped:        0,
+  sampleImg:      null, // first sample page base64 (for review display)
+  legendImg:      null  // first legend page base64 (for review display)
+};
+
+// ── Init ──────────────────────────────────────────────────────────
+(function init() {
+  const p = new URLSearchParams(window.location.search);
+  const pid = p.get('project_id') || sessionStorage.getItem('to_project_id');
+  if (pid) {
+    document.getElementById('project-id').value = pid;
+    S.projectId = parseInt(pid);
+  }
+  const nu = sessionStorage.getItem('to_netlify_url');
+  if (nu) {
+    document.getElementById('netlify-url').value = nu;
+    S.baseUrl = nu;
+  }
+})();
+
+function base()   { return document.getElementById('netlify-url').value.replace(/\/$/, ''); }
+function projId() { return parseInt(document.getElementById('project-id').value.trim()); }
+
+function setStatus(id, msg, cls = '') {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = msg;
+  el.className = 'status ' + cls;
+}
+
+// ── PDF upload ────────────────────────────────────────────────────
+async function handlePdfUpload(input) {
+  const file = input.files[0];
+  if (!file) return;
+
+  const zone = document.getElementById('upload-zone');
+  zone.classList.add('loaded');
+  zone.innerHTML = `📄 ${file.name}`;
+  setStatus('upload-status', 'Loading PDF…', 'run');
+
+  const buffer = await file.arrayBuffer();
+  S.pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+  S.pageCount = S.pdf.numPages;
+
+  setStatus('upload-status', `✓ ${S.pageCount} pages loaded`, 'ok');
+  document.getElementById('page-select-section').style.display = 'block';
+  renderThumbnails();
+}
+
+async function renderThumbnails() {
+  const grid = document.getElementById('page-grid');
+  grid.innerHTML = '';
+
+  for (let i = 1; i <= S.pageCount; i++) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'page-thumb';
+    wrapper.dataset.page = i;
+    wrapper.onclick = () => togglePage(i);
+
+    const canvas = document.createElement('canvas');
+    wrapper.appendChild(canvas);
+
+    const numEl = document.createElement('div');
+    numEl.className = 'page-num';
+    numEl.textContent = i;
+    wrapper.appendChild(numEl);
+
+    grid.appendChild(wrapper);
+
+    // Render async
+    const page = await S.pdf.getPage(i);
+    const vp   = page.getViewport({ scale: 0.12 });
+    canvas.width  = vp.width;
+    canvas.height = vp.height;
+    await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+  }
+}
+
+function togglePage(pageNum) {
+  const el = document.querySelector(`.page-thumb[data-page="${pageNum}"]`);
+  if (!el) return;
+
+  // Remove existing badge
+  const existing = el.querySelector('.badge');
+  if (existing) existing.remove();
+
+  if (S.samplePages.has(pageNum) && !S.legendPages.has(pageNum)) {
+    // Was sample → make legend
+    S.samplePages.delete(pageNum);
+    S.legendPages.add(pageNum);
+    el.className = 'page-thumb legend';
+    const b = document.createElement('span');
+    b.className = 'badge'; b.textContent = 'LEG';
+    el.appendChild(b);
+  } else if (S.legendPages.has(pageNum)) {
+    // Was legend → deselect
+    S.legendPages.delete(pageNum);
+    el.className = 'page-thumb';
+  } else {
+    // Not selected → make sample
+    S.samplePages.add(pageNum);
+    el.className = 'page-thumb sample';
+    const b = document.createElement('span');
+    b.className = 'badge'; b.textContent = 'FP';
+    el.appendChild(b);
+  }
+
+  updateSelectionSummary();
+}
+
+function updateSelectionSummary() {
+  const s = S.samplePages.size;
+  const l = S.legendPages.size;
+  const ready = s >= 1 && l >= 1;
+
+  document.getElementById('selection-summary').textContent =
+    `${s} floor plan page${s !== 1 ? 's' : ''} selected · ${l} legend page${l !== 1 ? 's' : ''} selected` +
+    (ready ? '' : ' — select at least 1 of each to continue');
+
+  document.getElementById('start-btn').disabled = !ready;
+}
+
+// ── Render page hi-res for API ────────────────────────────────────
+async function renderPageHiRes(pageNum) {
+  if (S.pageImages[pageNum]) return S.pageImages[pageNum];
+
+  const page = await S.pdf.getPage(pageNum);
+  const vp   = page.getViewport({ scale: 1.4 }); // ~100 DPI
+  const cv   = document.createElement('canvas');
+  cv.width  = vp.width;
+  cv.height = vp.height;
+  await page.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+
+  // Convert to JPEG base64
+  const b64 = cv.toDataURL('image/jpeg', 0.82).split(',')[1];
+  S.pageImages[pageNum] = b64;
+  return b64;
+}
+
+// ── Start discovery ───────────────────────────────────────────────
+async function startDiscovery() {
+  S.projectId = projId();
+  if (!S.projectId) { setStatus('setup-status', 'Enter Project ID', 'err'); return; }
+
+  S.baseUrl = base();
+  showPhase('scanning');
+
+  // Step 1: Render pages
+  setStep('step-render', 'active');
+  setProgress(10);
+
+  const sampleNums = [...S.samplePages].sort((a,b) => a-b);
+  const legendNums = [...S.legendPages].sort((a,b) => a-b);
+  const sampleImgs = [];
+  const legendImgs = [];
+
+  for (const n of sampleNums) sampleImgs.push(await renderPageHiRes(n));
+  for (const n of legendNums) legendImgs.push(await renderPageHiRes(n));
+
+  S.sampleImg = sampleImgs[0];
+  S.legendImg = legendImgs[0];
+
+  setStep('step-render', 'done');
+  setProgress(25);
+
+  // Step 2: Scan
+  setStep('step-scan', 'active');
+  document.getElementById('scan-label').textContent = 'Scanning floor plan for symbols…';
+  setProgress(40);
+
+  // Step 3 + 4 happen inside pass-discover scan action
+  setStep('step-legend', 'active');
+  document.getElementById('scan-label').textContent = 'Reading legend…';
+  setProgress(55);
+
+  let data;
+  try {
+    const resp = await fetch(`${S.baseUrl}/api/pass-discover`, {
+      method:  'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        action:              'scan',
+        project_id:          S.projectId,
+        sample_images:       sampleImgs,
+        legend_images:       legendImgs,
+        sample_page_numbers: sampleNums,
+        legend_page_numbers: legendNums
+      })
+    });
+    data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || resp.status);
+  } catch (e) {
+    showPhase('setup');
+    setStatus('setup-status', 'Scan failed: ' + e.message, 'err');
+    return;
+  }
+
+  setStep('step-legend', 'done');
+  setStep('step-build', 'active');
+  setProgress(85);
+
+  S.sessionId = data.session_id;
+
+  // Load clusters with DB ids via load_session
+  const loaded = await loadSession(S.sessionId);
+  if (!loaded) {
+    showPhase('setup');
+    setStatus('setup-status', 'Failed to load session clusters', 'err');
+    return;
+  }
+
+  setStep('step-build', 'done');
+  setProgress(100);
+
+  // Short pause then show review
+  setTimeout(() => setupReview(data.summary), 600);
+}
+
+async function loadSession(sessionId) {
+  try {
+    const resp = await fetch(`${S.baseUrl}/api/pass-discover`, {
+      method:  'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'load_session', project_id: S.projectId, session_id: sessionId })
+    });
+    const data = await resp.json();
+    if (!resp.ok) return false;
+    S.clusters = data.clusters || [];
+    return true;
+  } catch { return false; }
+}
+
+// ── Review setup ──────────────────────────────────────────────────
+function setupReview(summary) {
+  showPhase('review');
+
+  // Split into batch (high) and queue (medium + low)
+  S.batchClusters  = S.clusters.filter(c => c.match_confidence === 'high');
+  S.reviewQueue    = S.clusters.filter(c => c.match_confidence !== 'high');
+  S.reviewIdx      = 0;
+  S.approved = S.rejected = S.skipped = 0;
+
+  updateReviewProgress();
+  buildBatchGrid();
+
+  // Show section A if there are batch items, otherwise go straight to B/C
+  if (S.batchClusters.length > 0) {
+    document.getElementById('section-a').style.display = 'block';
+    document.getElementById('section-b').style.display = 'none';
+    document.getElementById('section-c').style.display = 'none';
+  } else {
+    document.getElementById('section-a').style.display = 'none';
+    advanceReviewQueue();
+  }
+}
+
+function updateReviewProgress() {
+  const total = S.clusters.length;
+  const done  = S.approved + S.rejected + S.skipped;
+  document.getElementById('review-progress-text').textContent =
+    `${done} of ${total} device types reviewed`;
+  document.getElementById('chip-high').textContent   = `${S.batchClusters.length} ready`;
+  document.getElementById('chip-medium').textContent =
+    `${S.reviewQueue.filter(c => c.match_confidence === 'medium').length} to review`;
+  document.getElementById('chip-low').textContent    =
+    `${S.reviewQueue.filter(c => c.match_confidence === 'low').length} flagged`;
+}
+
+// ── Section A: batch grid ─────────────────────────────────────────
+function buildBatchGrid() {
+  const grid = document.getElementById('batch-grid');
+  grid.innerHTML = '';
+
+  S.batchClusters.forEach(c => {
+    const card = document.createElement('div');
+    card.className = 'batch-card';
+    card.dataset.clusterId = c.cluster_id;
+    card.onclick = () => moveToIndividualReview(c);
+
+    const anchors = (c.nearby_text || []).map(a =>
+      `<span class="anchor-pill">${a}</span>`
+    ).join('');
+
+    card.innerHTML = `
+      <div class="card-name">${esc(c.legend_name || 'Unknown')}</div>
+      <div class="card-count">~${c.approximate_count} found on sample pages</div>
+      <div class="card-anchors">${anchors}</div>
+      <div class="review-flag" title="Click to review individually">⊙</div>`;
+
+    grid.appendChild(card);
+  });
+}
+
+function moveToIndividualReview(cluster) {
+  // Remove from batch, add to front of review queue
+  S.batchClusters = S.batchClusters.filter(c => c.cluster_id !== cluster.cluster_id);
+  S.reviewQueue.unshift(cluster);
+  buildBatchGrid();
+  if (S.batchClusters.length === 0) {
+    document.getElementById('section-a').style.display = 'none';
+  }
+  advanceReviewQueue();
+}
+
+async function approveAll() {
+  const btn = document.getElementById('approve-all-btn');
+  btn.disabled = true;
+  setStatus('batch-status', 'Approving…', 'run');
+
+  const results = await Promise.allSettled(
+    S.batchClusters.map(c => callApprove(c.id, null))
+  );
+
+  const failed = results.filter(r => r.status === 'rejected').length;
+  S.approved += S.batchClusters.length - failed;
+  S.batchClusters = [];
+
+  document.getElementById('section-a').style.display = 'none';
+  setStatus('batch-status', '');
+
+  updateReviewProgress();
+  advanceReviewQueue();
+}
+
+// ── Section B: individual review ──────────────────────────────────
+function advanceReviewQueue() {
+  if (S.reviewIdx >= S.reviewQueue.length) {
+    // All done
+    finishReview();
+    return;
+  }
+
+  const cluster = S.reviewQueue[S.reviewIdx];
+  const isLow   = cluster.match_confidence === 'low' || !cluster.legend_name;
+
+  document.getElementById('section-b').style.display = isLow ? 'none' : 'block';
+  document.getElementById('section-c').style.display = isLow ? 'block' : 'none';
+  closePickDifferent();
+
+  if (isLow) {
+    showUnmatched(cluster);
+  } else {
+    showReview(cluster);
+  }
+}
+
+function showReview(cluster) {
+  const title = cluster.match_confidence === 'medium'
+    ? 'B · Review This Match'
+    : 'B · Confirm Match';
+  document.getElementById('section-b-title').textContent = title;
+  document.getElementById('review-name').textContent =
+    cluster.legend_name || 'No match found';
+  document.getElementById('review-meta').textContent =
+    `~${cluster.approximate_count} found · ` +
+    (cluster.nearby_text?.length ? `Labels: ${cluster.nearby_text.join(', ')}` : 'No text labels');
+
+  // Show images
+  if (S.sampleImg) {
+    document.getElementById('review-drawing-img').src = 'data:image/jpeg;base64,' + S.sampleImg;
+  }
+  if (S.legendImg) {
+    document.getElementById('review-legend-img').src = 'data:image/jpeg;base64,' + S.legendImg;
+  }
+  setStatus('review-status', '');
+}
+
+function showUnmatched(cluster) {
+  document.getElementById('unmatched-count').textContent = cluster.approximate_count || '?';
+  document.getElementById('unmatched-desc').textContent =
+    cluster.visual_description?.slice(0, 120) || '—';
+  document.getElementById('unmatched-name-input').value = '';
+
+  if (S.sampleImg) {
+    document.getElementById('unmatched-drawing-img').src = 'data:image/jpeg;base64,' + S.sampleImg;
+  }
+  if (S.legendImg) {
+    document.getElementById('unmatched-legend-img').src = 'data:image/jpeg;base64,' + S.legendImg;
+  }
+  setStatus('unmatched-status', '');
+}
+
+// ── Review actions ────────────────────────────────────────────────
+async function confirmCurrent() {
+  const cluster = S.reviewQueue[S.reviewIdx];
+  setStatus('review-status', 'Confirming…', 'run');
+  const ok = await callApprove(cluster.id, null);
+  if (ok) { S.approved++; S.reviewIdx++; updateReviewProgress(); advanceReviewQueue(); }
+  else setStatus('review-status', 'Error — try again', 'err');
+}
+
+async function rejectCurrent() {
+  const cluster = S.reviewQueue[S.reviewIdx];
+  setStatus('review-status', 'Rejecting…', 'run');
+  const ok = await callReject(cluster.id);
+  if (ok) { S.rejected++; S.reviewIdx++; updateReviewProgress(); advanceReviewQueue(); }
+  else setStatus('review-status', 'Error — try again', 'err');
+}
+
+async function skipCurrent() {
+  const cluster = S.reviewQueue[S.reviewIdx];
+  setStatus('review-status', 'Skipping…', 'run');
+  const ok = await callSkip(cluster.id);
+  if (ok) { S.skipped++; S.reviewIdx++; updateReviewProgress(); advanceReviewQueue(); }
+  else setStatus('review-status', 'Error — try again', 'err');
+}
+
+function openPickDifferent()  { document.getElementById('pick-panel').classList.add('open'); }
+function closePickDifferent() { document.getElementById('pick-panel').classList.remove('open'); }
+
+async function confirmWithNewName() {
+  const name = document.getElementById('pick-name-input').value.trim();
+  if (!name) { setStatus('review-status', 'Enter a name first', 'err'); return; }
+  const cluster = S.reviewQueue[S.reviewIdx];
+  setStatus('review-status', 'Saving…', 'run');
+  const ok = await callApprove(cluster.id, name);
+  if (ok) { S.approved++; S.reviewIdx++; updateReviewProgress(); advanceReviewQueue(); }
+  else setStatus('review-status', 'Error — try again', 'err');
+}
+
+async function confirmUnmatched() {
+  const name = document.getElementById('unmatched-name-input').value.trim();
+  if (!name) { setStatus('unmatched-status', 'Enter a name first', 'err'); return; }
+  const cluster = S.reviewQueue[S.reviewIdx];
+  setStatus('unmatched-status', 'Saving…', 'run');
+  const ok = await callApprove(cluster.id, name);
+  if (ok) { S.approved++; S.reviewIdx++; updateReviewProgress(); advanceReviewQueue(); }
+  else setStatus('unmatched-status', 'Error — try again', 'err');
+}
+
+async function skipUnmatched() {
+  const cluster = S.reviewQueue[S.reviewIdx];
+  setStatus('unmatched-status', 'Skipping…', 'run');
+  const ok = await callSkip(cluster.id);
+  if (ok) { S.skipped++; S.reviewIdx++; updateReviewProgress(); advanceReviewQueue(); }
+  else setStatus('unmatched-status', 'Error — try again', 'err');
+}
+
+// ── API calls ─────────────────────────────────────────────────────
+async function callApprove(clusterDbId, finalName) {
+  try {
+    const resp = await fetch(`${S.baseUrl}/api/pass-discover`, {
+      method:  'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        action:         'approve',
+        project_id:     S.projectId,
+        session_id:     S.sessionId,
+        cluster_db_id:  clusterDbId,
+        final_name:     finalName || undefined
+      })
+    });
+    return resp.ok;
+  } catch { return false; }
+}
+
+async function callReject(clusterDbId) {
+  try {
+    const resp = await fetch(`${S.baseUrl}/api/pass-discover`, {
+      method:  'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'reject', project_id: S.projectId, cluster_db_id: clusterDbId })
+    });
+    return resp.ok;
+  } catch { return false; }
+}
+
+async function callSkip(clusterDbId) {
+  try {
+    const resp = await fetch(`${S.baseUrl}/api/pass-discover`, {
+      method:  'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'skip', project_id: S.projectId, cluster_db_id: clusterDbId })
+    });
+    return resp.ok;
+  } catch { return false; }
+}
+
+// ── Finish review ─────────────────────────────────────────────────
+async function finishReview() {
+  // Complete session
+  try {
+    const resp = await fetch(`${S.baseUrl}/api/pass-discover`, {
+      method:  'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        action:     'complete',
+        project_id: S.projectId,
+        session_id: S.sessionId
+      })
+    });
+    const data = await resp.json();
+    showComplete(data.devices || []);
+  } catch {
+    showComplete([]);
+  }
+}
+
+function showComplete(devices) {
+  showPhase('complete');
+  const list = document.getElementById('scope-list');
+  list.innerHTML = '';
+
+  if (!devices.length) {
+    list.innerHTML = '<div class="device-scope-item"><span class="dev-name" style="color:#555;">No devices approved</span></div>';
+    return;
+  }
+
+  devices.forEach(d => {
+    const row = document.createElement('div');
+    row.className = 'device-scope-item';
+    row.innerHTML = `
+      <span class="dev-name">${esc(d.final_name || d.legend_name || 'Device')}</span>
+      <span class="dev-count">~${d.approximate_count || '?'} per floor</span>`;
+    list.appendChild(row);
+  });
+
+  document.getElementById('continue-btn').dataset.projectId = S.projectId;
+}
+
+function continueToPipeline() {
+  sessionStorage.setItem('to_project_id',   S.projectId);
+  sessionStorage.setItem('to_netlify_url',  S.baseUrl);
+  sessionStorage.setItem('to_origin_page',  'discover.html');
+  window.location.href = `multi-page.html?project_id=${S.projectId}`;
+}
+
+// ── Phase switching ───────────────────────────────────────────────
+function showPhase(phase) {
+  ['setup','scanning','review','complete'].forEach(p => {
+    document.getElementById('phase-' + p).style.display = p === phase ? 'block' : 'none';
+  });
+  S.phase = phase;
+}
+
+// ── Scanning step helpers ─────────────────────────────────────────
+function setStep(id, state) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.className = 'scan-step ' + state;
+}
+
+function setProgress(pct) {
+  document.getElementById('scan-progress').style.width = pct + '%';
+}
+
+// ── Utility ───────────────────────────────────────────────────────
+function esc(str) {
+  return String(str)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+</body>
+</html>

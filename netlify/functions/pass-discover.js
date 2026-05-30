@@ -40,6 +40,7 @@ export default async function handler(req) {
       case "reject":   return await actionReject(body);
       case "skip":     return await actionSkip(body);
       case "complete": return await actionComplete(body);
+      case "load_session": return await actionLoadSession(body);
       default: return respond(400, { error: `Unknown action: ${action}` });
     }
   } catch (e) {
@@ -438,6 +439,21 @@ async function actionComplete(body) {
     devices_in_scope: (devices || []).length,
     devices:          devices || []
   });
+}
+
+async function actionLoadSession(body) {
+  const { session_id } = body;
+  if (!session_id) return respond(400, { error: "session_id required" });
+
+  const { data: clusters, error } = await supabase
+    .from("discovery_clusters")
+    .select("id, cluster_id, cluster_index, visual_description, nearby_text, approximate_count, location_pattern, legend_name, legend_description, match_confidence, match_reason, review_status, drawing_crop_base64, legend_crop_base64")
+    .eq("session_id", session_id)
+    .eq("is_noise", false)
+    .order("cluster_index");
+
+  if (error) return respond(500, { error: error.message });
+  return respond(200, { clusters: clusters || [] });
 }
 
 // ═════════════════════════════════════════════════════════════════
