@@ -135,29 +135,36 @@ async function actionScanStrip(body) {
   if (!strip_image) return respond(400, { error: "strip_image required" });
 
   const yRange = (y_end_frac - y_start_frac);
-  const prompt = `This is horizontal strip ${strip_index + 1} from a telecommunications floor plan.
-This strip covers ${Math.round(y_start_frac * 100)}%–${Math.round(y_end_frac * 100)}% of the full page height.
+  const prompt = `This is a horizontal band from a telecommunications floor plan drawing.
 
-Find every distinct repeating device symbol in this strip.
+Find every distinct repeating device symbol visible in this image.
 
 For EACH symbol type found:
 1. Describe EXACTLY what you see — shape, fill, size, line weight, internal marks
-2. Note BASE text label nearby (strip numeric suffix: DD1/DD2 → "DD", WAP → "WAP")
-3. Count instances in this strip
+2. Note the device label text DIRECTLY adjacent to the symbol (within 1-2 symbol widths).
+   Valid device labels look like: DD1, DD2, DV1, N2, WAP, AP, J-BOX, CAM, PTZ
+   Strip trailing numbers to get the base pattern: DD1/DD2/DD3 → "DD", N1/N2 → "N"
+3. Count how many instances appear in this image
 4. Estimate position of one clear example:
    - x_frac: 0.0 (left edge) to 1.0 (right edge)
-   - y_frac_strip: 0.0 (top of this strip) to 1.0 (bottom of this strip)
+   - y_frac_strip: 0.0 (top) to 1.0 (bottom)
 
-EXCLUDE — not devices:
-- Dashed lines, conduit runs, cable routing paths
-- Circles/bubbles containing only numbers (keynote callouts)
-- Directional arrows with no text label
-- Room name text, grid letters/numbers, dimension strings
-- Title block, north arrow, scale bar
+EXCLUDE — these are NOT device symbols:
+- Dashed lines, solid lines, conduit runs, cable routing paths
+- Circles or bubbles containing only numerals (keynote callouts, detail references)
+- Directional arrows or triangular routing indicators
+- Room name text, general notes, dimension strings
 
-Only include symbols appearing 2+ times in this strip.
+EXCLUDE as nearby_text — these are NOT device labels:
+- Single uppercase letters (A B C D E F G H I J K L M N O P Q R S T) arranged
+  in a regular spaced grid along the top or bottom border of the drawing.
+  These are drawing coordinate grid references, not device labels.
+- Numerals (1 2 3 4 5 6...) arranged in a regular grid along drawing borders.
+- Room names, area descriptions, general annotation.
 
-Return ONLY valid JSON — no markdown, no preamble:
+Only include symbols appearing 2 or more times.
+
+Return ONLY valid JSON — no markdown fences, no preamble:
 {
   "symbols": [
     {
@@ -167,7 +174,7 @@ Return ONLY valid JSON — no markdown, no preamble:
       "approximate_count": 12,
       "x_frac": 0.35,
       "y_frac_strip": 0.4,
-      "location_pattern": "at wall locations"
+      "location_pattern": "at wall locations near room entrances"
     }
   ]
 }`;

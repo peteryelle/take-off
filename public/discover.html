@@ -813,8 +813,7 @@ async function startDiscovery() {
     for (const strip of strips) {
       const pct = 10 + Math.round(55 * stripsDone / totalStrips);
       setProgress(pct);
-      document.getElementById('scan-label').textContent =
-        `Scanning floor plan — strip ${stripsDone + 1} of ${totalStrips}…`;
+      document.getElementById('scan-label').textContent = 'Analyzing drawing…';
 
       try {
         const resp = await fetch(`${S.baseUrl}/api/pass-discover`, {
@@ -979,7 +978,15 @@ function buildBatchGrid() {
       `<span class="anchor-pill">${a}</span>`
     ).join('');
 
+    const cropHtml = c.drawing_crop_base64
+      ? `<img src="data:image/jpeg;base64,${c.drawing_crop_base64}"
+             style="width:100%;max-height:110px;object-fit:contain;background:#000;
+                    display:block;margin-bottom:8px;border-radius:2px;cursor:zoom-in;"
+             onclick="event.stopPropagation();openLightbox(this.src,'${(c.legend_name||'Symbol').replace(/'/g,"\\'")}' + ' — symbol crop')">`
+      : '';
+
     card.innerHTML = `
+      ${cropHtml}
       <div class="card-name">${esc(c.legend_name || 'Unknown')}</div>
       <div class="card-count">~${c.approximate_count} found on sample pages</div>
       <div class="card-anchors">${anchors}</div>
