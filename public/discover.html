@@ -541,24 +541,29 @@ async function confirmDevice() {
   const name = document.getElementById('name-override').value.trim();
   if (!name) { setStatus('confirm-status','Enter a name','err'); return; }
 
+  // Capture before any await — prevents race condition if user
+  // draws a new crop while this API call is in flight
+  const thisCrop     = S.lastCropB64;
+  const thisAnalysis = S.lastAnalysis;
+
   setStatus('confirm-status','Adding…','run');
 
   // Build a legend_entry structure for build_device
   const legendEntry = {
     id:                 `CROP_${Date.now()}`,
     name,
-    short_description:  S.lastAnalysis?.device_guess || '',
-    legend_description: S.lastAnalysis?.legend_description || '',
-    text_anchors:       S.lastAnalysis?.nearby_text || [],
+    short_description:  thisAnalysis?.device_guess || '',
+    legend_description: thisAnalysis?.legend_description || '',
+    text_anchors:       thisAnalysis?.nearby_text || [],
     category:           'telecom'
   };
 
-  // Fake "instance" from the crop itself for description generation
+  // Instance from the crop itself for description generation
   const fakeInstance = {
     x_frac:           0.5,
     y_frac_full_page: 0.5,
-    nearby_text:      S.lastAnalysis?.nearby_text || [],
-    visual_notes:     S.lastAnalysis?.visual_description || ''
+    nearby_text:      thisAnalysis?.nearby_text || [],
+    visual_notes:     thisAnalysis?.visual_description || ''
   };
 
   try {
@@ -567,11 +572,11 @@ async function confirmDevice() {
       project_id:          S.projectId,
       legend_entry:        legendEntry,
       all_instances:       [fakeInstance],
-      drawing_crop_base64: S.lastCropB64,
+      drawing_crop_base64: thisCrop,
       legend_crop_base64:  null
     });
 
-    S.devices.push({ name, crop:S.lastCropB64, device_type_id:result.device_type_id });
+    S.devices.push({ name, crop: thisCrop, device_type_id: result.device_type_id });
     renderDeviceList();
     resetToHint();
     setStatus('confirm-status','');
