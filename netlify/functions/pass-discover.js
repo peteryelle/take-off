@@ -113,26 +113,26 @@ function classifyNoise(cluster) {
 }
 
 // ── Text anchor normalization ─────────────────────────────────────
-// Handles three input forms:
-//   "DD"  → base pattern (ends in capital) → expands to DD1,DD2,DD3 / DD4-DD6
-//   "DV1" → numbered anchor → strips digit, expands same way
-//   "WAP" → specific label, no expandable pattern → used as-is
+// "DD"  → 1-2 letter base code  → expands to DD1,DD2,DD3 / DD4-DD6
+// "DV1" → numbered anchor       → strips digit, expands same way
+// "WAP" → 3+ letter acronym     → used as-is (WAP, CAM, PTZ, J-BOX)
+// "N"   → 1-letter base         → expands to N1, N2, N3
 function normalizeAnchors(nearbyText) {
   if (!nearbyText || nearbyText.length === 0) return { primary: [], associated: [] };
   const primary = [], associated = [];
   nearbyText.forEach(anchor => {
     const b = anchor.trim();
     if (!b) return;
-    // Base pattern ending in capital letter: "DD", "DV", "N"
-    if (/[A-Z]$/.test(b)) {
-      primary.push(`${b}1`, `${b}2`, `${b}3`);
-      associated.push(`${b}4`, `${b}5`, `${b}6`);
     // Numbered anchor: "DV1", "DD2", "N2" — strip digits, expand base
-    } else if (/^[A-Z]+\d+$/.test(b)) {
+    if (/^[A-Z]+\d+$/.test(b)) {
       const base = b.replace(/\d+$/, '');
       primary.push(`${base}1`, `${base}2`, `${base}3`);
       associated.push(`${base}4`, `${base}5`, `${base}6`);
-    // Specific label: "WAP", "AP", "J-BOX" — use as-is
+    // Short base code (1-2 capital letters only): "DD", "DV", "N" — expand
+    } else if (/^[A-Z]{1,2}$/.test(b)) {
+      primary.push(`${b}1`, `${b}2`, `${b}3`);
+      associated.push(`${b}4`, `${b}5`, `${b}6`);
+    // Everything else: "WAP", "CAM", "J-BOX", "FACP" — use as-is
     } else {
       primary.push(b);
     }
