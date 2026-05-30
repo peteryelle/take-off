@@ -1867,7 +1867,7 @@ async function loadProjectCard(pid) {
 // Collapses device_instances that are within DEDUP_THRESH normalized
 // units of each other on the same page into one entry.
 // Handles DV#+DD#+N# stacked labels at the same outlet location.
-const DEDUP_THRESH = 0.018;
+const DEDUP_THRESH = 0.022; // max spread of stacked DV/DD/N labels
 
 function deduplicateInstances(instances) {
   if (!instances?.length) return [];
@@ -1894,6 +1894,11 @@ function deduplicateInstances(instances) {
       for (let j = i + 1; j < pageInsts.length; j++) {
         if (used.has(j)) continue;
         const b = pageInsts[j];
+
+        // Only cluster instances of the same device type
+        // Prevents WAPs from absorbing nearby outlet labels
+        if (a.device_type_id !== b.device_type_id) continue;
+
         const dx = Math.abs((a.x_norm ?? 0) - (b.x_norm ?? 0));
         const dy = Math.abs((a.y_norm ?? 0) - (b.y_norm ?? 0));
         if (dx <= DEDUP_THRESH && dy <= DEDUP_THRESH) {
@@ -1902,7 +1907,7 @@ function deduplicateInstances(instances) {
         }
       }
 
-      // Pick the representative: prefer instance with more labels
+      // Pick representative: prefer instance with most labels
       const primary = group.reduce((best, inst) => {
         const bestN = (best.data_ports?.length  ?? 0)
                     + (best.voice_ports?.length ?? 0)
