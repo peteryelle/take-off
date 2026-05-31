@@ -1629,10 +1629,19 @@ async function runBatch() {
         try {
           // Snapshot text-layer bounds BEFORE the loop — used to filter
           // visual detections to the building footprint only.
-          // Captured here so it doesn't grow as visual instances are added.
+          // Use OUTLET devices only — camera "180" and WAP anchors can match
+          // text in the notes/specs area, skewing bounds to include the title block.
           const tlDevices = batchResults[pageNum].devices ?? [];
-          const tlX = tlDevices.map(d => d.x_norm).filter(v => v != null);
-          const tlY = tlDevices.map(d => d.y_norm).filter(v => v != null);
+          const outletIds = new Set(augmentTypes
+            .filter(dt => /DV|DD|N\d/.test(JSON.stringify(dt.text_anchors)))
+            .map(dt => dt.id));
+          const tlOutlets = tlDevices.filter(d =>
+            outletIds.has(d.device_type_id) || outletIds.has(d.legend_id)
+          );
+          // Fall back to all devices if no outlets found
+          const tlBase = tlOutlets.length ? tlOutlets : tlDevices;
+          const tlX = tlBase.map(d => d.x_norm).filter(v => v != null);
+          const tlY = tlBase.map(d => d.y_norm).filter(v => v != null);
           const boundsXMin = tlX.length ? Math.min(...tlX) - 0.06 : 0;
           const boundsXMax = tlX.length ? Math.max(...tlX) + 0.06 : 1;
           const boundsYMin = tlY.length ? Math.min(...tlY) - 0.06 : 0;
