@@ -1627,6 +1627,17 @@ async function runBatch() {
       // Runs after text-layer; finds devices text-layer missed
       if (r.ok && augmentTypes.length) {
         try {
+          // Snapshot text-layer bounds BEFORE the loop — used to filter
+          // visual detections to the building footprint only.
+          // Captured here so it doesn't grow as visual instances are added.
+          const tlDevices = batchResults[pageNum].devices ?? [];
+          const tlX = tlDevices.map(d => d.x_norm).filter(v => v != null);
+          const tlY = tlDevices.map(d => d.y_norm).filter(v => v != null);
+          const boundsXMin = tlX.length ? Math.min(...tlX) - 0.06 : 0;
+          const boundsXMax = tlX.length ? Math.max(...tlX) + 0.06 : 1;
+          const boundsYMin = tlY.length ? Math.min(...tlY) - 0.06 : 0;
+          const boundsYMax = tlY.length ? Math.max(...tlY) + 0.06 : 1;
+
           // Render page image for visual scan
           const augVP  = pdfPage.getViewport({ scale: 1.8 });
           const augCV  = document.createElement('canvas');
@@ -1658,10 +1669,15 @@ async function runBatch() {
               });
               const augData = await augResp.json();
               if (augResp.ok && augData.new_instances > 0) {
-                totalNew += augData.new_instances;
-                // Add new visual instances to batch results
+                // Filter to building footprint using text-layer bounds snapshot
+                const filtered = (augData.instances ?? []).filter(d =>
+                  d.x_norm >= boundsXMin && d.x_norm <= boundsXMax &&
+                  d.y_norm >= boundsYMin && d.y_norm <= boundsYMax
+                );
+                if (!filtered.length) continue;
+                totalNew += filtered.length;
                 const existing = batchResults[pageNum].devices ?? [];
-                const merged   = deduplicateInstances([...existing, ...augData.instances]);
+                const merged   = deduplicateInstances([...existing, ...filtered]);
                 batchResults[pageNum].devices      = merged;
                 batchResults[pageNum].device_count = merged.length;
               }
