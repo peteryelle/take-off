@@ -1298,29 +1298,36 @@ async function getDeviceTextItems(pdfPage) {
   console.log('Anchor pattern set:', [...anchorPatternSet]);
   // ── END DEBUG ──────────────────────────────────────────────────
 
-  const items = [];
-
+  // Two-pass extraction: normalize by content bounds to handle drawings
+  // where content extends outside the PDF MediaBox.
+  const allRaw2 = [];
   for (const item of textContent.items) {
     const raw = item.str?.trim();
     if (!raw) continue;
-    // Strip non-printable/non-ASCII chars (e.g.  = degree symbol in Windows-1252)
-    // Allows "180" to match anchor "180"
-    const str = raw.replace(/[^\x20-\x7E]/g, '').trim();
-    if (!str) continue;
-    if (!anchorPatternSet.has(str)) continue;
-
-    const tx = item.transform[4];
-    const ty = item.transform[5];
+    const str2 = raw.replace(/[^\x20-\x7E]/g, '').trim();
+    if (!str2) continue;
+    const tx = item.transform[4], ty = item.transform[5];
     const fs = Math.abs(item.transform[3]);
-    const tw = item.width  ?? 0;
-    const th = item.height ?? fs;
-
+    const tw = item.width ?? 0, th = item.height ?? fs;
+    allRaw2.push({ str: str2, cx: tx + tw/2, cy: ty + th/2 });
+  }
+  const xVals2 = allRaw2.map(i => i.cx);
+  const yVals2 = allRaw2.map(i => i.cy);
+  const xMin2  = xVals2.length ? Math.min(...xVals2) : 0;
+  const xMax2  = xVals2.length ? Math.max(...xVals2) : W;
+  const yMin2  = yVals2.length ? Math.min(...yVals2) : 0;
+  const yMax2  = yVals2.length ? Math.max(...yVals2) : H;
+  const cW2    = Math.max(xMax2 - xMin2, W);
+  const cH2    = Math.max(yMax2 - yMin2, H);
+  const items = [];
+  for (const { str, cx, cy } of allRaw2) {
+    if (!anchorPatternSet.has(str)) continue;
     items.push({
       str,
-      cx_norm:   parseFloat(((tx + tw / 2) / W).toFixed(4)),
-      cy_norm:   parseFloat((1 - (ty + th / 2) / H).toFixed(4)),
+      cx_norm: parseFloat(((cx - xMin2) / cW2).toFixed(4)),
+      cy_norm: parseFloat((1 - (cy - yMin2) / cH2).toFixed(4)),
       color_hex: '#999999',
-      font_size: parseFloat(fs.toFixed(1))
+      font_size: 10
     });
   }
 
@@ -1343,14 +1350,13 @@ function calcScalePtsPerFt(passBResult) {
 async function runPassExtract() {
   if (!projectId)            { alert('Confirm project first (Step 0)'); return; }
   if (!passBResult?.page_id) { alert('Run Pass B first to get page_id'); return; }
+  await loadAnchorPatterns(); // reload fresh — device types may have changed
   if (!pdfDoc)               { alert('Load a PDF first (Step 1)'); return; }
 
   const pg = evalPage || 1;
   setStatus('pass-extract-status', `Extracting text layer from page ${pg}…`, 'running');
 
   try {
-    // Load anchor patterns from Supabase so we match exactly what's in device_types
-    await loadAnchorPatterns();
 
     const pdfPage  = await pdfDoc.getPage(pg);
     const textData = await getDeviceTextItems(pdfPage);
@@ -1403,10 +1409,134 @@ async function runPassExtract() {
     // Render device table
     renderDeviceTable(j);
 
+    // ── Visual augment — catches leader-line devices ──────────────
+    // Non-blocking: runs after text-layer, adds visually-detected devices
+    try {
+      const augVP  = pdfPage.getViewport({ scale: 1.8 });
+      const augCV  = document.createElement('canvas');
+      augCV.width  = augVP.width; augCV.height = augVP.height;
+      await pdfPage.render({ canvasContext: augCV.getContext('2d'), viewport: augVP }).promise;
+      const pageImgB64 = augCV.toDataURL('image/jpeg', 0.85).split(',')[1];
+
+      const dtR = await fetch(`${base()}/api/takeoff-summary?project_id=${projectId}`);
+      const dtD = await dtR.json();
+      const augTypes = (dtD.device_types ?? []).filter(dt =>
+        dt.llm_description && dt.llm_description.trim().length > 20
+      );
+
+      // Bounds from outlet text-layer devices
+      const tlDevices = j.devices ?? [];
+      const outletIds = new Set(augTypes.filter(dt => /DV|DD|N\d/.test(JSON.stringify(dt.text_anchors))).map(dt => dt.id));
+      const tlBase = tlDevices.filter(d => outletIds.has(d.device_type_id)) || tlDevices;
+      const tlX = (tlBase.length ? tlBase : tlDevices).map(d => d.x_norm).filter(v => v != null);
+      const tlY = (tlBase.length ? tlBase : tlDevices).map(d => d.y_norm).filter(v => v != null);
+      const bXMin = tlX.length ? Math.min(...tlX) - 0.06 : 0;
+      const bXMax = tlX.length ? Math.max(...tlX) + 0.06 : 1;
+      const bYMin = tlY.length ? Math.min(...tlY) - 0.06 : 0;
+      const bYMax = tlY.length ? Math.max(...tlY) + 0.06 : 1;
+
+      const existingPos = tlDevices.map(d => ({ x_norm: d.x_norm, y_norm: d.y_norm }));
+      let totalNew = 0;
+      let allNew = [];
+
+      for (const dt of augTypes) {
+        try {
+          const augResp = await fetch(`${base()}/api/pass-visual-augment`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              project_id: projectId, page_id: passBResult.page_id,
+              device_type_id: dt.id, page_image_base64: pageImgB64,
+              existing_positions: existingPos,
+              demarc_pins: passBResult.demarc_pins ?? [],
+              page_width_pts: textData.page_width_pts,
+              page_height_pts: textData.page_height_pts
+            })
+          });
+          const augData = await augResp.json();
+          if (augResp.ok && augData.new_instances > 0) {
+            const filtered = (augData.instances ?? []).filter(d =>
+              d.x_norm >= bXMin && d.x_norm <= bXMax &&
+              d.y_norm >= bYMin && d.y_norm <= bYMax
+            );
+            totalNew += filtered.length;
+            allNew = allNew.concat(filtered);
+          }
+        } catch { /* soft fail per device type */ }
+      }
+
+      if (totalNew > 0) {
+        setStatus('pass-extract-status',
+          `✓ ${j.device_count} text-layer + ${totalNew} visual = ${j.device_count + totalNew} total`, 'ok');
+        // Reload device table with visual results included
+        const combined = deduplicateInstances([...(j.devices ?? []), ...allNew]);
+        j.devices = combined;
+        j.device_count = combined.length;
+        document.getElementById('device-count').textContent = combined.length;
+        renderDeviceTable(j);
+      }
+    } catch(e) { console.warn('[visual-augment]', e.message); }
+
   } catch(e) {
     setStatus('pass-extract-status', 'Error: ' + e.message, 'err');
     setOutput('pass-extract-output', e.message);
   }
+}
+
+
+// ── Proximity deduplication ───────────────────────────────────────
+function parseLabelFamilies(labels) {
+  const dvs = labels.filter(l => /^DV\d+$/.test(l));
+  const dds = labels.filter(l => /^DD\d+$/.test(l));
+  const ns  = labels.filter(l => /^N\d+$/.test(l));
+  return { dvs, dds, ns };
+}
+
+function splitOverMerge(entry) {
+  const labels = entry.raw_labels ?? [];
+  const { dvs, dds, ns } = parseLabelFamilies(labels);
+  if (dvs.length <= 1 && dds.length <= 1) return [entry];
+  const count = Math.max(dvs.length, dds.length);
+  const outlets = [];
+  for (let i = 0; i < count; i++) {
+    const ol = [];
+    if (dvs[i]) ol.push(dvs[i]);
+    if (dds[i]) ol.push(dds[i]);
+    if (ns[0])  ol.push(ns[0]);
+    outlets.push({ ...entry, raw_labels: ol });
+  }
+  return outlets;
+}
+
+const DEDUP_THRESH = 0.022;
+function deduplicateInstances(instances) {
+  if (!instances?.length) return [];
+  const used = new Set();
+  const result = [];
+  for (let i = 0; i < instances.length; i++) {
+    if (used.has(i)) continue;
+    const a = instances[i];
+    const group = [a];
+    used.add(i);
+    for (let j = i + 1; j < instances.length; j++) {
+      if (used.has(j)) continue;
+      const b = instances[j];
+      const aType = a.device_type_id ?? a.legend_id;
+      const bType = b.device_type_id ?? b.legend_id;
+      if (aType == null || aType !== bType) continue;
+      const dx = Math.abs((a.x_norm ?? 0) - (b.x_norm ?? 0));
+      const dy = Math.abs((a.y_norm ?? 0) - (b.y_norm ?? 0));
+      if (dx <= DEDUP_THRESH && dy <= DEDUP_THRESH) { group.push(b); used.add(j); }
+    }
+    const primary = group.reduce((best, inst) => {
+      const bn = (best.data_ports?.length ?? 0) + (best.voice_ports?.length ?? 0) + (best.node_labels?.length ?? 0);
+      const tn = (inst.data_ports?.length  ?? 0) + (inst.voice_ports?.length  ?? 0) + (inst.node_labels?.length  ?? 0);
+      return tn > bn ? inst : best;
+    }, group[0]);
+    const allLabels = [...new Set(group.flatMap(g => g.raw_labels ?? []))];
+    const merged = { ...primary, raw_labels: allLabels };
+    for (const outlet of splitOverMerge(merged)) result.push(outlet);
+  }
+  return result;
 }
 
 // ── Device table renderer ────────────────────────────────────────────
@@ -1452,8 +1582,8 @@ async function loadFullDeviceList(extractResult) {
     for (const dt of (j.device_types ?? [])) dtMap[dt.legend_id] = dt;
 
     // All devices are returned directly from pass-extract (no sample limit)
-    const devices = extractResult.devices ?? [];
-    renderDeviceRows(devices, dtMap, tbody, extractResult.device_count);
+    const devices = deduplicateInstances(extractResult.devices ?? []);
+    renderDeviceRows(devices, dtMap, tbody, devices.length);
   } catch(e) {
     tbody.innerHTML = `<tr><td colspan="6" style="color:#f07a7a; padding:8px;">Error: ${e.message}</td></tr>`;
   }
