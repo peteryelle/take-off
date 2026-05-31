@@ -820,7 +820,7 @@ async function runPassB() {
   await page.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
   const b64  = cv.toDataURL('image/jpeg', 0.82).split(',')[1];
   const kb   = Math.round(b64.length * 0.75 / 1024);
-  setStatus('pass-b-status', `Calling /api/pass-b-page… (${kb} KB)`, 'running');
+  setStatus('pass-b-status', `Scanning page for scale and demarc… (${kb} KB)`, 'running');
 
   try {
     const r = await fetch(`${base()}/api/pass-b-page`, {
@@ -842,18 +842,67 @@ async function runPassB() {
 
     passBResult = j;
     saveSession();
+
+    // ── Text-layer TR room coordinate lookup ──────────────────────────
+    // When Pass B finds a TR label but no coordinates, search the PDF
+    // text layer for that label — far more reliable than visual scan
+    // at low resolution, and works regardless of how the room is labeled.
+    if (j.demarcation?.found && j.demarcation.x == null && j.demarcation.label && pdfDoc) {
+      try {
+        const trLabel = j.demarcation.label.trim().toUpperCase();
+        console.log('[tr-lookup] label:', j.demarcation.label, '→ searching for:', trLabel);
+        const pg2     = evalPage || 1;
+        const page2   = await pdfDoc.getPage(pg2);
+        const vp2     = page2.getViewport({ scale: 1.0 });
+        const W2      = vp2.width, H2 = vp2.height;
+        const tc2     = await page2.getTextContent({ includeMarkedContent: false });
+
+        // Collect all text items with their positions
+        const txtItems = tc2.items.map(item => ({
+          str: (item.str ?? '').trim().toUpperCase(),
+          x:   item.transform[4] / W2,
+          y:   1 - item.transform[5] / H2
+        })).filter(t => t.str.length > 0);
+
+        // Find items containing the TR label
+        const slItems = txtItems.filter(t => t.str.includes('SL'));
+        console.log('[tr-lookup] SL* items in text layer:', slItems.map(t => t.str + '@(' + t.x.toFixed(3) + ',' + t.y.toFixed(3) + ')'));
+        const matches = txtItems.filter(t => t.str.includes(trLabel) || trLabel.includes(t.str));
+        console.log('[tr-lookup] matches for', trLabel + ':', matches.length);
+
+        if (matches.length > 0) {
+          // Use centroid of matching items
+          const avgX = matches.reduce((s, t) => s + t.x, 0) / matches.length;
+          const avgY = matches.reduce((s, t) => s + t.y, 0) / matches.length;
+          j.demarcation.x       = parseFloat(avgX.toFixed(3));
+          j.demarcation.y       = parseFloat(avgY.toFixed(3));
+          j.demarcation.is_host = true;
+          j.warnings = j.warnings ?? [];
+          j.warnings.push(`TR room ${trLabel} located via text layer at (${avgX.toFixed(3)}, ${avgY.toFixed(3)})`);
+          passBResult = j;
+          saveSession();
+        }
+      } catch(e) {
+        console.warn('[pass-b text lookup]', e.message);
+      }
+    }
     renderPassBSummary(j);
     // Show serving demarc section
     document.getElementById('serving-demarc-section').style.display = 'block';
     // Pre-populate label from detected demarc
     const detectedDemarc = j.demarcation;
-    if (detectedDemarc?.found) {
+    if (detectedDemarc?.found && detectedDemarc?.x != null && detectedDemarc?.y != null) {
       document.getElementById('serving-demarc-label').textContent =
         detectedDemarc.label + ' (auto-detected)';
       document.getElementById('serving-demarc-coords').textContent =
-        `Auto-detected at (${detectedDemarc.x?.toFixed(3)}, ${detectedDemarc.y?.toFixed(3)}) — click Set Pin to override`;
+        `Auto-detected at (${detectedDemarc.x.toFixed(3)}, ${detectedDemarc.y.toFixed(3)}) — click Set Pin to override`;
       spPinXNorm = detectedDemarc.x;
       spPinYNorm = detectedDemarc.y;
+    } else if (detectedDemarc?.found) {
+      document.getElementById('serving-demarc-label').textContent =
+        (detectedDemarc.label ?? 'Demarc detected') + ' — place pin manually';
+      document.getElementById('serving-demarc-coords').textContent =
+        'Coordinates not returned — click Set Serving Demarc Pin to place';
     } else {
       document.getElementById('serving-demarc-label').textContent = 'Not detected — place pin manually';
       document.getElementById('serving-demarc-coords').textContent = 'Click Set Serving Demarc Pin below';
@@ -861,9 +910,12 @@ async function runPassB() {
     setOutput('pass-b-output', j);
 
     const scale  = j.scale?.display_label || 'unknown';
-    const demarc = j.demarcation?.found === false
+    const _dem   = j.demarcation;
+    const demarc = _dem?.found === false
       ? 'CENTER default (0.5, 0.5)'
-      : (j.demarcation?.label ?? 'found') + ' @ (' + j.demarcation?.x + ', ' + j.demarcation?.y + ')';
+      : (_dem?.x != null && _dem?.y != null)
+        ? (_dem.label ?? 'found') + ' @ (' + _dem.x.toFixed(3) + ', ' + _dem.y.toFixed(3) + ')'
+        : (_dem?.label ?? 'found') + ' — coordinates missing, place pin manually';
     const bounds = j.drawing_bounds
       ? 'Drawing crop: x(' + j.drawing_bounds.x0?.toFixed(2) + '-' + j.drawing_bounds.x1?.toFixed(2) + ') y(' + j.drawing_bounds.y0?.toFixed(2) + '-' + j.drawing_bounds.y1?.toFixed(2) + ')'
       : 'No drawing bounds detected';
