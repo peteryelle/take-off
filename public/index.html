@@ -857,18 +857,37 @@ async function runPassB() {
         const W2      = vp2.width, H2 = vp2.height;
         const tc2     = await page2.getTextContent({ includeMarkedContent: false });
 
-        // Collect all text items with their positions
-        const txtItems = tc2.items.map(item => ({
+        // Collect all text items — use content-bounds normalization
+        // (same fix as getDeviceTextItems — handles drawings outside MediaBox)
+        const allTxt = tc2.items.map(item => ({
           str: (item.str ?? '').trim().toUpperCase(),
-          x:   item.transform[4] / W2,
-          y:   1 - item.transform[5] / H2
+          cx:  item.transform[4] + (item.width  ?? 0) / 2,
+          cy:  item.transform[5] + (Math.abs(item.transform[3])) / 2
         })).filter(t => t.str.length > 0);
+        const txX = allTxt.map(i => i.cx), txY = allTxt.map(i => i.cy);
+        const txXMin = Math.min(...txX), txXMax = Math.max(...txX);
+        const txYMin = Math.min(...txY), txYMax = Math.max(...txY);
+        const txW = Math.max(txXMax - txXMin, W2);
+        const txH = Math.max(txYMax - txYMin, H2);
+        const txtItems = allTxt.map(t => ({
+          str: t.str,
+          x:   (t.cx - txXMin) / txW,
+          y:   1 - (t.cy - txYMin) / txH
+        }));
 
-        // Find items containing the TR label
-        const slItems = txtItems.filter(t => t.str.includes('SL'));
-        console.log('[tr-lookup] SL* items in text layer:', slItems.map(t => t.str + '@(' + t.x.toFixed(3) + ',' + t.y.toFixed(3) + ')'));
-        const matches = txtItems.filter(t => t.str.includes(trLabel) || trLabel.includes(t.str));
-        console.log('[tr-lookup] matches for', trLabel + ':', matches.length);
+        // Extract just the room code from label (e.g. "TELECOMMUNICATIONS ROOM SL06" → "SL06")
+        // Match pattern like XX## at end of label
+        const codeMatch = trLabel.match(/[A-Z]{1,4}\d{2,4}$/);
+        const searchCode = codeMatch ? codeMatch[0] : trLabel;
+        console.log('[tr-lookup] searchCode:', searchCode);
+        const slItems = txtItems.filter(t => t.str.includes('SL') || t.str.includes('TR') || t.str.includes('IDF'));
+        console.log('[tr-lookup] TR-related items:', slItems.map(t => t.str + '@(' + t.x.toFixed(3) + ',' + t.y.toFixed(3) + ')'));
+        const matches = txtItems.filter(t =>
+          t.str === searchCode ||
+          t.str.includes(searchCode) ||
+          searchCode.includes(t.str) && t.str.length >= 3
+        );
+        console.log('[tr-lookup] matches for', searchCode + ':', matches.length);
 
         if (matches.length > 0) {
           // Use centroid of matching items
