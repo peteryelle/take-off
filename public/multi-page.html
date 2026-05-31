@@ -1517,6 +1517,7 @@ async function lockDemarcs() {
 // ── Step 4: Batch run ─────────────────────────────────────────────
 async function runBatch() {
   const sortedPages = [...selectedPages].sort((a,b) => a-b);
+  _anchorCache = null; // force fresh load — device types may have changed since last run
 
   // ── Prefetch device types with llm_description for visual augment ─
   let augmentTypes = [];
