@@ -1524,10 +1524,12 @@ async function runBatch() {
   try {
     const dtR = await fetch(`${base()}/api/takeoff-summary?project_id=${projectId}`);
     const dtD = await dtR.json();
+    console.log('[augment] takeoff-summary device_types:', dtD.device_types?.map(d => ({id:d.id, name:d.name, hasLlm: !!d.llm_description, llmLen: d.llm_description?.length ?? 0})));
     augmentTypes = (dtD.device_types ?? []).filter(dt =>
       dt.llm_description && dt.llm_description.trim().length > 20
     );
-  } catch { /* non-blocking */ }
+    console.log('[augment] augmentTypes after filter:', augmentTypes.map(d => d.name));
+  } catch(e) { console.warn('[augment] prefetch failed:', e.message); }
   const log         = document.getElementById('batch-log');
   let done = 0;
 
