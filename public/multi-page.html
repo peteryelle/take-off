@@ -1554,22 +1554,40 @@ async function runBatch() {
       // Anchor-pattern filtering (same logic as single-page)
       const anchorSet = await getAnchorPatterns();
       const W = viewport.width, H = viewport.height;
-      const textItems = [];
+      // Two-pass text extraction — normalizes by content bounds to handle
+      // engineering drawings where content extends outside the PDF MediaBox.
+      const allRaw = [];
       for (const item of tContent.items) {
         const raw = item.str?.trim();
         if (!raw) continue;
-        // Strip non-ASCII chars (e.g. degree symbol ) before anchor matching
         const s = raw.replace(/[^\x20-\x7E]/g, '').trim();
-        if (!s || !anchorSet.has(s)) continue;
+        if (!s) continue;
         const tx = item.transform[4], ty = item.transform[5];
         const fs = Math.abs(item.transform[3]);
         const tw = item.width ?? 0, th = item.height ?? fs;
+        allRaw.push({ s, cx: tx + tw/2, cy: ty + th/2 });
+      }
+
+      // Content bounding box (handles pages with content outside MediaBox)
+      const xVals = allRaw.map(i => i.cx);
+      const yVals = allRaw.map(i => i.cy);
+      const xMin  = xVals.length ? Math.min(...xVals) : 0;
+      const xMax  = xVals.length ? Math.max(...xVals) : W;
+      const yMin  = yVals.length ? Math.min(...yVals) : 0;
+      const yMax  = yVals.length ? Math.max(...yVals) : H;
+      const cW    = Math.max(xMax - xMin, W);
+      const cH    = Math.max(yMax - yMin, H);
+
+      // Filter to anchors, normalize by content bounds
+      const textItems = [];
+      for (const { s, cx, cy } of allRaw) {
+        if (!anchorSet.has(s)) continue;
         textItems.push({
-          str:      s,
-          cx_norm:  parseFloat(((tx + tw/2) / W).toFixed(4)),
-          cy_norm:  parseFloat((1 - (ty + th/2) / H).toFixed(4)),
+          str:       s,
+          cx_norm:   parseFloat(((cx - xMin) / cW).toFixed(4)),
+          cy_norm:   parseFloat((1 - (cy - yMin) / cH).toFixed(4)),
           color_hex: '#999999',
-          font_size: parseFloat(fs.toFixed(1))
+          font_size: 10
         });
       }
 
