@@ -121,7 +121,7 @@ function normalizeAnchors(nearbyText) {
   if (!nearbyText || nearbyText.length === 0) return { primary: [], associated: [] };
   const primary = [], associated = [];
   nearbyText.forEach(anchor => {
-    const b = anchor.trim();
+    const b = anchor.replace(/[^\x20-\x7E]/g, '').trim();
     if (!b) return;
     // Numbered anchor: "DV1", "DD2", "N2" — strip digits, expand base
     if (/^[A-Z]+\d+$/.test(b)) {
