@@ -109,6 +109,62 @@ Demarcation rules:
     return err(`JSON parse error: ${e.message} — raw: ${msgText.slice(0, 200)}`, 502);
   }
 
+  // ── Secondary scan: locate TR room if found but coords missing ──────
+  // Runs when Pass 1 found a TR label (e.g. from a service note) but
+  // didn't return coordinates — typically because it classified the
+  // room as off-sheet, even when the room IS drawn on this page.
+  if (result.demarcation?.found && (result.demarcation.x == null || result.demarcation.y == null)) {
+    const trLabel = result.demarcation.label;
+    if (trLabel) {
+      try {
+        const locatePrompt = `This is an engineering floor plan.
+
+Find the room labeled "${trLabel}" on this floor plan. It may appear as a labeled room box or enclosed space with text like "TR ${trLabel}", "IDF ${trLabel}", "PBX ROOM ${trLabel}", or just "${trLabel}" with a square footage.
+
+Return ONLY valid JSON — no markdown:
+{
+  "found": true,
+  "x": 0.25,
+  "y": 0.70,
+  "description": "brief description of room location"
+}
+If not found: { "found": false, "x": null, "y": null, "description": "not found" }
+
+Coordinates: x=0 left edge, x=1 right edge, y=0 top edge, y=1 bottom edge.`;
+
+        const locMsg = await anthropic.messages.create({
+          model:      "claude-sonnet-4-5",
+          max_tokens: 256,
+          messages: [{
+            role: "user",
+            content: [
+              { type: "image", source: { type: "base64", media_type: mediaType, data: page_image_base64 } },
+              { type: "text", text: locatePrompt }
+            ]
+          }]
+        });
+
+        const locRaw = locMsg.content[0].text.replace(/```json|```/g, "").trim();
+        const locResult = JSON.parse(locRaw);
+
+        if (locResult.found && locResult.x != null && locResult.y != null) {
+          result.demarcation.x          = locResult.x;
+          result.demarcation.y          = locResult.y;
+          result.demarcation.is_host    = true;
+          result.demarcation.type       = result.demarcation.type === "off_sheet"
+                                          ? "IDF" : result.demarcation.type;
+          result.demarcation.description = locResult.description;
+          result.warnings = result.warnings ?? [];
+          result.warnings.push(
+            `TR room ${trLabel} located via secondary scan at (${locResult.x.toFixed(3)}, ${locResult.y.toFixed(3)})`
+          );
+        }
+      } catch(e) {
+        // Non-blocking — secondary scan failure does not fail the request
+      }
+    }
+  }
+
   const isHost    = result.demarcation?.found && result.demarcation?.is_host === true;
   const isOffSheet = result.demarcation?.found && !isHost;
 
