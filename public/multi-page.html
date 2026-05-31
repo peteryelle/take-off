@@ -1658,23 +1658,10 @@ async function runBatch() {
               });
               const augData = await augResp.json();
               if (augResp.ok && augData.new_instances > 0) {
-                // Filter visual detections to building footprint —
-                // eliminates false positives in title block and notes area.
-                // Bounds derived from text-layer device positions on this page.
+                totalNew += augData.new_instances;
+                // Add new visual instances to batch results
                 const existing = batchResults[pageNum].devices ?? [];
-                const xVals = existing.map(d => d.x_norm).filter(Boolean);
-                const yVals = existing.map(d => d.y_norm).filter(Boolean);
-                const xMin  = xVals.length ? Math.min(...xVals) - 0.06 : 0;
-                const xMax  = xVals.length ? Math.max(...xVals) + 0.06 : 1;
-                const yMin  = yVals.length ? Math.min(...yVals) - 0.06 : 0;
-                const yMax  = yVals.length ? Math.max(...yVals) + 0.06 : 1;
-                const filtered = (augData.instances ?? []).filter(d =>
-                  d.x_norm >= xMin && d.x_norm <= xMax &&
-                  d.y_norm >= yMin && d.y_norm <= yMax
-                );
-                if (!filtered.length) continue;
-                totalNew += filtered.length;
-                const merged   = deduplicateInstances([...existing, ...filtered]);
+                const merged   = deduplicateInstances([...existing, ...augData.instances]);
                 batchResults[pageNum].devices      = merged;
                 batchResults[pageNum].device_count = merged.length;
               }
