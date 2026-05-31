@@ -4,6 +4,7 @@
 // ─────────────────────────────────────────────────────────────────
 
 import { getSupabase, getAnthropic, SYSTEM_PROMPT, ok, err, CORS } from "./utils/clients.js";
+import { makeStrips, toFullCoords } from "./utils/strips.js";
 
 export default async function handler(req) {
   if (req.method === "OPTIONS") return new Response("", { headers: CORS });
@@ -109,58 +110,77 @@ Demarcation rules:
     return err(`JSON parse error: ${e.message} — raw: ${msgText.slice(0, 200)}`, 502);
   }
 
-  // ── Secondary scan: locate TR room if found but coords missing ──────
-  // Runs when Pass 1 found a TR label (e.g. from a service note) but
-  // didn't return coordinates — typically because it classified the
-  // room as off-sheet, even when the room IS drawn on this page.
+  // ── Strip-based demarc location ─────────────────────────────────────
+  // If demarc was found (label identified) but coordinates are still missing,
+  // slice the page into strips and scan each one for the TR room label.
+  // Strips are zoomed-in relative to the full page — small room labels
+  // that are invisible at 0.6 scale become readable in a narrow strip.
   if (result.demarcation?.found && (result.demarcation.x == null || result.demarcation.y == null)) {
-    const trLabel = result.demarcation.label;
+    const trLabel = (result.demarcation.label ?? '').trim();
     if (trLabel) {
       try {
-        const locatePrompt = `This is an engineering floor plan.
+        const N_STRIPS = 8;
+        const strips   = await makeStrips(page_image_base64, N_STRIPS);
 
-Find the room labeled "${trLabel}" on this floor plan. It may appear as a labeled room box or enclosed space with text like "TR ${trLabel}", "IDF ${trLabel}", "PBX ROOM ${trLabel}", or just "${trLabel}" with a square footage.
+        const stripPrompt = (strip, label) =>
+`You are scanning strip ${strip.index + 1} of ${N_STRIPS} (y=${strip.y_norm_start.toFixed(3)}–${strip.y_norm_end.toFixed(3)}) of an engineering floor plan.
+
+Find the telecommunications room labeled "${label}". It may appear as:
+- A room box with text like "TR ${label}", "IDF ${label}", "PBX ROOM ${label}", "TELECOM ${label}", or just "${label}" with a square footage
+- A small labeled rectangle or enclosed space
 
 Return ONLY valid JSON — no markdown:
 {
-  "found": true,
-  "x": 0.25,
-  "y": 0.70,
-  "description": "brief description of room location"
+  "found": false,
+  "x_frac": null,
+  "y_frac_in_strip": null,
+  "description": "what you see"
 }
-If not found: { "found": false, "x": null, "y": null, "description": "not found" }
+x_frac and y_frac_in_strip are 0-1 relative to THIS STRIP.
+If the room is not visible in this strip: set found to false and x_frac/y_frac_in_strip to null.`;
 
-Coordinates: x=0 left edge, x=1 right edge, y=0 top edge, y=1 bottom edge.`;
+        let located = false;
+        for (const strip of strips) {
+          try {
+            const msg = await anthropic.messages.create({
+              model:      "claude-sonnet-4-5",
+              max_tokens: 256,
+              messages: [{
+                role: "user",
+                content: [
+                  { type: "image", source: { type: "base64", media_type: mediaType, data: strip.base64 } },
+                  { type: "text", text: stripPrompt(strip, trLabel) }
+                ]
+              }]
+            });
+            const raw    = msg.content[0].text.replace(/```json|```/g, "").trim();
+            const parsed = JSON.parse(raw);
 
-        const locMsg = await anthropic.messages.create({
-          model:      "claude-sonnet-4-5",
-          max_tokens: 256,
-          messages: [{
-            role: "user",
-            content: [
-              { type: "image", source: { type: "base64", media_type: mediaType, data: page_image_base64 } },
-              { type: "text", text: locatePrompt }
-            ]
-          }]
-        });
+            if (parsed.found && parsed.x_frac != null && parsed.y_frac_in_strip != null) {
+              const coords = toFullCoords(strip, parsed.x_frac, parsed.y_frac_in_strip);
+              result.demarcation.x          = parseFloat(coords.x.toFixed(3));
+              result.demarcation.y          = parseFloat(coords.y.toFixed(3));
+              result.demarcation.is_host    = true;
+              result.demarcation.type       = result.demarcation.type === "off_sheet"
+                                              ? "IDF" : (result.demarcation.type ?? "IDF");
+              result.demarcation.description = parsed.description;
+              result.warnings = result.warnings ?? [];
+              result.warnings.push(
+                `TR room ${trLabel} located via strip ${strip.index + 1} at (${coords.x.toFixed(3)}, ${coords.y.toFixed(3)})`
+              );
+              located = true;
+              break; // stop scanning once found
+            }
+          } catch { /* skip failed strip */ }
+        }
 
-        const locRaw = locMsg.content[0].text.replace(/```json|```/g, "").trim();
-        const locResult = JSON.parse(locRaw);
-
-        if (locResult.found && locResult.x != null && locResult.y != null) {
-          result.demarcation.x          = locResult.x;
-          result.demarcation.y          = locResult.y;
-          result.demarcation.is_host    = true;
-          result.demarcation.type       = result.demarcation.type === "off_sheet"
-                                          ? "IDF" : result.demarcation.type;
-          result.demarcation.description = locResult.description;
+        if (!located) {
           result.warnings = result.warnings ?? [];
-          result.warnings.push(
-            `TR room ${trLabel} located via secondary scan at (${locResult.x.toFixed(3)}, ${locResult.y.toFixed(3)})`
-          );
+          result.warnings.push(`TR room ${trLabel} not found in any of ${N_STRIPS} strips — may be on a different sheet`);
         }
       } catch(e) {
-        // Non-blocking — secondary scan failure does not fail the request
+        result.warnings = result.warnings ?? [];
+        result.warnings.push(`Strip scan failed: ${e.message}`);
       }
     }
   }
