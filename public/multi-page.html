@@ -1517,6 +1517,16 @@ async function lockDemarcs() {
 // ── Step 4: Batch run ─────────────────────────────────────────────
 async function runBatch() {
   const sortedPages = [...selectedPages].sort((a,b) => a-b);
+
+  // ── Prefetch device types with llm_description for visual augment ─
+  let augmentTypes = [];
+  try {
+    const dtR = await fetch(`${base()}/api/takeoff-summary?project_id=${projectId}`);
+    const dtD = await dtR.json();
+    augmentTypes = (dtD.device_types ?? []).filter(dt =>
+      dt.llm_description && dt.llm_description.trim().length > 20
+    );
+  } catch { /* non-blocking */ }
   const log         = document.getElementById('batch-log');
   let done = 0;
 
@@ -1591,6 +1601,58 @@ async function runBatch() {
         : `pg${pageNum}: ERROR — ${j.error}`;
       log.innerHTML += `<div style="color:${r.ok ? '#7af07a' : '#f07a7a'}">${msg}</div>`;
       log.scrollTop = log.scrollHeight;
+
+      // ── Visual augment — catches leader-line group symbols ────────
+      // Runs after text-layer; finds devices text-layer missed
+      if (r.ok && augmentTypes.length) {
+        try {
+          // Render page image for visual scan
+          const augVP  = pdfPage.getViewport({ scale: 1.8 });
+          const augCV  = document.createElement('canvas');
+          augCV.width  = augVP.width;
+          augCV.height = augVP.height;
+          await pdfPage.render({ canvasContext: augCV.getContext('2d'), viewport: augVP }).promise;
+          const pageImgB64 = augCV.toDataURL('image/jpeg', 0.85).split(',')[1];
+
+          // Existing text-layer positions for this page
+          const existingPos = (j.devices ?? []).map(d => ({
+            x_norm: d.x_norm, y_norm: d.y_norm
+          }));
+
+          let totalNew = 0;
+          for (const dt of augmentTypes) {
+            try {
+              const augResp = await fetch(`${base()}/api/pass-visual-augment`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  project_id:        projectId,
+                  page_id:           pageId,
+                  device_type_id:    dt.id,
+                  page_image_base64: pageImgB64,
+                  existing_positions: existingPos,
+                  demarc_pins:       demarcPins,
+                  page_width_pts:    W,
+                  page_height_pts:   H
+                })
+              });
+              const augData = await augResp.json();
+              if (augResp.ok && augData.new_instances > 0) {
+                totalNew += augData.new_instances;
+                // Add new visual instances to batch results
+                const existing = batchResults[pageNum].devices ?? [];
+                const merged   = deduplicateInstances([...existing, ...augData.instances]);
+                batchResults[pageNum].devices      = merged;
+                batchResults[pageNum].device_count = merged.length;
+              }
+            } catch { /* soft fail per device type */ }
+          }
+
+          if (totalNew > 0) {
+            log.innerHTML += `<div style="color:#7ac0f0">pg${pageNum}: +${totalNew} visual (leader lines)</div>`;
+            log.scrollTop = log.scrollHeight;
+          }
+        } catch { /* visual augment is non-blocking */ }
+      }
 
     } catch(e) {
       log.innerHTML += `<div style="color:#f07a7a;">pg${pageNum}: ${e.message}</div>`;
@@ -1867,7 +1929,46 @@ async function loadProjectCard(pid) {
 // Collapses device_instances that are within DEDUP_THRESH normalized
 // units of each other on the same page into one entry.
 // Handles DV#+DD#+N# stacked labels at the same outlet location.
+// Post-merge: splits entries with multiple DD# or DV# values (over-merges).
 const DEDUP_THRESH = 0.022; // max spread of stacked DV/DD/N labels
+
+// Extract label families from a raw_labels array
+function parseLabelFamilies(labels) {
+  const dvs = labels.filter(l => /^DV\d+$/.test(l));
+  const dds = labels.filter(l => /^DD\d+$/.test(l));
+  const ns  = labels.filter(l => /^N\d+$/.test(l));
+  return { dvs, dds, ns };
+}
+
+// Split an over-merged outlet entry into individual outlet entries.
+// Rule: each outlet has exactly one DV# (optional), one DD# (optional),
+// one N# — but always at least 2 components. Multiple DD# or DV# values
+// means multiple outlets were merged together.
+function splitOverMerge(entry) {
+  const labels = entry.raw_labels ?? [];
+  const { dvs, dds, ns } = parseLabelFamilies(labels);
+
+  // No over-merge if at most one of each family
+  if (dvs.length <= 1 && dds.length <= 1) return [entry];
+
+  // Determine how many outlets are hidden here
+  const count = Math.max(dvs.length, dds.length);
+  const outlets = [];
+
+  for (let i = 0; i < count; i++) {
+    const outletLabels = [];
+    // Assign one DV per outlet if available
+    if (dvs[i]) outletLabels.push(dvs[i]);
+    // Assign one DD per outlet if available
+    if (dds[i]) outletLabels.push(dds[i]);
+    // All outlets at this location share the same N# (nurse call)
+    if (ns[0]) outletLabels.push(ns[0]);
+
+    outlets.push({ ...entry, raw_labels: outletLabels });
+  }
+
+  return outlets;
+}
 
 function deduplicateInstances(instances) {
   if (!instances?.length) return [];
@@ -1923,8 +2024,13 @@ function deduplicateInstances(instances) {
 
       // Merge all raw_labels from the group
       const allLabels = [...new Set(group.flatMap(g => g.raw_labels ?? []))];
+      const merged    = { ...primary, raw_labels: allLabels };
 
-      result.push({ ...primary, raw_labels: allLabels });
+      // Post-merge: split if multiple DD# or DV# values detected
+      // Each unique DD# or DV# represents a separate physical outlet
+      for (const outlet of splitOverMerge(merged)) {
+        result.push(outlet);
+      }
     }
   }
 
