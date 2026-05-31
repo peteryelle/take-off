@@ -198,6 +198,7 @@
         <div id="project-card-name" style="font-size:16px; color:#f0c040; font-weight:bold;"></div>
         <div id="project-card-meta" style="font-size:12px; color:#666; margin-top:3px;"></div>
         <div id="project-card-file" style="font-size:11px; color:#555; margin-top:4px;"></div>
+        <div id="project-card-devices" style="font-size:11px; color:#555; margin-top:4px;"></div>
       </div>
       <div style="display:flex; gap:6px; flex-shrink:0;">
         <a href="projects.html" style="background:#1e2d3a; border:1px solid #3a6a8a; color:#7ac0f0;
@@ -457,6 +458,21 @@ async function loadProjectCard(pid) {
     } else {
       document.getElementById('project-card-file').textContent = '○ No PDF recorded yet';
     }
+
+    // Load device types for this project and show summary
+    try {
+      const dtR  = await fetch(`${base()}/api/takeoff-summary?project_id=${pid}`);
+      const dtD  = await dtR.json();
+      const dts  = dtD.device_types ?? [];
+      const dtEl = document.getElementById('project-card-devices');
+      if (dts.length > 0) {
+        dtEl.textContent = `⚙ ${dts.length} device type${dts.length > 1 ? 's' : ''}: ${dts.map(d => d.name).join(', ')}`;
+        dtEl.style.color = '#4a7a4a';
+      } else {
+        dtEl.textContent = '⚠ No device types — go to Device Types to configure';
+        dtEl.style.color = '#f0a040';
+      }
+    } catch(e) { /* non-blocking */ }
   } catch(e) { console.warn('loadProjectCard:', e); }
 }
 
