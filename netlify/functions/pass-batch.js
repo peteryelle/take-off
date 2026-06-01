@@ -70,15 +70,25 @@ export default async function handler(req) {
     }
 
     // ── detect + schedule + symbol → reconcile ──────────────────
-    const { devices: reconciled, typeMap } = buildDeviceList(text_items, deviceTypes, page.schedule, {}, symbol_instances || [], leader_overrides || []);
+    // Overrides come from the body when the client just marked them (and get persisted
+    // below), else fall back to whatever was saved on the page. undefined = use saved.
+    const leaderOv = (leader_overrides !== undefined) ? leader_overrides : (page.leader_overrides ?? []);
+    const { devices: reconciled, typeMap } = buildDeviceList(text_items, deviceTypes, page.schedule, {}, symbol_instances || [], leaderOv);
 
     const instances = reconciled.map((dev) => {
       const dt = typeMap[dev.type] || {};
       const fams = dev.attributes?.families || [];
+      const codes = dev.attributes?.codes || [];     // full tokens w/ detail # (DV1/DD3)
+      const anchor = dt.detection_config?.anchor || null;
       const ports = portsFromFamilies(fams);
       const cx = dev.x, cy = dev.y;
       const hasXY = cx != null && cy != null;
-      const rawLabels = dev.uin ? [dev.uin, ...fams] : (fams.length ? fams : [dev.type]);
+      // Label: anchor leads (N2), then the detail-numbered family codes in detected order.
+      // UIN'd (prefix) types lead with the UIN; standalone (WAP/180) just the type.
+      const rawLabels = dev.uin
+        ? [dev.uin, ...codes]
+        : (codes.length ? (anchor ? [anchor, ...codes] : codes)
+                        : (anchor ? [anchor] : [dev.type]));
 
       const xFt = hasXY && ptsPerFt && page_width_pts  ? parseFloat((cx * page_width_pts  / ptsPerFt).toFixed(1)) : null;
       const yFt = hasXY && ptsPerFt && page_height_pts ? parseFloat((cy * page_height_pts / ptsPerFt).toFixed(1)) : null;
@@ -106,7 +116,8 @@ export default async function handler(req) {
           data_ports: ports.data_ports, voice_ports: ports.voice_ports, node_labels: ports.node_labels,
           port_count_data: ports.port_count_data, port_count_voice: ports.port_count_voice,
           demarc_id: demarcId, run_length_ft: runLengthFt, total_ft: totalFt,
-          tia_flag: tiaFlag, tia_reason: tiaReason, confidence: dev.confidence
+          tia_flag: tiaFlag, tia_reason: tiaReason, confidence: dev.confidence,
+          flags: (dev.flags && dev.flags.length) ? dev.flags : null
         }
       };
     });
@@ -122,7 +133,9 @@ export default async function handler(req) {
     if (needsPlacement) bits.push(`${needsPlacement} need placement`);
     if (unlabeledSym)   bits.push(`${unlabeledSym} unlabeled symbol(s)`);
     const doneMsg = bits.length > 1 ? `${bits[0]} (${bits.slice(1).join(", ")})` : `${bits[0]} found`;
-    await supabase.from("pages").update({ status: "done", status_msg: doneMsg }).eq("id", page_id);
+    const pageUpdate = { status: "done", status_msg: doneMsg };
+    if (leader_overrides !== undefined) pageUpdate.leader_overrides = leader_overrides;  // redo replaces
+    await supabase.from("pages").update(pageUpdate).eq("id", page_id);
 
     const byType = {};
     for (const { dt, dev, row } of instances) {
@@ -135,6 +148,7 @@ export default async function handler(req) {
     return ok({
       pass: "batch_page", page_id, eval_page_num,
       device_count: instances.length, by_type: Object.values(byType),
+      leader_overrides: leaderOv,   // effective marks (body or persisted) so the UI can pre-fill
       tia_violations: instances.filter((x) => x.row.tia_flag).length,
       max_run_ft: Math.max(0, ...instances.map((x) => x.row.total_ft ?? 0)) || null,
       devices: instances.map((x, j) => ({

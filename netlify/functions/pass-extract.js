@@ -77,7 +77,8 @@ export default async function handler(req) {
   // ── detect + schedule + symbol → reconcile ────────────────────
   // Symbols (from /api/pass-symbol) fold onto labeled/scheduled devices in SNAP and
   // surface genuinely unlabeled glyphs; [] when the caller ran no symbol detection.
-  const { devices: reconciled, typeMap } = buildDeviceList(text_items, deviceTypes, page.schedule, {}, symbol_instances || [], leader_overrides || []);
+  const leaderOv = (leader_overrides !== undefined) ? leader_overrides : (page.leader_overrides ?? []);
+  const { devices: reconciled, typeMap } = buildDeviceList(text_items, deviceTypes, page.schedule, {}, symbol_instances || [], leaderOv);
 
   if (!reconciled.length) {
     return ok({ pass: "extract", page_id, device_count: 0, devices: [],
@@ -88,10 +89,16 @@ export default async function handler(req) {
   const instances = reconciled.map((dev) => {
     const dt = typeMap[dev.type] || {};
     const fams = dev.attributes?.families || [];
+    const codes = dev.attributes?.codes || [];       // full tokens w/ detail # (DV1/DD3)
+    const anchor = dt.detection_config?.anchor || null;
     const ports = portsFromFamilies(fams);
     const cx = dev.x, cy = dev.y;
     const hasXY = cx != null && cy != null;
-    const rawLabels = dev.uin ? [dev.uin, ...fams] : (fams.length ? fams : [dev.type]);
+    // Anchor leads (N2), then detail-numbered family codes in detected order.
+    const rawLabels = dev.uin
+      ? [dev.uin, ...codes]
+      : (codes.length ? (anchor ? [anchor, ...codes] : codes)
+                      : (anchor ? [anchor] : [dev.type]));
 
     const xFt = hasXY && ptsPerFt && page_width_pts  ? parseFloat((cx * page_width_pts  / ptsPerFt).toFixed(1)) : null;
     const yFt = hasXY && ptsPerFt && page_height_pts ? parseFloat((cy * page_height_pts / ptsPerFt).toFixed(1)) : null;
@@ -119,7 +126,8 @@ export default async function handler(req) {
         port_count_data: ports.port_count_data, port_count_voice: ports.port_count_voice,
         demarc_id: primaryDemarc?.id ?? null,
         run_length_ft: runLengthFt, total_ft: totalFt, tia_flag: tiaFlag, tia_reason: tiaReason,
-        confidence: dev.confidence
+        confidence: dev.confidence,
+        flags: (dev.flags && dev.flags.length) ? dev.flags : null
       }
     };
   });
@@ -139,6 +147,11 @@ export default async function handler(req) {
     .from("device_instances").insert(instances.map((x) => x.row))
     .select("id, x_norm, y_norm, total_ft, tia_flag");
   if (insErr) return err(`Insert error: ${insErr.message}`, 500);
+
+  // Persist the marks so they survive reload; sending them on a redo replaces the prior set.
+  if (leader_overrides !== undefined) {
+    await supabase.from("pages").update({ leader_overrides }).eq("id", page_id);
+  }
 
   // ── Summary ────────────────────────────────────────────────────
   const byType = {};

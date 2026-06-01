@@ -59,10 +59,17 @@ export function reconcile(catalog = {}, labelInstances = [], symbolInstances = [
   const addSource = (d, s) => { if (!d.sources.includes(s)) d.sources.push(s); };
   const mergeFamilies = (d, inst) => {
     const fams = inst.families || (inst.codes ? inst.codes.map(famOf) : []);
-    if (!fams.length) return;
-    const set = new Set(d.attributes.families || []);
-    fams.forEach((f) => set.add(f));
-    d.attributes.families = [...set];
+    const codes = inst.codes || [];
+    if (fams.length) {
+      const set = new Set(d.attributes.families || []);
+      fams.forEach((f) => set.add(f));
+      d.attributes.families = [...set];
+    }
+    if (codes.length) {                              // full tokens incl. detail # (DV1/DD3/N2)
+      const cset = new Set(d.attributes.codes || []);
+      codes.forEach((c) => cset.add(c));
+      d.attributes.codes = [...cset];
+    }
   };
 
   // 1. SEED from schedule (authoritative count when present), keyed by UIN.
@@ -156,6 +163,7 @@ export function reconcile(catalog = {}, labelInstances = [], symbolInstances = [
     const [rx, ry] = override || (base ? [base.x, base.y] : at);   // anchor x/y by default
     const groupKey = `leader:${ov.type}@${ax.toFixed(coordDecimals)},${ay.toFixed(coordDecimals)}`;
     const famSeed = base ? (base.attributes.families || []) : (ov.families || []);
+    const codeSeed = base ? (base.attributes.codes || []) : [];
 
     if (base) {
       base.x = rx; base.y = ry; base.xy_source = 'leader';
@@ -167,7 +175,7 @@ export function reconcile(catalog = {}, labelInstances = [], symbolInstances = [
     for (let k = (base ? 1 : 0); k < qty; k++) {        // base is the 1st of the group
       const d = rec(`_lead${synth++}`, ov.type, {
         x: rx, y: ry, xy_source: 'leader', sources: ['leader'],
-        attributes: { families: [...famSeed], leader_group: groupKey, leader_qty: qty }
+        attributes: { families: [...famSeed], codes: [...codeSeed], leader_group: groupKey, leader_qty: qty }
       });
       d.flags.push('leader_expanded');
       if (!base) d.flags.push('leader_unmatched');

@@ -368,6 +368,11 @@
     <div style="font-size:11px; color:#666; margin-top:4px;" id="longest-run-label"></div>
   </div>
 
+  <div id="leader-mark-bar" style="display:none; margin-top:8px;">
+    <button class="info" onclick="openLeaderModal()" style="padding:5px 12px; font-size:12px;">⤳ Mark 1:N leader clusters</button>
+    <span style="color:#666; font-size:11px; margin-left:8px;">click a cluster, enter how many outlets its leader feeds</span>
+  </div>
+
   <!-- Device summary table -->
   <div id="device-table-wrap" style="margin-top:12px; display:none;">
 
@@ -420,6 +425,37 @@
     <span id="sp-pin-coords" style="color:#555; font-size:12px; font-family:monospace;"></span>
     <button onclick="confirmServingPin()" style="padding:8px 20px; font-size:14px;">✓ Confirm</button>
     <button class="danger" onclick="closeServingPinModal()" style="padding:8px 16px; font-size:14px;">✗ Cancel</button>
+  </div>
+</div>
+
+<!-- ── 1:N LEADER CLUSTER MARKING MODAL (single-page) ──────────── -->
+<div id="lc-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.88);
+     z-index:200; flex-direction:column; align-items:center; justify-content:center;">
+  <div style="color:#f0c040; font-size:15px; font-weight:bold; margin-bottom:4px;">Mark 1:N Leader Clusters</div>
+  <div style="color:#aaa; font-size:13px; margin-bottom:8px;">
+    Click a cluster (red dot), enter how many outlets its leader feeds · scroll to zoom · drag to pan
+  </div>
+  <div style="display:flex; gap:8px; margin-bottom:8px; align-items:center;">
+    <button onclick="lcZoomBtn(1.5)" style="padding:3px 12px;">＋</button>
+    <button onclick="lcZoomBtn(1/1.5)" style="padding:3px 12px;">－</button>
+    <button onclick="lcReset()" class="info" style="padding:3px 10px; font-size:11px;">Reset</button>
+    <span id="lc-zoom" style="color:#888; font-size:12px;">100%</span>
+    <span style="color:#888; font-size:12px;">marked: <b id="lc-count">0</b></span>
+  </div>
+  <div id="lc-wrap" style="overflow:hidden; width:88vw; height:60vh; position:relative;
+       cursor:crosshair; border:1px solid #333;">
+    <canvas id="lc-canvas" style="position:absolute; top:0; left:0; transform-origin:0 0;"></canvas>
+  </div>
+  <div id="lc-qty-row" style="display:none; margin-top:10px; gap:8px; align-items:center;">
+    <span id="lc-sel-info" style="color:#ccc; font-size:12px; font-family:monospace;"></span>
+    <span style="color:#aaa; font-size:13px;">How many leader lines?</span>
+    <input id="lc-qty" type="number" min="1" style="width:64px; padding:4px;">
+    <button onclick="lcSetQty()" style="padding:4px 14px;">Set</button>
+  </div>
+  <div style="margin-top:10px; display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+    <div class="status" id="lc-status"></div>
+    <button onclick="lcRerun()" style="padding:8px 20px; font-size:14px;">✓ Apply &amp; re-run</button>
+    <button class="danger" onclick="closeLeaderModal()" style="padding:8px 16px; font-size:14px;">✗ Close</button>
   </div>
 </div>
 
@@ -538,11 +574,14 @@ function updateDeviceTypesLink() {
 // ── Helpers ──────────────────────────────────────────────────────────
 function setStatus(id, msg, type='') {
   const el = document.getElementById(id);
+  if (!el) return;
   el.textContent = msg;
   el.className = 'status ' + type;
 }
 function setOutput(id, obj) {
-  document.getElementById(id).textContent =
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent =
     typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2);
 }
 
@@ -1533,6 +1572,9 @@ async function runPassExtract() {
 
     // Render reflects reconcile's merged list: labels + schedule + symbols folded in
     // SNAP, with unlabeled glyphs (no_uin) and inferred placements surfaced via j.warnings.
+    lastExtractResult  = j;
+    lastExtractPayload = payload;
+    document.getElementById('leader-mark-bar').style.display = 'block';
 
   } catch(e) {
     setStatus('pass-extract-status', 'Error: ' + e.message, 'err');
@@ -1616,12 +1658,21 @@ function renderDeviceRows(devices, dtMap, tbody, totalCount) {
     const dist     = d.total_ft != null
       ? `<strong style="color:${d.tia_flag ? '#f07a7a' : '#7af07a'}">${d.total_ft} ft</strong>${d.tia_flag ? ' ⚠' : ''}`
       : '<span style="color:#555;">—</span>';
+    const fl = d.flags ?? [];
+    const badge = fl.includes('leader_expanded')
+      ? ' <span title="added via 1:N leader markup" style="color:#c08cff; font-size:9px; border:1px solid #6b4ea8; border-radius:3px; padding:0 3px;">⤳ leader</span>'
+      : fl.includes('no_uin')
+      ? ' <span title="unlabeled symbol — no UIN" style="color:#f0a040; font-size:9px; border:1px solid #7a5a20; border-radius:3px; padding:0 3px;">no-uin</span>'
+      : fl.includes('placement_inferred')
+      ? ' <span title="position inferred from symbol only" style="color:#7ac0f0; font-size:9px; border:1px solid #3a6a8a; border-radius:3px; padding:0 3px;">inferred</span>'
+      : '';
 
     const tr = document.createElement('tr');
     tr.style.borderBottom = '1px solid #0d0d0d';
+    if (fl.includes('leader_expanded')) tr.style.background = 'rgba(192,140,255,0.05)';
     tr.innerHTML = `
       <td style="padding:5px 8px; color:#555;">${i + 1}</td>
-      <td style="padding:5px 8px; color:#f0c040;">${name}</td>
+      <td style="padding:5px 8px; color:#f0c040;">${name}${badge}</td>
       <td style="padding:5px 8px; color:#888;">${humanDesc}</td>
       <td style="padding:5px 8px; color:#7ac0f0; font-family:monospace;">${labels}</td>
       <td style="padding:5px 8px; color:#666; text-align:right; font-family:monospace;">${x}, ${y}</td>
@@ -1857,6 +1908,148 @@ async function confirmServingPin() {
   document.getElementById('serving-demarc-coords').textContent =
     `Pin at (${spPinXNorm.toFixed(3)}, ${spPinYNorm.toFixed(3)})`;
   setStatus('serving-demarc-status', 'Pin set — click ✓ Save to persist', '');
+}
+
+// ── 1:N leader-cluster marking (Step 8 capture UI) ───────────────────
+// Click a detected cluster, enter how many outlets its leader feeds; reconcile
+// expands it to N rows measured from that cluster's anchor xy. Sends leader_overrides
+// to pass-extract, which threads them through buildDeviceList -> reconcile.
+var lastExtractResult = null, lastExtractPayload = null;
+let lcOverrides = [];                 // [{ type, at:[x,y], quantity }]
+let lcZoom = 1, lcPanX = 0, lcPanY = 0, lcDrag = null, lcCW = 0, lcCH = 0;
+let lcDevices = [], lcSel = null;
+
+function lcApplyTransform() {
+  const cv = document.getElementById('lc-canvas');
+  cv.style.transform = `translate(${lcPanX}px,${lcPanY}px) scale(${lcZoom})`;
+  document.getElementById('lc-zoom').textContent = Math.round(lcZoom*100) + '%';
+  lcRedraw();
+}
+function lcZoomBtn(f) {
+  const wrap = document.getElementById('lc-wrap');
+  const w = wrap.offsetWidth/2, h = wrap.offsetHeight/2;
+  lcPanX = w - (w - lcPanX)*f; lcPanY = h - (h - lcPanY)*f;
+  lcZoom = Math.min(10, Math.max(0.3, lcZoom*f));
+  lcApplyTransform();
+}
+function lcReset() { lcZoom = 1; lcPanX = 0; lcPanY = 0; lcApplyTransform(); }
+
+function lcOverrideFor(d) {
+  return lcOverrides.find(o => o.type === d.type &&
+    Math.abs(o.at[0]-d.x_norm) < 1e-6 && Math.abs(o.at[1]-d.y_norm) < 1e-6);
+}
+
+function lcRedraw() {
+  const wrap = document.getElementById('lc-wrap');
+  wrap.querySelectorAll('.lc-dot').forEach(e => e.remove());
+  for (const d of lcDevices) {
+    if (d.x_norm == null || d.y_norm == null) continue;
+    const ov = lcOverrideFor(d), sel = (d === lcSel);
+    const color = ov ? '#40f0a0' : (sel ? '#f0c040' : '#f07a7a');
+    const dot = document.createElement('div');
+    dot.className = 'lc-dot';
+    dot.style.cssText = `position:absolute; width:14px; height:14px; border-radius:50%;
+      border:2px solid ${color}; background:${ov?'rgba(64,240,160,.3)':'rgba(240,122,122,.18)'};
+      transform:translate(-50%,-50%); pointer-events:none; z-index:10;
+      ${sel?'box-shadow:0 0 0 3px rgba(240,192,64,.5);':''}`;
+    dot.style.left = (d.x_norm*lcCW*lcZoom + lcPanX) + 'px';
+    dot.style.top  = (d.y_norm*lcCH*lcZoom + lcPanY) + 'px';
+    if (ov) {
+      const badge = document.createElement('div');
+      badge.textContent = '×' + ov.quantity;
+      badge.style.cssText = 'position:absolute;left:11px;top:-11px;color:#40f0a0;font-size:11px;font-weight:bold;white-space:nowrap;';
+      dot.appendChild(badge);
+    }
+    wrap.appendChild(dot);
+  }
+}
+
+async function openLeaderModal() {
+  if (!lastExtractResult || !pdfDoc) { alert('Run detection first'); return; }
+  lcDevices = (lastExtractResult.devices || []).filter(d => d.x_norm != null && d.y_norm != null);
+  lcSel = null; lcZoom = 1; lcPanX = 0; lcPanY = 0;
+
+  const pg = evalPage || 1;
+  const cv = document.getElementById('lc-canvas');
+  const wrap = document.getElementById('lc-wrap');
+  const pdfPage = await pdfDoc.getPage(pg);
+  const vp = pdfPage.getViewport({ scale: 2.5 });
+  cv.width = vp.width; cv.height = vp.height; lcCW = vp.width; lcCH = vp.height;
+  await pdfPage.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+  lcZoom = Math.min((wrap.offsetWidth || window.innerWidth*0.88) / vp.width, 1.0);
+  lcApplyTransform();
+
+  cv.onclick = (e) => {
+    const r = cv.getBoundingClientRect();
+    const xn = (e.clientX - r.left)/lcZoom/lcCW, yn = (e.clientY - r.top)/lcZoom/lcCH;
+    let best = null, bd = Infinity;
+    for (const d of lcDevices) {
+      const dd = (d.x_norm-xn)**2 + (d.y_norm-yn)**2;
+      if (dd < bd) { bd = dd; best = d; }
+    }
+    if (!best || bd > 0.03*0.03) { setStatus('lc-status','No cluster near that click','err'); return; }
+    lcSel = best;
+    const ov = lcOverrideFor(best);
+    document.getElementById('lc-qty').value = ov ? ov.quantity : '';
+    document.getElementById('lc-sel-info').textContent =
+      `${best.name || best.type} @ (${best.x_norm.toFixed(3)}, ${best.y_norm.toFixed(3)})`;
+    document.getElementById('lc-qty-row').style.display = 'flex';
+    document.getElementById('lc-qty').focus();
+    setStatus('lc-status','', '');
+    lcRedraw();
+  };
+  wrap.onwheel = (e) => { e.preventDefault();
+    const f = e.deltaY<0?1.15:1/1.15, wr = wrap.getBoundingClientRect();
+    lcPanX = (e.clientX-wr.left)-((e.clientX-wr.left)-lcPanX)*f;
+    lcPanY = (e.clientY-wr.top)-((e.clientY-wr.top)-lcPanY)*f;
+    lcZoom = Math.min(10, Math.max(0.3, lcZoom*f)); lcApplyTransform(); };
+  wrap.onmousedown = (e) => { lcDrag = {x:e.clientX,y:e.clientY,px:lcPanX,py:lcPanY,moved:false}; wrap.style.cursor='grabbing'; };
+  wrap.onmousemove = (e) => { if(!lcDrag||e.buttons!==1) return;
+    const dx=e.clientX-lcDrag.x, dy=e.clientY-lcDrag.y;
+    if (Math.abs(dx)+Math.abs(dy)>5) lcDrag.moved=true;
+    if (lcDrag.moved){ lcPanX=lcDrag.px+dx; lcPanY=lcDrag.py+dy; lcApplyTransform(); } };
+  wrap.onmouseup = () => { lcDrag=null; wrap.style.cursor='crosshair'; };
+
+  document.getElementById('lc-qty-row').style.display = 'none';
+  document.getElementById('lc-count').textContent = lcOverrides.length;
+  document.getElementById('lc-modal').style.display = 'flex';
+}
+
+function lcSetQty() {
+  if (!lcSel) return;
+  const n = parseInt(document.getElementById('lc-qty').value, 10);
+  const existing = lcOverrideFor(lcSel);
+  if (existing) lcOverrides = lcOverrides.filter(o => o !== existing);     // N<=1 clears it
+  if (Number.isFinite(n) && n > 1) lcOverrides.push({ type: lcSel.type, at: [lcSel.x_norm, lcSel.y_norm], quantity: n });
+  document.getElementById('lc-count').textContent = lcOverrides.length;
+  document.getElementById('lc-qty-row').style.display = 'none';
+  lcSel = null;
+  lcRedraw();
+}
+
+function closeLeaderModal() { document.getElementById('lc-modal').style.display = 'none'; }
+
+async function lcRerun() {
+  if (!lcOverrides.length) { setStatus('lc-status','No leader counts entered','err'); return; }
+  if (!lastExtractPayload) { setStatus('lc-status','Run detection first','err'); return; }
+  setStatus('lc-status','Applying leaders…','running');
+  try {
+    const payload = { ...lastExtractPayload, leader_overrides: lcOverrides };
+    const r = await fetch(`${base()}/api/pass-extract`, {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
+    });
+    const j = await r.json();
+    if (!r.ok) { setStatus('lc-status','Error: '+(j.error??r.status),'err'); return; }
+    lastExtractResult = j;
+    document.getElementById('device-count').textContent = j.device_count;
+    renderDeviceTable(j);
+    let summary = `✓ ${j.device_count} devices`;
+    if (j.warnings?.length) summary += ` · ⚠ ${j.warnings.join(' · ')}`;
+    setStatus('pass-extract-status', summary, 'ok');
+    lcDevices = (j.devices||[]).filter(d => d.x_norm!=null && d.y_norm!=null);
+    setStatus('lc-status', `✓ Applied — ${j.device_count} devices total`, 'ok');
+    lcRedraw();
+  } catch(e) { setStatus('lc-status','Error: '+e.message,'err'); }
 }
 
 async function saveServingDemarc() {

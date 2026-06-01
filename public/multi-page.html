@@ -1805,11 +1805,17 @@ function renderByPage() {
       <button onclick="openLeaderModal(${pageNum})" class="info" style="padding:2px 9px; font-size:10px;">⤳ mark leaders</button>
     </div>`;
 
-    // By-type summary
+    // By-type summary (with leader-added sub-count computed from device flags)
     const byType = res.by_type ?? [];
+    const leaderByName = {};
+    for (const d of (res.devices ?? [])) {
+      if ((d.flags ?? []).includes('leader_expanded')) leaderByName[d.name] = (leaderByName[d.name] ?? 0) + 1;
+    }
     html += `<div style="font-size:11px; color:#888; margin-bottom:6px;">`;
     for (const t of byType) {
-      html += `<span style="margin-right:12px;"><strong style="color:#e0e0e0;">${t.count}</strong> ${t.name}</span>`;
+      const lc = leaderByName[t.name] ?? 0;
+      const leaderNote = lc ? ` <span style="color:#c08cff;">(+${lc} leader)</span>` : '';
+      html += `<span style="margin-right:12px;"><strong style="color:#e0e0e0;">${t.count}</strong> ${t.name}${leaderNote}</span>`;
     }
     html += `</div>`;
 
@@ -1822,9 +1828,18 @@ function renderByPage() {
       const dist = d.total_ft != null
         ? `<strong style="color:${d.tia_flag ? '#f07a7a' : '#7af07a'}">${d.total_ft}ft</strong>`
         : '—';
-      html += `<tr>
+      const fl = d.flags ?? [];
+      const badge = fl.includes('leader_expanded')
+        ? ' <span title="added via 1:N leader markup" style="color:#c08cff; font-size:9px; border:1px solid #6b4ea8; border-radius:3px; padding:0 3px;">⤳ leader</span>'
+        : fl.includes('no_uin')
+        ? ' <span title="unlabeled symbol — no UIN" style="color:#f0a040; font-size:9px; border:1px solid #7a5a20; border-radius:3px; padding:0 3px;">no-uin</span>'
+        : fl.includes('placement_inferred')
+        ? ' <span title="position inferred from symbol only" style="color:#7ac0f0; font-size:9px; border:1px solid #3a6a8a; border-radius:3px; padding:0 3px;">inferred</span>'
+        : '';
+      const rowBg = fl.includes('leader_expanded') ? ' style="background:rgba(192,140,255,0.05);"' : '';
+      html += `<tr${rowBg}>
         <td style="color:#555;">${i+1}</td>
-        <td style="color:#f0c040;">${d.name ?? '—'}</td>
+        <td style="color:#f0c040;">${d.name ?? '—'}${badge}</td>
         <td style="color:#7ac0f0; font-family:monospace;">${(d.raw_labels ?? []).join(' · ')}</td>
         <td style="text-align:right; color:#666; font-family:monospace;">${d.x_norm?.toFixed(3)}, ${d.y_norm?.toFixed(3)}</td>
         <td style="text-align:right;">${dist}</td>

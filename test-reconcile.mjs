@@ -89,5 +89,23 @@ console.log('VA fixture (label-only, exact-coordinate dedup):');
   assert(devices.every((d) => d.uin === null), 'label-only faceplates have uin=null (no schedule/UIN)');
 }
 
+// ── codes (detail #) carried through merge + leader inheritance ──────────────
+console.log('codes + leader flag:');
+{
+  const catalog = { 'OUTLET: DUPLEX': { sources:['label'], anchor:'N2', anchor_mode:'exact', families:['DV','DD','N'] } };
+  const labels = [{ uin:null, type:'OUTLET: DUPLEX', x:0.50, y:0.30, families:['DV','DD','N'], codes:['DV1','DD3','N2'] }];
+  const ov = [{ type:'OUTLET: DUPLEX', at:[0.50,0.30], quantity:9 }];
+  const out = reconcile(catalog, labels, [], [], {}, ov);
+  const grp = out.filter(d => d.type==='OUTLET: DUPLEX');
+  const base = grp.find(d => (d.attributes.codes||[]).length);
+  assert(base && ['DV1','DD3','N2'].every(c => base.attributes.codes.includes(c)),
+    `base carries full codes DV1/DD3/N2 (got ${JSON.stringify(base&&base.attributes.codes)})`);
+  assert(grp.length === 9, `leader qty 9 -> 9 devices (got ${grp.length})`);
+  assert(grp.every(d => d.flags.includes('leader_expanded')), 'every leader-group member flagged leader_expanded');
+  const sib = grp.filter(d => d.sources.length===1 && d.sources[0]==='leader');
+  assert(sib.length === 8 && sib.every(d => ['DV1','DD3','N2'].every(c => (d.attributes.codes||[]).includes(c))),
+    `8 siblings inherit the base codes (got ${sib.length})`);
+}
+
 console.log(failures === 0 ? '\nALL GATES PASS' : `\n${failures} ASSERTION(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);
