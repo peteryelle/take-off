@@ -302,7 +302,9 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
 
   <div class="pin-canvas-wrap" id="pin-canvas-wrap"
        style="overflow:hidden; width:88vw; height:62vh; position:relative; cursor:crosshair; border:1px solid #333;">
-    <canvas id="pin-canvas" style="position:absolute; top:0; left:0; transform-origin:0 0;"></canvas>
+    <div id="pin-layer" style="position:absolute; top:0; left:0; transform-origin:0 0;">
+      <canvas id="pin-canvas" style="position:absolute; top:0; left:0; display:block;"></canvas>
+    </div>
   </div>
 
   <div class="pin-controls">
@@ -1243,8 +1245,10 @@ function renderTRMap(trs) {
     step2.className = 'tr-step';
     const pinX = tr.pin_x ?? tr.demarc_x;
     const pinY = tr.pin_y ?? tr.demarc_y;
+    const isUserPin = tr.pin_source === 'user_pin' || tr.source === 'user_pin';
+    const coordStr = hasDemarcPin ? ` <span style="color:#666; font-size:10px; font-family:monospace;">(${(+pinX).toFixed(3)}, ${(+pinY).toFixed(3)})</span>` : '';
     const pinAutoText = hasDemarcPin
-      ? `<span class="pin-auto-tag">📍 Auto-placed at room center</span>
+      ? `<span class="pin-auto-tag" style="${isUserPin ? 'color:#7af0a0;' : ''}">📍 ${isUserPin ? 'Pinned by you' : 'Auto-placed at room center'}</span>${coordStr}
          <button class="info" onclick="openPinModal('${tr.name}', ${tr.demarc_page_num})"
            style="font-size:11px; padding:3px 8px; margin-left:6px;">Override</button>`
       : `<span class="pin-needs-tag">⚠ pin not set</span>
@@ -1402,8 +1406,8 @@ let pinDragStart = { x: 0, y: 0, panX: 0, panY: 0 };
 let pinCanvasNativeW = 0, pinCanvasNativeH = 0;
 
 function applyPinTransform() {
-  const cv = document.getElementById('pin-canvas');
-  cv.style.transform = `translate(${pinPanX}px, ${pinPanY}px) scale(${pinZoomLevel})`;
+  const layer = document.getElementById('pin-layer');
+  layer.style.transform = `translate(${pinPanX}px, ${pinPanY}px) scale(${pinZoomLevel})`;
   document.getElementById('pin-zoom-level').textContent = Math.round(pinZoomLevel * 100) + '%';
   redrawPinDot();
 }
@@ -1425,16 +1429,18 @@ function pinResetZoom() {
 }
 
 function redrawPinDot() {
-  const wrap = document.getElementById('pin-canvas-wrap');
-  wrap.querySelectorAll('.placed-pin').forEach(el => el.remove());
+  const layer = document.getElementById('pin-layer');
+  layer.querySelectorAll('.placed-pin').forEach(el => el.remove());
   if (pinTarget?.xNorm != null) {
-    const scaledX = pinTarget.xNorm * pinCanvasNativeW * pinZoomLevel + pinPanX;
-    const scaledY = pinTarget.yNorm * pinCanvasNativeH * pinZoomLevel + pinPanY;
     const dot = document.createElement('div');
     dot.className = 'placed-pin';
-    dot.style.left = scaledX + 'px';
-    dot.style.top  = scaledY + 'px';
-    wrap.appendChild(dot);
+    // Native canvas px inside the transformed layer; counter-scale so the marker
+    // stays a constant on-screen size as the layer zooms.
+    dot.style.left = (pinTarget.xNorm * pinCanvasNativeW) + 'px';
+    dot.style.top  = (pinTarget.yNorm * pinCanvasNativeH) + 'px';
+    dot.style.transform = `translate(-50%, -50%) scale(${1 / pinZoomLevel})`;
+    dot.style.transformOrigin = 'center';
+    layer.appendChild(dot);
   }
 }
 
@@ -1461,10 +1467,13 @@ async function openPinModal(trName, targetPageNum) {
   pinCanvasNativeH = vp.height;
   await pdfPage.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
 
-  // Scale canvas to fit wrap initially
-  const wrapW = wrap.offsetWidth || window.innerWidth * 0.88;
-  const initScale = Math.min(wrapW / vp.width, 1.0);
+  // Scale canvas to fit wrap initially, and CENTER it (don't pin to top-left).
+  const wrapW = wrap.offsetWidth  || window.innerWidth  * 0.88;
+  const wrapH = wrap.offsetHeight || window.innerHeight * 0.62;
+  const initScale = Math.min(wrapW / vp.width, wrapH / vp.height, 1.0);
   pinZoomLevel = initScale;
+  pinPanX = Math.max(0, (wrapW - vp.width  * initScale) / 2);
+  pinPanY = Math.max(0, (wrapH - vp.height * initScale) / 2);
   applyPinTransform();
 
   // Set up existing pin if any
@@ -1581,7 +1590,7 @@ async function confirmPin() {
         };
         renderTRMap(Object.values(trMap));
       } else {
-        trMap[trName] = { ...trMap[trName], pin_x: xNorm, pin_y: yNorm, stub_ft: jumperFt, demarc_id: j.id };
+        trMap[trName] = { ...trMap[trName], pin_x: xNorm, pin_y: yNorm, stub_ft: jumperFt, demarc_id: j.id, pin_source: 'user_pin', source: 'user_pin' };
         renderTRMap(Object.values(trMap));   // refresh so "pin not set" clears immediately
       }
       setStatus('pin-status', `✓ Pin saved`, 'ok');
