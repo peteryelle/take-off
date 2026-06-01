@@ -13,7 +13,7 @@
   const ITEMS = [
     { file: 'projects.html',     label: '⚡ Projects' },
     { file: 'discover.html',     label: '🔍 Discover' },
-    { file: 'multi-page.html',   label: 'Multi-Page' },
+    { file: 'multi-page.html',   label: 'Take-off' },
     { file: 'device-types.html', label: '⚙ Device Types' },
   ];
 

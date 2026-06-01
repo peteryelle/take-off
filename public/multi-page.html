@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Multi-Page Takeoff</title>
+<title>Take-off</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: monospace; background: #0d0d0d; color: #e8e8e8; padding: 20px; font-size: 16px; }
@@ -116,7 +116,7 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
 </head>
 <body>
 
-<h1>⚡ Multi-Page Takeoff</h1>
+<h1>⚡ Take-off</h1>
 <nav id="to-nav"></nav>
 <script src="nav.js"></script>
 
@@ -270,7 +270,11 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
 
 <!-- ── STEP 5: RESULTS ───────────────────────────────────────────── -->
 <div class="section" id="results-section" style="display:none;">
-  <div class="section-title">5 · Results</div>
+  <div class="section-title" style="display:flex; align-items:center; justify-content:space-between;">
+    <span>5 · Results</span>
+    <button onclick="exportResultsCsv()" class="info"
+            style="font-size:12px; padding:4px 12px;">⬇ Export CSV</button>
+  </div>
   <div class="results-tabs">
     <div class="tab active" onclick="showTab('by-page')">By Page</div>
     <div class="tab" onclick="showTab('by-tr')">By TR Room</div>
@@ -1960,7 +1964,76 @@ function renderByPage() {
   el.innerHTML = html || '<div style="color:#555;">No results yet</div>';
 }
 
-// ── 1:N leader-cluster marking (multi-page, per page) ────────────────
+// ── CSV export of the full device-level results ──────────────────────
+// ── CSV export of the full device-level results ──────────────────────
+// Columns (locked spec): Page · Sheet · TR Room · Exit Pin (X,Y) ·
+//   Exit→TR Distance (ft) · Type · Labels · Data Ports · Voice Ports ·
+//   Distance (ft) · TIA · Flags.  One row per device, project-wide.
+function exportResultsCsv() {
+  const pages = Object.keys(batchResults).map(Number).sort((a, b) => a - b);
+  if (!pages.length) { alert('No results to export — run a batch first.'); return; }
+
+  // Serving TR for a page (matches the per-page header logic).
+  function trForPage(pageNum) {
+    for (const [trName, tr] of Object.entries(trMap)) {
+      if ((tr.pages ?? []).some(p => p.eval_page_num === pageNum)) return { trName, tr };
+    }
+    return { trName: '', tr: null };
+  }
+
+  const esc = (v) => {
+    const s = (v == null) ? '' : String(v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+
+  const header = ['Page','Sheet','TR Room','Exit Pin (X,Y)','Exit→TR Distance (ft)',
+                  'Type','Labels','Data Ports','Voice Ports','Distance (ft)','TIA','Flags'];
+  const rows = [header];
+
+  for (const pageNum of pages) {
+    const res = batchResults[pageNum];
+    if (!res) continue;
+    const sheet = pageCache[pageNum]?.passBResult?.sheet_title ?? `Page ${pageNum}`;
+    const { trName, tr } = trForPage(pageNum);
+
+    // Exit pin: per-page off-sheet demarc. Blank when the TR is on-sheet.
+    const exit = tr?.extra_pins?.[pageNum];
+    const exitXY = exit && exit.x_norm != null && exit.y_norm != null
+      ? `${exit.x_norm.toFixed(3)}, ${exit.y_norm.toFixed(3)}` : '';
+    const exitToTr = exit ? (exit.stub_ft ?? '') : '';
+
+    for (const d of (res.devices ?? [])) {
+      rows.push([
+        `pg${pageNum}`,
+        sheet,
+        trName,
+        exitXY,
+        exitToTr,
+        d.name ?? '',
+        (d.raw_labels ?? []).join(' · '),
+        d.port_count_data  != null ? d.port_count_data  : '',
+        d.port_count_voice != null ? d.port_count_voice : '',
+        d.total_ft != null ? d.total_ft : '',
+        d.tia_flag ? 'YES' : '',
+        (d.flags ?? []).join(' '),
+      ]);
+    }
+  }
+
+  const csv = rows.map(r => r.map(esc).join(',')).join('\r\n');
+  // BOM so Excel reads UTF-8 (the · separator) correctly.
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  const stamp = new Date().toISOString().slice(0, 10);
+  const pid   = (new URLSearchParams(location.search).get('project_id')) || 'project';
+  a.href = url;
+  a.download = `takeoff_${pid}_${stamp}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
 // Per page: click a detected cluster, enter how many outlets its leader feeds.
 // Re-runs that page's pass-batch with leader_overrides (server persists + replaces),
 // refreshes the page card. Marks pre-fill from the server-echoed leader_overrides.
