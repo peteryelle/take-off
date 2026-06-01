@@ -1473,13 +1473,15 @@ async function openPinModal(trName, targetPageNum) {
   pinCanvasNativeH = vp.height;
   await pdfPage.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
 
-  // Scale canvas to fit wrap initially, and CENTER it (don't pin to top-left).
+  // Fit the drawing to the wrap, top-left origin with pan 0 — mirrors the leader
+  // modal exactly (whose click math is identical and proven). A centering pan here
+  // desynced getBoundingClientRect from the click formula and mapped every click to
+  // the corner, so we keep pan at 0 and let the user pan/zoom from there.
   const wrapW = wrap.offsetWidth  || window.innerWidth  * 0.88;
-  const wrapH = wrap.offsetHeight || window.innerHeight * 0.62;
-  const initScale = Math.min(wrapW / vp.width, wrapH / vp.height, 1.0);
+  const initScale = Math.min(wrapW / vp.width, 1.0);
   pinZoomLevel = initScale;
-  pinPanX = Math.max(0, (wrapW - vp.width  * initScale) / 2);
-  pinPanY = Math.max(0, (wrapH - vp.height * initScale) / 2);
+  pinPanX = 0;
+  pinPanY = 0;
   applyPinTransform();
 
   // Set up existing pin if any
