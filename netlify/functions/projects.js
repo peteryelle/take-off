@@ -146,6 +146,28 @@ export default async function handler(req) {
       return ok({ copied: inserted.length, device_types: inserted });
     }
 
+    // ── Action: update an existing project (e.g. mark as library) ──
+    if (action === "update_project") {
+      const { project_id, is_library, library_name, name, number, client } = body;
+      if (!project_id) return err("project_id required");
+      const patch = { updated_at: new Date() };
+      if (is_library   !== undefined) patch.is_library   = !!is_library;
+      if (library_name !== undefined) patch.library_name = library_name || null;
+      if (name         !== undefined) patch.name         = name;
+      if (number       !== undefined) patch.number       = number;
+      if (client       !== undefined) patch.client       = client;
+
+      const { data, error } = await supabase
+        .from("projects")
+        .update(patch)
+        .eq("id", project_id)
+        .select("id, name, is_library, library_name")
+        .single();
+
+      if (error) return err(error.message, 500);
+      return ok(data);
+    }
+
     // ── Default: create project ────────────────────────────────
     const { name, number, client, pdf_filename } = body;
     if (!name) return err("name required");

@@ -252,7 +252,7 @@ function renderList(projects) {
     <div class="project-card ${isActive ? 'active' : ''}"
          onclick="selectProject(${p.id})" id="card-${p.id}">
       <div>
-        <div class="project-name">${esc(p.name ?? '—')}</div>
+        <div class="project-name">${esc(p.name ?? '—')}${p.is_library ? ' <span style="background:#2a1e3a; border:1px solid #6a4a8a; color:#c79af0; padding:1px 7px; border-radius:3px; font-size:11px; font-weight:normal;">📚 Library</span>' : ''}</div>
         <div class="project-meta">
           ${p.project_number ? `<span>#${esc(p.project_number)}</span>` : ''}
           ${p.client         ? `<span>${esc(p.client)}</span>`         : ''}
@@ -270,6 +270,10 @@ function renderList(projects) {
       </div>
       <div class="project-actions">
         <div class="project-date">updated ${updated}</div>
+        <button class="info" onclick="openDiscover(${p.id}); event.stopPropagation();"
+                style="padding:4px 12px; font-size:12px; margin-top:4px; color:#c79af0; border-color:#6a4a8a;">
+          🔍 Discover →
+        </button>
         <button class="info" onclick="openSinglePage(${p.id}); event.stopPropagation();"
                 style="padding:4px 12px; font-size:12px; margin-top:4px;">
           Single Page →
@@ -277,6 +281,10 @@ function renderList(projects) {
         <button class="info" onclick="openMultiPage(${p.id}); event.stopPropagation();"
                 style="padding:4px 12px; font-size:12px;">
           Multi-Page →
+        </button>
+        <button class="info" onclick="toggleLibrary(${p.id}, ${p.is_library ? 'true' : 'false'}); event.stopPropagation();"
+                style="padding:4px 12px; font-size:11px; margin-top:4px; ${p.is_library ? 'color:#c79af0; border-color:#6a4a8a;' : 'color:#888;'}">
+          ${p.is_library ? '📚 Is Library ✓' : '☆ Mark as Library'}
         </button>
         <button class="danger" onclick="promptDelete(${p.id}, '${esc(p.name ?? '')}'); event.stopPropagation();"
                 style="padding:4px 12px; font-size:12px; margin-top:4px;">
@@ -385,6 +393,28 @@ function openMultiPage(id) {
   localStorage.setItem('mp_origin', 'multi-page.html');
   window.location.href = `multi-page.html?project_id=${id}`;
 }
+
+function openDiscover(id) {
+  localStorage.setItem('mp_project_id',  id);
+  localStorage.setItem('mp_netlify_url', base());
+  sessionStorage.setItem('to_project_id', id);
+  window.location.href = `discover.html?project_id=${id}`;
+}
+
+async function toggleLibrary(id, currentlyLibrary) {
+  const makeLibrary = !currentlyLibrary;
+  try {
+    const r = await fetch(`${base()}/api/projects`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'update_project', project_id: id, is_library: makeLibrary })
+    });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || r.status); }
+    await loadProjects();   // refresh cards so badge/toggle update
+  } catch (e) {
+    alert('Could not update library flag: ' + e.message);
+  }
+}
+
 
 // ── Delete ────────────────────────────────────────────────────────
 function promptDelete(id, name) {
