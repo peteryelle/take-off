@@ -849,6 +849,38 @@ Return only the structured description — no preamble, no explanation.`;
     : (legend_entry.text_anchors || []);
   const text_anchors = normalizeAnchors(anchorSource);
 
+  // ── v2 contract: derive detection_config from the observed plan instances ──
+  // discoverCatalog nominates the primary anchor by frequency (the token that recurs
+  // ~once per instance — N2/WAP/180) and the secondary families (DV/DD/N) from the
+  // base codes around it. Per-instance nearby_text supplies that frequency signal.
+  const planTokensFlat = all_instances.flatMap(i => i.nearby_text || []);   // keep dups for freq
+  let detection_config = null;
+  try {
+    const { types } = discoverCatalog([{
+      name:              legend_entry.name,
+      nearby_text:       allNearbyText,
+      legend_name:       legend_entry.name || null,
+      legend_present:    true,                       // came from a legend entry
+      approximate_count: instanceCount || null,
+      has_symbol:        !!(drawing_crop_base64 || legend_crop_base64),
+    }], planTokensFlat, null);
+    detection_config = types[0]?.detection_config || null;
+    if (detection_config) {
+      detection_config.cluster_pt = 25;
+      detection_config.source     = 'discovery';
+      // family-bearing types (outlets) carry the 1:N leaders; standalone (WAP/180) don't
+      detection_config.leader_from_anchor =
+        body.leader_from_anchor != null ? !!body.leader_from_anchor
+                                        : ((detection_config.families || []).length > 0);
+      // optional human overrides from the review UI (fixes the N2-vs-N edge by hand)
+      if (body.anchor)      { detection_config.anchor = String(body.anchor).toUpperCase(); detection_config.anchor_confidence = 'high'; }
+      if (body.anchor_mode)   detection_config.anchor_mode = body.anchor_mode;
+      if (body.families)      detection_config.families   = body.families.map(f => String(f).toUpperCase());
+    }
+  } catch (e) {
+    detection_config = null;   // type still gets created; just not yet detectable
+  }
+
   // Upsert to device_types
   const legend_id = legend_entry.id ||
     `LEG_${legend_entry.name.replace(/[^A-Z0-9]/gi, "_").toUpperCase().slice(0, 30)}`;
@@ -862,6 +894,7 @@ Return only the structured description — no preamble, no explanation.`;
       human_description:    legend_entry.legend_description || legend_entry.short_description || "",
       llm_description,
       text_anchors,
+      detection_config,
       example_image_base64: drawing_crop_base64 || legend_crop_base64 || null,
       updated_at:           new Date()
     }, { onConflict: "project_id,legend_id" })
@@ -876,7 +909,8 @@ Return only the structured description — no preamble, no explanation.`;
     name:            legend_entry.name,
     instances_found: instanceCount,
     llm_description,
-    text_anchors
+    text_anchors,
+    detection_config
   });
 }
 
