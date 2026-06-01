@@ -1498,10 +1498,11 @@ async function openPinModal(trName, targetPageNum) {
     : (trMap[trName]?.stub_ft ?? 0);
   document.getElementById('pin-jumper-ft').value = existingJumper;
 
-  // ── Click to place pin ── (bound to the layer so it fires anywhere on the
-  // drawing; the dot is pointer-events:none so it never swallows the click)
+  // ── Click to place pin ── (bound to the canvas — the element that actually
+  // receives the click; the layer is 0×0 so it can't be the hit target. The dot
+  // is pointer-events:none so it never swallows the click.)
   const layer = document.getElementById('pin-layer');
-  layer.onclick = (e) => {
+  cv.onclick = (e) => {
     if (pinDragStart?.moved) return;            // a drag, not a click
     const cvRect = cv.getBoundingClientRect();  // post-transform screen rect of the canvas
     const xInCanvas = (e.clientX - cvRect.left) / pinZoomLevel;
