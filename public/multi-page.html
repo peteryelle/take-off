@@ -102,6 +102,13 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
 /* ── Progress bar ── */
 .progress-wrap { background: #0a0a0a; border: 1px solid #222; border-radius: 3px; height: 10px; margin-top: 8px; overflow: hidden; }
 .progress-bar  { height: 100%; background: #3a7a3a; transition: width 0.3s; }
+.progress-bar.indeterminate {
+  width: 100% !important;
+  background: linear-gradient(90deg, transparent 0%, #3a7a3a 50%, transparent 100%);
+  background-size: 40% 100%; background-repeat: no-repeat; transition: none;
+  animation: indet 1.05s linear infinite;
+}
+@keyframes indet { 0% { background-position: -40% 0; } 100% { background-position: 140% 0; } }
 
 /* ── Results ── */
 .results-tabs { display: flex; gap: 2px; margin-bottom: 0; }
@@ -1047,7 +1054,7 @@ function renderPageAssignmentTable(trs) {
       <td style="padding:7px 10px; color:#aaa; max-width:280px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${raw}">${title}</td>
       <td style="padding:7px 10px;" id="pa-scale-${pgNum}">${scaleCellHtml(pgNum)}</td>
       <td style="padding:7px 10px;">${dropdown}</td>
-      <td style="padding:7px 10px;" id="pa-role-${pgNum}">${roleHtml}</td>`;
+      <td style="padding:7px 10px;" id="pa-role-${pgNum}">${roleHtml}${pinBtnsHtml(pgNum)}</td>`;
     tbody.appendChild(tr);
   }
 
@@ -1110,6 +1117,53 @@ function updatePageRoleBadge(pgNum) {
   } else {
     el.innerHTML = `<span class="pa-role-served">served</span>`;
   }
+  el.innerHTML += pinBtnsHtml(pgNum);
+}
+
+// ── Manual demarc placement ───────────────────────────────────────
+// Shown on any page that has no confirmed on-sheet host pin (the no-TR-detected
+// case the scan leaves stranded). Both paths seed an ad-hoc entry in trMap and
+// reuse openPinModal/confirmPin/buildPinsForPage unchanged — a serving pin is an
+// on-sheet TR (demarc_page_num === this page), an exit pin is an off-sheet TR.
+function pinBtnsHtml(pgNum) {
+  const assign = pageAssignments[pgNum] ?? {};
+  const tr     = trMap[assign.trName];
+  const hasServingPin = tr && tr.demarc_page_num === pgNum && tr.on_sheet
+                        && (tr.pin_x != null || tr.demarc_x != null);
+  if (hasServingPin) return '';
+  return `<div style="margin-top:5px; display:flex; gap:5px;">
+    <button class="info" style="padding:2px 8px; font-size:11px;" onclick="placeManualTR(${pgNum})">📍 set TR pin</button>
+    <button style="padding:2px 8px; font-size:11px;" onclick="placeManualExit(${pgNum})">＋ exit pin</button>
+  </div>`;
+}
+
+function ensureServedPage(name, pgNum) {
+  trMap[name].pages = trMap[name].pages ?? [];
+  if (!trMap[name].pages.find(p => p.eval_page_num === pgNum)) {
+    const pb = pageCache[pgNum]?.passBResult ?? {};
+    trMap[name].pages.push({ eval_page_num: pgNum, building: pb.building ?? null, floor: pb.level ?? null });
+  }
+}
+
+// Serving pin: the demarc/TR lives on THIS sheet; devices route to it.
+async function placeManualTR(pgNum) {
+  const name = (prompt(`Name the TR / demarc on pg${pgNum}\n(e.g. MDF, IDF-1, TR-A):`, `TR-pg${pgNum}`) || '').trim();
+  if (!name) return;
+  trMap[name] = { ...(trMap[name] ?? {}), name, on_sheet: true, host_confirmed: true,
+                  demarc_page_num: pgNum, source: 'user_pin' };
+  ensureServedPage(name, pgNum);
+  if (!pageAssignments[pgNum]) pageAssignments[pgNum] = {};
+  pageAssignments[pgNum].trName = name;
+  await openPinModal(name, pgNum);   // targetPageNum === demarc_page_num → serving mode
+}
+
+// Exit pin: cable leaves THIS sheet toward an off-sheet TR; jumper = backbone ft.
+async function placeManualExit(pgNum) {
+  const name = (prompt(`Off-sheet TR this exit routes to\n(e.g. MDF on another floor):`, `OFFSHEET-TR`) || '').trim();
+  if (!name) return;
+  if (!trMap[name]) trMap[name] = { name, on_sheet: false, demarc_page_num: null, source: 'off_sheet' };
+  ensureServedPage(name, pgNum);
+  await openPinModal(name, pgNum);   // demarc_page_num null → isExtraPin → exit mode + jumper
 }
 
 let paTableVisible = true;
@@ -1621,6 +1675,10 @@ async function confirmPin() {
         trMap[trName] = { ...trMap[trName], pin_x: xNorm, pin_y: yNorm, stub_ft: jumperFt, demarc_id: j.id, pin_source: 'user_pin', source: 'user_pin' };
         renderTRMap(Object.values(trMap));   // refresh so "pin not set" clears immediately
       }
+      // refresh the page → TR assignment table so the row reflects the new pin
+      if (document.getElementById('pa-table-wrap')?.style.display !== 'none') {
+        renderPageAssignmentTable(Object.values(trMap));
+      }
       setStatus('pin-status', `✓ Pin saved`, 'ok');
       setTimeout(closePinModal, 800);
     } else {
@@ -1664,6 +1722,22 @@ async function runBatch() {
   const sortedPages = [...selectedPages].sort((a,b) => a-b);
   _anchorCache = null; // force fresh load — device types may have changed since last run
 
+  // ── Liveness indicator ──────────────────────────────────────────
+  // A single page spends its whole life inside the pass-batch LLM call, so the
+  // per-page bar sat at 0% and the status text never moved — indistinguishable
+  // from a hang. The heartbeat ticks elapsed seconds + current phase every 1s so
+  // there's always proof of life, and the bar runs indeterminate while in flight.
+  const bar = document.getElementById('batch-progress');
+  const t0  = Date.now();
+  let done = 0, phase = 'loading device types';
+  const heartbeat = setInterval(() => {
+    const s = Math.round((Date.now() - t0) / 1000);
+    setStatus('batch-status',
+      `Running ${sortedPages.length} page${sortedPages.length !== 1 ? 's' : ''} · ${done}/${sortedPages.length} done · ${phase} · ${s}s`,
+      'running');
+  }, 1000);
+  const setPhase = p => { phase = p; };
+
   // ── Prefetch device types with llm_description for visual augment ─
   let augmentTypes = [];
   try {
@@ -1676,9 +1750,6 @@ async function runBatch() {
     console.log('[augment] augmentTypes after filter:', augmentTypes.map(d => d.name));
   } catch(e) { console.warn('[augment] prefetch failed:', e.message); }
   const log         = document.getElementById('batch-log');
-  let done = 0;
-
-  setStatus('batch-status', `Running ${sortedPages.length} pages…`, 'running');
 
   for (const pageNum of sortedPages) {
     const cache    = pageCache[pageNum] ?? {};
@@ -1690,8 +1761,8 @@ async function runBatch() {
       continue;
     }
 
-    setStatus('batch-status',
-      `Page ${pageNum} (${done+1}/${sortedPages.length})…`, 'running');
+    bar.classList.add('indeterminate');
+    setPhase(`pg${pageNum}: reading text`);
 
     try {
       // Extract text from PDF
@@ -1748,6 +1819,7 @@ async function runBatch() {
       try {
         const symTypes = (augmentTypes ?? []).filter(dt => (dt.detection_config?.sources ?? []).includes('symbol'));
         if (symTypes.length) {
+          setPhase(`pg${pageNum}: symbol scan (${symTypes.length} type${symTypes.length !== 1 ? 's' : ''})`);
           const symVP = pdfPage.getViewport({ scale: 1.8 });
           const symCV = document.createElement('canvas');
           symCV.width = symVP.width; symCV.height = symVP.height;
@@ -1780,6 +1852,7 @@ async function runBatch() {
       };
       if (scaleOverrides[pageNum]) batchBody.scale_override = scaleOverrides[pageNum];  // persisted by server
       batchPayloads[pageNum] = batchBody;   // reused by the leader-marking re-run
+      setPhase(`pg${pageNum}: detecting devices`);
       const r = await fetch(`${base()}/api/pass-batch`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(batchBody)
@@ -1804,11 +1877,13 @@ async function runBatch() {
     }
 
     done++;
-    document.getElementById('batch-progress').style.width =
-      `${Math.round((done / sortedPages.length) * 100)}%`;
+    bar.classList.remove('indeterminate');
+    bar.style.width = `${Math.round((done / sortedPages.length) * 100)}%`;
   }
 
-  setStatus('batch-status', `✓ Complete — ${done} pages processed`, 'ok');
+  clearInterval(heartbeat);
+  bar.classList.remove('indeterminate');
+  setStatus('batch-status', `✓ Complete — ${done} page${done !== 1 ? 's' : ''} processed in ${Math.round((Date.now() - t0) / 1000)}s`, 'ok');
   document.getElementById('results-section').style.display = 'block';
   document.getElementById('results-section').scrollIntoView({ behavior: 'smooth' });
   renderResults();
