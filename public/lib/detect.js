@@ -54,21 +54,32 @@ export function detectLabels(textItems = [], config = {}, opts = {}) {
     if (matches(s)) anchors.push({ s, x: t.cx_norm, y: t.cy_norm });
   }
 
-  // Attach nearby family codes to each anchor (enrichment only — never affects count).
+  // Attach family codes to anchors by NEAREST anchor (not every anchor in radius),
+  // so a token from a neighboring faceplate can't be claimed by two devices. The
+  // anchor token itself (e.g. N2 when 'N' is a family) is the anchor, not a family
+  // member, so it's excluded from the family codes here.
+  const anchorStr = mode === 'exact' ? String(config.anchor).trim().toUpperCase() : null;
   const famTokens = families.length
     ? textItems
         .filter((t) => isFamilyCode(t.str, families))
         .map((t) => ({ s: String(t.str).trim().toUpperCase(), x: t.cx_norm, y: t.cy_norm }))
     : [];
 
-  return anchors.map((a) => {
-    const codes = [];
-    if (famTokens.length) {
-      for (const f of famTokens) {
-        const d = Math.hypot(f.x - a.x, f.y - a.y);
-        if (d <= famRadius) codes.push(f.s);
-      }
+  const bucket = anchors.map(() => []);
+  for (const f of famTokens) {
+    let bi = -1, bd = famRadius;                 // only consider tokens within the radius
+    for (let i = 0; i < anchors.length; i++) {
+      const a = anchors[i];
+      // a token sitting exactly on an anchor of the same string IS that anchor — skip it
+      if (f.s === a.s && Math.abs(f.x - a.x) < 1e-6 && Math.abs(f.y - a.y) < 1e-6) { bi = -1; break; }
+      const d = Math.hypot(f.x - a.x, f.y - a.y);
+      if (d < bd) { bd = d; bi = i; }
     }
+    if (bi >= 0) bucket[bi].push(f.s);
+  }
+
+  return anchors.map((a, i) => {
+    const codes = [...new Set(bucket[i])].filter((c) => c !== a.s);  // dedupe + drop the anchor token
     const fams = [...new Set(codes.map(leadAlpha))];
     return {
       // regex/prefix tokens are unique per device -> they ARE the UIN.

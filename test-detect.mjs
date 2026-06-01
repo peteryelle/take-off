@@ -76,5 +76,20 @@ console.log('QTS fixture (prefix UIN tokens -> by-type):');
   assert(!inst.some((d) => d.uin === 'AD' || d.uin === 'ADDITIONAL'), 'bare "AD"/"ADDITIONAL" rejected (dash required)');
 }
 
+// ── family attach: nearest-anchor only, anchor token excluded, no neighbor bleed ──
+console.log('Family attach (anchor exclusion + nearest-anchor):');
+{
+  const items = [
+    { str:'N2', cx_norm:0.20, cy_norm:0.20 }, { str:'DV1', cx_norm:0.205, cy_norm:0.205 }, { str:'DD3', cx_norm:0.198, cy_norm:0.208 },
+    { str:'N2', cx_norm:0.25, cy_norm:0.20 }, { str:'DV2', cx_norm:0.255, cy_norm:0.205 }, { str:'DD2', cx_norm:0.248, cy_norm:0.208 },
+  ];
+  const cfg = { type:'OUTLET: DUPLEX', anchor:'N2', anchor_mode:'exact', families:['DV','DD','N'] };
+  const out = detectLabels(items, cfg, {});
+  assert(out.length === 2, `2 N2 anchors detected (got ${out.length})`);
+  assert(out.every((d) => !d.codes.includes('N2')), 'anchor token N2 never appears in family codes');
+  assert(out.every((d) => d.codes.length === 2), `each faceplate gets exactly its 2 codes, no neighbor bleed (got ${out.map(d=>d.codes.length)})`);
+  assert(out.every((d) => new Set(d.codes).size === d.codes.length), 'no duplicate codes within a faceplate');
+}
+
 console.log(failures === 0 ? '\nALL GATES PASS' : `\n${failures} ASSERTION(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

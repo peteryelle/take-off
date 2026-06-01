@@ -336,7 +336,9 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
   </div>
   <div id="lc-wrap" style="overflow:hidden; width:88vw; height:60vh; position:relative;
        cursor:crosshair; border:1px solid #333;">
-    <canvas id="lc-canvas" style="position:absolute; top:0; left:0; transform-origin:0 0;"></canvas>
+    <div id="lc-layer" style="position:absolute; top:0; left:0; transform-origin:0 0;">
+      <canvas id="lc-canvas" style="position:absolute; top:0; left:0; display:block;"></canvas>
+    </div>
   </div>
   <div id="lc-qty-row" style="display:none; margin-top:10px; gap:8px; align-items:center;">
     <span id="lc-sel-info" style="color:#ccc; font-size:12px; font-family:monospace;"></span>
@@ -1929,8 +1931,8 @@ let lcZoom = 1, lcPanX = 0, lcPanY = 0, lcDrag = null, lcCW = 0, lcCH = 0;
 let lcDevices = [], lcSel = null;
 
 function lcApplyTransform() {
-  const cv = document.getElementById('lc-canvas');
-  cv.style.transform = `translate(${lcPanX}px,${lcPanY}px) scale(${lcZoom})`;
+  const layer = document.getElementById('lc-layer');
+  layer.style.transform = `translate(${lcPanX}px,${lcPanY}px) scale(${lcZoom})`;
   document.getElementById('lc-zoom').textContent = Math.round(lcZoom*100) + '%';
   lcRedraw();
 }
@@ -1948,8 +1950,8 @@ function lcOverrideFor(d) {
     Math.abs(o.at[0]-d.x_norm) < 1e-6 && Math.abs(o.at[1]-d.y_norm) < 1e-6);
 }
 function lcRedraw() {
-  const wrap = document.getElementById('lc-wrap');
-  wrap.querySelectorAll('.lc-dot').forEach(e => e.remove());
+  const layer = document.getElementById('lc-layer');
+  layer.querySelectorAll('.lc-dot').forEach(e => e.remove());
   const seen = new Set();
   for (const d of lcDevices) {
     if (d.x_norm == null || d.y_norm == null) continue;
@@ -1960,19 +1962,23 @@ function lcRedraw() {
     const color = ov ? '#40f0a0' : (sel ? '#f0c040' : '#f07a7a');
     const dot = document.createElement('div');
     dot.className = 'lc-dot';
-    dot.style.cssText = `position:absolute; width:14px; height:14px; border-radius:50%;
-      border:2px solid ${color}; background:${ov?'rgba(64,240,160,.3)':'rgba(240,122,122,.18)'};
+    // Positioned in NATIVE canvas pixels inside lc-layer; the layer's transform
+    // applies the same zoom/pan as the canvas, so dots stay pinned to the anchor.
+    // Counter-scale the marker so its on-screen size stays ~constant across zoom.
+    const r = 7 / lcZoom;
+    dot.style.cssText = `position:absolute; width:${r*2}px; height:${r*2}px; border-radius:50%;
+      border:${2/lcZoom}px solid ${color}; background:${ov?'rgba(64,240,160,.3)':'rgba(240,122,122,.18)'};
       transform:translate(-50%,-50%); pointer-events:none; z-index:10;
-      ${sel?'box-shadow:0 0 0 3px rgba(240,192,64,.5);':''}`;
-    dot.style.left = (d.x_norm*lcCW*lcZoom + lcPanX) + 'px';
-    dot.style.top  = (d.y_norm*lcCH*lcZoom + lcPanY) + 'px';
+      ${sel?`box-shadow:0 0 0 ${3/lcZoom}px rgba(240,192,64,.5);`:''}`;
+    dot.style.left = (d.x_norm * lcCW) + 'px';
+    dot.style.top  = (d.y_norm * lcCH) + 'px';
     if (ov) {
       const badge = document.createElement('div');
       badge.textContent = '×' + ov.quantity;
-      badge.style.cssText = 'position:absolute;left:11px;top:-11px;color:#40f0a0;font-size:11px;font-weight:bold;white-space:nowrap;';
+      badge.style.cssText = `position:absolute;left:${11/lcZoom}px;top:${-11/lcZoom}px;color:#40f0a0;font-size:${11/lcZoom}px;font-weight:bold;white-space:nowrap;`;
       dot.appendChild(badge);
     }
-    wrap.appendChild(dot);
+    layer.appendChild(dot);
   }
 }
 
