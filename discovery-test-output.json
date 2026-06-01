@@ -1,0 +1,319 @@
+{
+  "pass1": {
+    "symbols_found": [
+      {
+        "cluster_id": "A",
+        "visual_description": "Small solid black circle, approximately 2-3mm diameter",
+        "nearby_text": [
+          "DD2",
+          "DV1",
+          "DD3",
+          "DD4",
+          "DD5",
+          "DD6",
+          "DD7",
+          "DD8",
+          "DD9",
+          "DD10",
+          "DD11",
+          "DD12",
+          "DD13",
+          "DD14",
+          "DD15",
+          "DD16",
+          "DD17",
+          "DD18",
+          "DD19",
+          "DD20",
+          "DD21"
+        ],
+        "approximate_count": 65,
+        "location_pattern": "Scattered throughout floor plan, primarily along walls and in room locations, each consistently paired with 'DD' prefix labels"
+      },
+      {
+        "cluster_id": "B",
+        "visual_description": "Small solid black square, approximately 2-3mm, oriented as a diamond (45 degree rotation)",
+        "nearby_text": [
+          "DV1",
+          "DV2",
+          "DV3",
+          "DV4",
+          "DV5",
+          "DV6"
+        ],
+        "approximate_count": 12,
+        "location_pattern": "Appears primarily along corridor walls and room entrances, each consistently paired with 'DV' prefix labels"
+      },
+      {
+        "cluster_id": "C",
+        "visual_description": "Circle with number inside, outlined with thin line, approximately 8-10mm diameter, containing single digit or double digit numbers",
+        "nearby_text": [],
+        "approximate_count": 35,
+        "location_pattern": "Distributed throughout the floor plan as reference markers, appears to be keynote or detail reference bubbles with numbers 1-14 visible"
+      },
+      {
+        "cluster_id": "D",
+        "visual_description": "Small rectangle with internal division creating two sections, outlined, approximately 4mm x 6mm",
+        "nearby_text": [
+          "AP",
+          "WAP"
+        ],
+        "approximate_count": 8,
+        "location_pattern": "Located in ceiling areas and corridors, often with 'AP' or 'WAP' text labels nearby"
+      },
+      {
+        "cluster_id": "E",
+        "visual_description": "Small square symbol, outlined, approximately 3mm x 3mm, unfilled",
+        "nearby_text": [
+          "J-BOX",
+          "JB"
+        ],
+        "approximate_count": 15,
+        "location_pattern": "Appears along cable routing paths and wall locations, often labeled with 'J-BOX' or 'JB' text"
+      },
+      {
+        "cluster_id": "F",
+        "visual_description": "Dashed line pattern following linear paths, varying lengths from several inches to spanning entire corridors",
+        "nearby_text": [],
+        "approximate_count": 40,
+        "location_pattern": "Forms cable routing paths throughout the floor plan, connecting various devices, running along walls and through corridors"
+      },
+      {
+        "cluster_id": "G",
+        "visual_description": "Small triangle symbol, solid black, pointing in various directions, approximately 3-4mm per side",
+        "nearby_text": [],
+        "approximate_count": 25,
+        "location_pattern": "Appears along dashed cable routing lines, indicating directional flow or routing direction"
+      },
+      {
+        "cluster_id": "H",
+        "visual_description": "Small circle with cross or plus symbol inside, outlined, approximately 5mm diameter",
+        "nearby_text": [
+          "CP",
+          "PULL"
+        ],
+        "approximate_count": 8,
+        "location_pattern": "Located at ceiling locations and junction points, often near cable pathway intersections"
+      },
+      {
+        "cluster_id": "I",
+        "visual_description": "Rectangle with diagonal line through it, approximately 8mm x 5mm, outlined",
+        "nearby_text": [
+          "CAM",
+          "CAMERA"
+        ],
+        "approximate_count": 12,
+        "location_pattern": "Positioned along corridors and at strategic viewpoints, typically at ceiling locations with associated text labels"
+      }
+    ]
+  },
+  "pass2": {
+    "matches": [
+      {
+        "cluster_id": "A",
+        "legend_name": "OUTLET COMBINATION TELEPHONE/DATA COMBINATION",
+        "legend_description": "OUTLET COMBINATION TELEPHONE/DATA COMBINATION",
+        "confidence": "high",
+        "confidence_reason": "Small solid black circles are standard symbols for telecommunications outlets, matching the DD (data) designation pattern in the nearby text"
+      },
+      {
+        "cluster_id": "B",
+        "legend_name": "SPEAKER, WALL MOUNTED, 'X' INDICATES THE TYPE, PROVIDE SCHEDULE OR LEGEND",
+        "legend_description": "SPEAKER, WALL MOUNTED, 'X' INDICATES THE TYPE, PROVIDE SCHEDULE OR LEGEND (AS LEGEND: WS1= 'E' TRRR9W [FF] PAGED OTHERWISE NOTED)",
+        "confidence": "medium",
+        "confidence_reason": "Small solid diamond symbols with DV designation could represent voice/speaker devices, though the legend shows a different symbol type"
+      },
+      {
+        "cluster_id": "C",
+        "legend_name": "DETAIL NUMBER",
+        "legend_description": "DETAIL NUMBER",
+        "confidence": "high",
+        "confidence_reason": "Circles with numbers inside are standard architectural symbols for detail references or callouts"
+      },
+      {
+        "cluster_id": "D",
+        "legend_name": "WIRELESS ACCESS POINT METALLIC 'X' INDICATES THE TYPE, PROVIDE SCHEDULE OR LEGEND",
+        "legend_description": "WIRELESS ACCESS POINT METALLIC 'X' INDICATES THE TYPE, PROVIDE SCHEDULE OR LEGEND",
+        "confidence": "high",
+        "confidence_reason": "Small rectangles with internal divisions near WAP/AP text matches wireless access point symbols"
+      },
+      {
+        "cluster_id": "E",
+        "legend_name": "J - JUNCTION BOX",
+        "legend_description": "J - JUNCTION BOX",
+        "confidence": "high",
+        "confidence_reason": "Small outlined squares with J-BOX/JB text designation matches standard junction box symbols"
+      },
+      {
+        "cluster_id": "F",
+        "legend_name": "CONDUIT CONCEALED UNDER TUBULAR, OTHERWISE EXPOSED",
+        "legend_description": "CONDUIT CONCEALED UNDER TUBULAR, OTHERWISE EXPOSED",
+        "confidence": "high",
+        "confidence_reason": "Dashed lines following linear paths are standard representation for concealed conduit runs"
+      },
+      {
+        "cluster_id": "G",
+        "legend_name": "REMOTE DICTATING OUTLET WS1= 'X' WITHOUT AFF, UNLESS OTHERWISE NOTED",
+        "legend_description": "REMOTE DICTATING OUTLET WS1= 'X' WITHOUT AFF, UNLESS OTHERWISE NOTED",
+        "confidence": "low",
+        "confidence_reason": "Triangle symbols are present but without specific nearby text to confirm function; could also represent direction indicators"
+      },
+      {
+        "cluster_id": "H",
+        "legend_name": "INTERCOM STATION (REFER TO SPECS. FOR FUNCTIONAL OPERATION OF INSTRUMENT & TYPE REQUIRED)",
+        "legend_description": "INTERCOM STATION (REFER TO SPECS. FOR FUNCTIONAL OPERATION OF INSTRUMENT & TYPE REQUIRED)",
+        "confidence": "medium",
+        "confidence_reason": "Circle with cross/plus and CP/PULL text could represent control point or pull station, though legend match is uncertain"
+      },
+      {
+        "cluster_id": "I",
+        "legend_name": "CCTV, CAMERA, 'X' INDICATES THE TYPE, PROVIDE SCHEDULE OR LEGEND",
+        "legend_description": "CCTV, CAMERA, 'X' INDICATES THE TYPE, PROVIDE SCHEDULE OR LEGEND",
+        "confidence": "high",
+        "confidence_reason": "Rectangle with diagonal line and CAM/CAMERA text designation matches standard camera symbol notation"
+      }
+    ]
+  },
+  "combined": [
+    {
+      "cluster_id": "A",
+      "visual_description": "Small solid black circle, approximately 2-3mm diameter",
+      "nearby_text": [
+        "DD2",
+        "DV1",
+        "DD3",
+        "DD4",
+        "DD5",
+        "DD6",
+        "DD7",
+        "DD8",
+        "DD9",
+        "DD10",
+        "DD11",
+        "DD12",
+        "DD13",
+        "DD14",
+        "DD15",
+        "DD16",
+        "DD17",
+        "DD18",
+        "DD19",
+        "DD20",
+        "DD21"
+      ],
+      "approximate_count": 65,
+      "location_pattern": "Scattered throughout floor plan, primarily along walls and in room locations, each consistently paired with 'DD' prefix labels",
+      "legend_name": "OUTLET COMBINATION TELEPHONE/DATA COMBINATION",
+      "legend_description": "OUTLET COMBINATION TELEPHONE/DATA COMBINATION",
+      "confidence": "high",
+      "confidence_reason": "Small solid black circles are standard symbols for telecommunications outlets, matching the DD (data) designation pattern in the nearby text"
+    },
+    {
+      "cluster_id": "B",
+      "visual_description": "Small solid black square, approximately 2-3mm, oriented as a diamond (45 degree rotation)",
+      "nearby_text": [
+        "DV1",
+        "DV2",
+        "DV3",
+        "DV4",
+        "DV5",
+        "DV6"
+      ],
+      "approximate_count": 12,
+      "location_pattern": "Appears primarily along corridor walls and room entrances, each consistently paired with 'DV' prefix labels",
+      "legend_name": "SPEAKER, WALL MOUNTED, 'X' INDICATES THE TYPE, PROVIDE SCHEDULE OR LEGEND",
+      "legend_description": "SPEAKER, WALL MOUNTED, 'X' INDICATES THE TYPE, PROVIDE SCHEDULE OR LEGEND (AS LEGEND: WS1= 'E' TRRR9W [FF] PAGED OTHERWISE NOTED)",
+      "confidence": "medium",
+      "confidence_reason": "Small solid diamond symbols with DV designation could represent voice/speaker devices, though the legend shows a different symbol type"
+    },
+    {
+      "cluster_id": "C",
+      "visual_description": "Circle with number inside, outlined with thin line, approximately 8-10mm diameter, containing single digit or double digit numbers",
+      "nearby_text": [],
+      "approximate_count": 35,
+      "location_pattern": "Distributed throughout the floor plan as reference markers, appears to be keynote or detail reference bubbles with numbers 1-14 visible",
+      "legend_name": "DETAIL NUMBER",
+      "legend_description": "DETAIL NUMBER",
+      "confidence": "high",
+      "confidence_reason": "Circles with numbers inside are standard architectural symbols for detail references or callouts"
+    },
+    {
+      "cluster_id": "D",
+      "visual_description": "Small rectangle with internal division creating two sections, outlined, approximately 4mm x 6mm",
+      "nearby_text": [
+        "AP",
+        "WAP"
+      ],
+      "approximate_count": 8,
+      "location_pattern": "Located in ceiling areas and corridors, often with 'AP' or 'WAP' text labels nearby",
+      "legend_name": "WIRELESS ACCESS POINT METALLIC 'X' INDICATES THE TYPE, PROVIDE SCHEDULE OR LEGEND",
+      "legend_description": "WIRELESS ACCESS POINT METALLIC 'X' INDICATES THE TYPE, PROVIDE SCHEDULE OR LEGEND",
+      "confidence": "high",
+      "confidence_reason": "Small rectangles with internal divisions near WAP/AP text matches wireless access point symbols"
+    },
+    {
+      "cluster_id": "E",
+      "visual_description": "Small square symbol, outlined, approximately 3mm x 3mm, unfilled",
+      "nearby_text": [
+        "J-BOX",
+        "JB"
+      ],
+      "approximate_count": 15,
+      "location_pattern": "Appears along cable routing paths and wall locations, often labeled with 'J-BOX' or 'JB' text",
+      "legend_name": "J - JUNCTION BOX",
+      "legend_description": "J - JUNCTION BOX",
+      "confidence": "high",
+      "confidence_reason": "Small outlined squares with J-BOX/JB text designation matches standard junction box symbols"
+    },
+    {
+      "cluster_id": "F",
+      "visual_description": "Dashed line pattern following linear paths, varying lengths from several inches to spanning entire corridors",
+      "nearby_text": [],
+      "approximate_count": 40,
+      "location_pattern": "Forms cable routing paths throughout the floor plan, connecting various devices, running along walls and through corridors",
+      "legend_name": "CONDUIT CONCEALED UNDER TUBULAR, OTHERWISE EXPOSED",
+      "legend_description": "CONDUIT CONCEALED UNDER TUBULAR, OTHERWISE EXPOSED",
+      "confidence": "high",
+      "confidence_reason": "Dashed lines following linear paths are standard representation for concealed conduit runs"
+    },
+    {
+      "cluster_id": "G",
+      "visual_description": "Small triangle symbol, solid black, pointing in various directions, approximately 3-4mm per side",
+      "nearby_text": [],
+      "approximate_count": 25,
+      "location_pattern": "Appears along dashed cable routing lines, indicating directional flow or routing direction",
+      "legend_name": "REMOTE DICTATING OUTLET WS1= 'X' WITHOUT AFF, UNLESS OTHERWISE NOTED",
+      "legend_description": "REMOTE DICTATING OUTLET WS1= 'X' WITHOUT AFF, UNLESS OTHERWISE NOTED",
+      "confidence": "low",
+      "confidence_reason": "Triangle symbols are present but without specific nearby text to confirm function; could also represent direction indicators"
+    },
+    {
+      "cluster_id": "H",
+      "visual_description": "Small circle with cross or plus symbol inside, outlined, approximately 5mm diameter",
+      "nearby_text": [
+        "CP",
+        "PULL"
+      ],
+      "approximate_count": 8,
+      "location_pattern": "Located at ceiling locations and junction points, often near cable pathway intersections",
+      "legend_name": "INTERCOM STATION (REFER TO SPECS. FOR FUNCTIONAL OPERATION OF INSTRUMENT & TYPE REQUIRED)",
+      "legend_description": "INTERCOM STATION (REFER TO SPECS. FOR FUNCTIONAL OPERATION OF INSTRUMENT & TYPE REQUIRED)",
+      "confidence": "medium",
+      "confidence_reason": "Circle with cross/plus and CP/PULL text could represent control point or pull station, though legend match is uncertain"
+    },
+    {
+      "cluster_id": "I",
+      "visual_description": "Rectangle with diagonal line through it, approximately 8mm x 5mm, outlined",
+      "nearby_text": [
+        "CAM",
+        "CAMERA"
+      ],
+      "approximate_count": 12,
+      "location_pattern": "Positioned along corridors and at strategic viewpoints, typically at ceiling locations with associated text labels",
+      "legend_name": "CCTV, CAMERA, 'X' INDICATES THE TYPE, PROVIDE SCHEDULE OR LEGEND",
+      "legend_description": "CCTV, CAMERA, 'X' INDICATES THE TYPE, PROVIDE SCHEDULE OR LEGEND",
+      "confidence": "high",
+      "confidence_reason": "Rectangle with diagonal line and CAM/CAMERA text designation matches standard camera symbol notation"
+    }
+  ]
+}

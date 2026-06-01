@@ -1408,7 +1408,10 @@ async function getDeviceTextItems(pdfPage) {
   const cH2    = Math.max(yMax2 - yMin2, H);
   const items = [];
   for (const { str, cx, cy } of allRaw2) {
-    if (!anchorPatternSet.has(str)) continue;
+    // v2: send all device-like candidates and let the server match anchors via
+    // detection_config. No exact client pre-filter — it would drop prefix UINs
+    // (e.g. CAM-EXT-EG2) that the regex anchor mode needs to see.
+    if (str.length > 24 || !/[A-Za-z0-9]/.test(str)) continue;
     items.push({
       str,
       cx_norm: parseFloat(((cx - xMin2) / cW2).toFixed(4)),
@@ -1454,10 +1457,42 @@ async function runPassExtract() {
 
     const scalePtsPerFt = calcScalePtsPerFt(passBResult);
 
+    // ── Symbol detection (Step 7) — runs BEFORE reconcile so glyphs fold in SNAP.
+    // Render the page once, ask /api/pass-symbol per symbol-sourced type in parallel,
+    // collect {type,x,y} instances. reconcile (inside pass-extract) owns merge + flags.
+    let symbolInstances = [];
+    try {
+      const symVP = pdfPage.getViewport({ scale: 1.8 });
+      const symCV = document.createElement('canvas');
+      symCV.width = symVP.width; symCV.height = symVP.height;
+      await pdfPage.render({ canvasContext: symCV.getContext('2d'), viewport: symVP }).promise;
+      const pageImgB64 = symCV.toDataURL('image/jpeg', 0.85).split(',')[1];
+
+      const dtR = await fetch(`${base()}/api/takeoff-summary?project_id=${projectId}`);
+      const dtD = await dtR.json();
+      const symTypes = (dtD.device_types ?? []).filter(dt =>
+        (dt.detection_config?.sources ?? []).includes('symbol')
+      );
+      if (symTypes.length) setStatus('pass-extract-status', `Scanning ${symTypes.length} symbol type(s)…`, 'running');
+
+      const symResults = await Promise.all(symTypes.map(async dt => {
+        try {
+          const sR = await fetch(`${base()}/api/pass-symbol`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ page_id: passBResult.page_id, device_type_id: dt.id, page_image_base64: pageImgB64 })
+          });
+          const sD = await sR.json();
+          return sR.ok ? (sD.symbol_instances ?? []) : [];
+        } catch { return []; }   // soft-fail per type; label+schedule still reconcile
+      }));
+      symbolInstances = symResults.flat();
+    } catch (e) { console.warn('[pass-symbol]', e.message); }
+
     const payload = {
       project_id:      projectId,
       page_id:         passBResult.page_id,
       text_items:      items,
+      symbol_instances: symbolInstances,
       page_width_pts,
       page_height_pts,
       scale_pts_per_ft: scalePtsPerFt
@@ -1496,72 +1531,8 @@ async function runPassExtract() {
     // Render device table
     renderDeviceTable(j);
 
-    // ── Visual augment — catches leader-line devices ──────────────
-    // Non-blocking: runs after text-layer, adds visually-detected devices
-    try {
-      const augVP  = pdfPage.getViewport({ scale: 1.8 });
-      const augCV  = document.createElement('canvas');
-      augCV.width  = augVP.width; augCV.height = augVP.height;
-      await pdfPage.render({ canvasContext: augCV.getContext('2d'), viewport: augVP }).promise;
-      const pageImgB64 = augCV.toDataURL('image/jpeg', 0.85).split(',')[1];
-
-      const dtR = await fetch(`${base()}/api/takeoff-summary?project_id=${projectId}`);
-      const dtD = await dtR.json();
-      const augTypes = (dtD.device_types ?? []).filter(dt =>
-        dt.llm_description && dt.llm_description.trim().length > 20
-      );
-
-      // Bounds from outlet text-layer devices
-      const tlDevices = j.devices ?? [];
-      const outletIds = new Set(augTypes.filter(dt => /DV|DD|N\d/.test(JSON.stringify(dt.text_anchors))).map(dt => dt.id));
-      const tlBase = tlDevices.filter(d => outletIds.has(d.device_type_id)) || tlDevices;
-      const tlX = (tlBase.length ? tlBase : tlDevices).map(d => d.x_norm).filter(v => v != null);
-      const tlY = (tlBase.length ? tlBase : tlDevices).map(d => d.y_norm).filter(v => v != null);
-      const bXMin = tlX.length ? Math.min(...tlX) - 0.06 : 0;
-      const bXMax = tlX.length ? Math.max(...tlX) + 0.06 : 1;
-      const bYMin = tlY.length ? Math.min(...tlY) - 0.06 : 0;
-      const bYMax = tlY.length ? Math.max(...tlY) + 0.06 : 1;
-
-      const existingPos = tlDevices.map(d => ({ x_norm: d.x_norm, y_norm: d.y_norm }));
-      let totalNew = 0;
-      let allNew = [];
-
-      for (const dt of augTypes) {
-        try {
-          const augResp = await fetch(`${base()}/api/pass-visual-augment`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              project_id: projectId, page_id: passBResult.page_id,
-              device_type_id: dt.id, page_image_base64: pageImgB64,
-              existing_positions: existingPos,
-              demarc_pins: passBResult.demarc_pins ?? [],
-              page_width_pts: textData.page_width_pts,
-              page_height_pts: textData.page_height_pts
-            })
-          });
-          const augData = await augResp.json();
-          if (augResp.ok && augData.new_instances > 0) {
-            const filtered = (augData.instances ?? []).filter(d =>
-              d.x_norm >= bXMin && d.x_norm <= bXMax &&
-              d.y_norm >= bYMin && d.y_norm <= bYMax
-            );
-            totalNew += filtered.length;
-            allNew = allNew.concat(filtered);
-          }
-        } catch { /* soft fail per device type */ }
-      }
-
-      if (totalNew > 0) {
-        setStatus('pass-extract-status',
-          `✓ ${j.device_count} text-layer + ${totalNew} visual = ${j.device_count + totalNew} total`, 'ok');
-        // Reload device table with visual results included
-        const combined = deduplicateInstances([...(j.devices ?? []), ...allNew]);
-        j.devices = combined;
-        j.device_count = combined.length;
-        document.getElementById('device-count').textContent = combined.length;
-        renderDeviceTable(j);
-      }
-    } catch(e) { console.warn('[visual-augment]', e.message); }
+    // Render reflects reconcile's merged list: labels + schedule + symbols folded in
+    // SNAP, with unlabeled glyphs (no_uin) and inferred placements surfaced via j.warnings.
 
   } catch(e) {
     setStatus('pass-extract-status', 'Error: ' + e.message, 'err');
@@ -1570,61 +1541,11 @@ async function runPassExtract() {
 }
 
 
-// ── Proximity deduplication ───────────────────────────────────────
-function parseLabelFamilies(labels) {
-  const dvs = labels.filter(l => /^DV\d+$/.test(l));
-  const dds = labels.filter(l => /^DD\d+$/.test(l));
-  const ns  = labels.filter(l => /^N\d+$/.test(l));
-  return { dvs, dds, ns };
-}
-
-function splitOverMerge(entry) {
-  const labels = entry.raw_labels ?? [];
-  const { dvs, dds, ns } = parseLabelFamilies(labels);
-  if (dvs.length <= 1 && dds.length <= 1) return [entry];
-  const count = Math.max(dvs.length, dds.length);
-  const outlets = [];
-  for (let i = 0; i < count; i++) {
-    const ol = [];
-    if (dvs[i]) ol.push(dvs[i]);
-    if (dds[i]) ol.push(dds[i]);
-    if (ns[0])  ol.push(ns[0]);
-    outlets.push({ ...entry, raw_labels: ol });
-  }
-  return outlets;
-}
-
-const DEDUP_THRESH = 0.022;
-function deduplicateInstances(instances) {
-  if (!instances?.length) return [];
-  const used = new Set();
-  const result = [];
-  for (let i = 0; i < instances.length; i++) {
-    if (used.has(i)) continue;
-    const a = instances[i];
-    const group = [a];
-    used.add(i);
-    for (let j = i + 1; j < instances.length; j++) {
-      if (used.has(j)) continue;
-      const b = instances[j];
-      const aType = a.device_type_id ?? a.legend_id;
-      const bType = b.device_type_id ?? b.legend_id;
-      if (aType == null || aType !== bType) continue;
-      const dx = Math.abs((a.x_norm ?? 0) - (b.x_norm ?? 0));
-      const dy = Math.abs((a.y_norm ?? 0) - (b.y_norm ?? 0));
-      if (dx <= DEDUP_THRESH && dy <= DEDUP_THRESH) { group.push(b); used.add(j); }
-    }
-    const primary = group.reduce((best, inst) => {
-      const bn = (best.data_ports?.length ?? 0) + (best.voice_ports?.length ?? 0) + (best.node_labels?.length ?? 0);
-      const tn = (inst.data_ports?.length  ?? 0) + (inst.voice_ports?.length  ?? 0) + (inst.node_labels?.length  ?? 0);
-      return tn > bn ? inst : best;
-    }, group[0]);
-    const allLabels = [...new Set(group.flatMap(g => g.raw_labels ?? []))];
-    const merged = { ...primary, raw_labels: allLabels };
-    for (const outlet of splitOverMerge(merged)) result.push(outlet);
-  }
-  return result;
-}
+// ── Merge layer ───────────────────────────────────────────────────
+// The bespoke outlet chain (parseLabelFamilies / splitOverMerge /
+// deduplicateInstances) was removed in the v2 refit. Detection now emits one
+// instance per anchor; reconcile() (public/lib/reconcile.js) owns the merge and
+// gets wired in at the call sites above in Step 5.
 
 // ── Device table renderer ────────────────────────────────────────────
 function renderDeviceTable(j) {
@@ -1668,8 +1589,9 @@ async function loadFullDeviceList(extractResult) {
     const dtMap = {};
     for (const dt of (j.device_types ?? [])) dtMap[dt.legend_id] = dt;
 
-    // All devices are returned directly from pass-extract (no sample limit)
-    const devices = deduplicateInstances(extractResult.devices ?? []);
+    // All devices are returned directly from pass-extract (no sample limit).
+    // v2: detector emits one instance per anchor; reconcile owns any merge (Step 5).
+    const devices = extractResult.devices ?? [];
     renderDeviceRows(devices, dtMap, tbody, devices.length);
   } catch(e) {
     tbody.innerHTML = `<tr><td colspan="6" style="color:#f07a7a; padding:8px;">Error: ${e.message}</td></tr>`;

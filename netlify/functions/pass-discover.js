@@ -17,6 +17,7 @@
 
 import Anthropic        from "@anthropic-ai/sdk";
 import { createClient } from "@supabase/supabase-js";
+import { discoverCatalog } from "../../public/lib/discover-config.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const supabase  = createClient(
@@ -50,6 +51,7 @@ export default async function handler(req) {
       case "reject":          return await actionReject(body);
       case "skip":            return await actionSkip(body);
       case "complete":        return await actionComplete(body);
+      case "build_catalog":   return await actionBuildCatalog(body);
       case "load_session":    return await actionLoadSession(body);
       default: return respond(400, { error: `Unknown action: ${action}` });
     }
@@ -511,6 +513,75 @@ async function actionComplete(body) {
     .eq("detect_on_run", true)
     .order("cluster_index");
   return respond(200, { status: "complete", devices_in_scope: (devices || []).length, devices: devices || [] });
+}
+
+// ═════════════════════════════════════════════════════════════════
+// ACTION: BUILD_CATALOG
+// Turns the approved clusters into v2 detection_config rows. The browser
+// supplies the plan text tokens (for frequency confirmation) and, if present,
+// the schedule header tokens. discoverCatalog (public/lib) nominates anchors,
+// derives UIN patterns, maps schedule columns, and sets sources/confidence.
+// Body: { project_id, session_id, plan_tokens: [str], schedule?: { present,
+//         headerTokens, locatorTitle }, page_id? (where to store the schedule) }
+// ═════════════════════════════════════════════════════════════════
+async function actionBuildCatalog(body) {
+  const { project_id, session_id, plan_tokens, schedule, page_id } = body;
+  if (!project_id || !session_id) return respond(400, { error: "project_id and session_id required" });
+
+  const { data: clusters, error: clErr } = await supabase
+    .from("discovery_clusters")
+    .select("id, final_name, legend_name, legend_description, nearby_text, approximate_count, drawing_crop_base64, device_type_id")
+    .eq("session_id", session_id)
+    .eq("detect_on_run", true)
+    .order("cluster_index");
+
+  if (clErr) return respond(500, { error: "cluster load failed: " + clErr.message });
+  if (!clusters?.length) return respond(404, { error: "No approved clusters — approve devices before building the catalog" });
+
+  // Raw candidates, preserving order so types[i] maps back to clusters[i].
+  const rawCandidates = clusters.map((c) => ({
+    name:              c.final_name || c.legend_name || "Unknown Device",
+    nearby_text:       c.nearby_text || [],
+    legend_name:       c.legend_name || null,
+    legend_present:    !!c.legend_name,
+    approximate_count: c.approximate_count ?? null,
+    has_symbol:        !!c.drawing_crop_base64
+  }));
+
+  const { types, schedule: scheduleBlock } = discoverCatalog(rawCandidates, plan_tokens || [], schedule || null);
+
+  // Write detection_config to each cluster's device_type row.
+  const results = [];
+  for (let i = 0; i < types.length; i++) {
+    const t = types[i];
+    const dtId = clusters[i].device_type_id;
+    if (!dtId) { results.push({ name: t.name, skipped: "no device_type_id — approve the cluster first" }); continue; }
+    const { error } = await supabase.from("device_types")
+      .update({ detection_config: t.detection_config, updated_at: new Date() })
+      .eq("id", dtId);
+    results.push({
+      name: t.name, device_type_id: dtId,
+      anchor: t.detection_config.anchor, anchor_mode: t.detection_config.anchor_mode,
+      uin_pattern: t.detection_config.uin_pattern, sources: t.detection_config.sources,
+      anchor_confidence: t.detection_config.anchor_confidence, error: error?.message || null
+    });
+  }
+
+  // Store the sheet-level schedule block (caller says which page hosts the table).
+  let scheduleWrite = null;
+  if (scheduleBlock) {
+    if (page_id) {
+      const { error } = await supabase.from("pages").update({ schedule: scheduleBlock }).eq("id", page_id);
+      scheduleWrite = { page_id, stored: !error, error: error?.message || null };
+    } else {
+      scheduleWrite = { stored: false, warning: "schedule parsed but no page_id supplied to store it" };
+    }
+  }
+
+  return respond(200, {
+    catalog: results, schedule: scheduleBlock, schedule_write: scheduleWrite,
+    written: results.filter((r) => r.device_type_id && !r.error).length
+  });
 }
 
 // ═════════════════════════════════════════════════════════════════

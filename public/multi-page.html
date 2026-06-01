@@ -319,6 +319,39 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
   </div>
 </div>
 
+<!-- ── 1:N LEADER CLUSTER MARKING MODAL (multi-page, per page) ──── -->
+<div id="lc-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.88);
+     z-index:300; flex-direction:column; align-items:center; justify-content:center;">
+  <div style="color:#f0c040; font-size:15px; font-weight:bold; margin-bottom:4px;" id="lc-title">Mark 1:N Leader Clusters</div>
+  <div style="color:#aaa; font-size:13px; margin-bottom:8px;">
+    Click a cluster (red dot), enter how many outlets its leader feeds · scroll to zoom · drag to pan
+  </div>
+  <div style="display:flex; gap:8px; margin-bottom:8px; align-items:center;">
+    <button onclick="lcZoomBtn(1.5)" style="padding:3px 12px;">＋</button>
+    <button onclick="lcZoomBtn(1/1.5)" style="padding:3px 12px;">－</button>
+    <button onclick="lcReset()" class="info" style="padding:3px 10px; font-size:11px;">Reset</button>
+    <span id="lc-zoom" style="color:#888; font-size:12px;">100%</span>
+    <span style="color:#888; font-size:12px;">marked: <b id="lc-count">0</b></span>
+  </div>
+  <div id="lc-wrap" style="overflow:hidden; width:88vw; height:60vh; position:relative;
+       cursor:crosshair; border:1px solid #333;">
+    <canvas id="lc-canvas" style="position:absolute; top:0; left:0; transform-origin:0 0;"></canvas>
+  </div>
+  <div id="lc-qty-row" style="display:none; margin-top:10px; gap:8px; align-items:center;">
+    <span id="lc-sel-info" style="color:#ccc; font-size:12px; font-family:monospace;"></span>
+    <span style="color:#aaa; font-size:13px;">How many leader lines?</span>
+    <input id="lc-qty" type="number" min="1" style="width:64px; padding:4px;"
+           onkeydown="if(event.key==='Enter'){event.preventDefault();lcSetQty();}">
+    <button onclick="lcSetQty()" style="padding:4px 14px;">Set</button>
+  </div>
+  <div style="margin-top:10px; display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+    <div class="status" id="lc-status"></div>
+    <span style="color:#666; font-size:11px;">mark every cluster on the page, then apply once</span>
+    <button onclick="lcRerun()" style="padding:8px 20px; font-size:14px;">✓ Apply &amp; re-run page</button>
+    <button class="danger" onclick="closeLeaderModal()" style="padding:8px 16px; font-size:14px;">✗ Close</button>
+  </div>
+</div>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>
 pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -333,6 +366,7 @@ let pageCache    = {};           // pageNum → { canvas, passBResult, pageId }
 let trMap        = {};           // TR name → config
 let pinTarget    = null;         // { trName, pageNum } — current pin placement
 let batchResults = {};           // pageNum → result
+let batchPayloads = {};          // pageNum → the pass-batch body sent (for leader re-runs)
 
 function base() { return document.getElementById('netlify-url').value.replace(/\/$/, ''); }
 function pid()  { return parseInt(document.getElementById('project-id').value.trim()); }
@@ -1554,8 +1588,7 @@ async function runBatch() {
       const viewport = pdfPage.getViewport({ scale: 1.0 });
       const tContent = await pdfPage.getTextContent({ includeMarkedContent: false });
 
-      // Anchor-pattern filtering (same logic as single-page)
-      const anchorSet = await getAnchorPatterns();
+      // v2: no client anchor pre-filter — the server matches via detection_config.
       const W = viewport.width, H = viewport.height;
       // Two-pass text extraction — normalizes by content bounds to handle
       // engineering drawings where content extends outside the PDF MediaBox.
@@ -1584,7 +1617,8 @@ async function runBatch() {
       // Filter to anchors, normalize by content bounds
       const textItems = [];
       for (const { s, cx, cy } of allRaw) {
-        if (!anchorSet.has(s)) continue;
+        // send all device-like candidates; the server (detection_config) matches precisely
+        if (s.length > 24 || !/[A-Za-z0-9]/.test(s)) continue;
         textItems.push({
           str:       s,
           cx_norm:   parseFloat(((cx - xMin) / cW).toFixed(4)),
@@ -1597,25 +1631,54 @@ async function runBatch() {
       // Build demarc pins for this page
       const demarcPins = buildPinsForPage(pageNum, passBRes, W, H);
 
-      // Call pass-batch
+      // ── Symbol detection (Step 7) — BEFORE pass-batch so glyphs fold in SNAP.
+      // Per symbol-sourced type, in parallel; reconcile owns merge + flagging.
+      let symbolInstances = [];
+      try {
+        const symTypes = (augmentTypes ?? []).filter(dt => (dt.detection_config?.sources ?? []).includes('symbol'));
+        if (symTypes.length) {
+          const symVP = pdfPage.getViewport({ scale: 1.8 });
+          const symCV = document.createElement('canvas');
+          symCV.width = symVP.width; symCV.height = symVP.height;
+          await pdfPage.render({ canvasContext: symCV.getContext('2d'), viewport: symVP }).promise;
+          const pageImgB64 = symCV.toDataURL('image/jpeg', 0.85).split(',')[1];
+          const symResults = await Promise.all(symTypes.map(async dt => {
+            try {
+              const sR = await fetch(`${base()}/api/pass-symbol`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ page_id: pageId, device_type_id: dt.id, page_image_base64: pageImgB64 })
+              });
+              const sD = await sR.json();
+              return sR.ok ? (sD.symbol_instances ?? []) : [];
+            } catch { return []; }
+          }));
+          symbolInstances = symResults.flat();
+        }
+      } catch (e) { console.warn('[pass-symbol] pg' + pageNum, e.message); }
+
+      // Call pass-batch (label + schedule + symbol → reconcile)
+      const batchBody = {
+        project_id:     projectId,
+        page_id:        pageId,
+        eval_page_num:  pageNum,
+        text_items:     textItems,
+        symbol_instances: symbolInstances,
+        page_width_pts:  W,
+        page_height_pts: H,
+        demarc_pins:    demarcPins
+      };
+      batchPayloads[pageNum] = batchBody;   // reused by the leader-marking re-run
       const r = await fetch(`${base()}/api/pass-batch`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          project_id:     projectId,
-          page_id:        pageId,
-          eval_page_num:  pageNum,
-          text_items:     textItems,
-          page_width_pts:  W,
-          page_height_pts: H,
-          demarc_pins:    demarcPins
-        })
+        body: JSON.stringify(batchBody)
       });
       const j = await r.json();
 
       batchResults[pageNum] = {
         ...j,
-        devices: deduplicateInstances(j.devices ?? []),
-        device_count: deduplicateInstances(j.devices ?? []).length
+        // v2: detector emits one instance per anchor; reconcile owns the merge (Step 5)
+        devices: j.devices ?? [],
+        device_count: (j.devices ?? []).length
       };
       const msg = r.ok
         ? `pg${pageNum}: ${j.device_count} devices${j.tia_violations ? ' ⚠'+j.tia_violations+' TIA' : ''}`
@@ -1623,82 +1686,6 @@ async function runBatch() {
       log.innerHTML += `<div style="color:${r.ok ? '#7af07a' : '#f07a7a'}">${msg}</div>`;
       log.scrollTop = log.scrollHeight;
 
-      // ── Visual augment — catches leader-line group symbols ────────
-      // Runs after text-layer; finds devices text-layer missed
-      if (r.ok && augmentTypes.length) {
-        try {
-          // Snapshot text-layer bounds BEFORE the loop — used to filter
-          // visual detections to the building footprint only.
-          // Use OUTLET devices only — camera "180" and WAP anchors can match
-          // text in the notes/specs area, skewing bounds to include the title block.
-          const tlDevices = batchResults[pageNum].devices ?? [];
-          const outletIds = new Set(augmentTypes
-            .filter(dt => /DV|DD|N\d/.test(JSON.stringify(dt.text_anchors)))
-            .map(dt => dt.id));
-          const tlOutlets = tlDevices.filter(d =>
-            outletIds.has(d.device_type_id) || outletIds.has(d.legend_id)
-          );
-          // Fall back to all devices if no outlets found
-          const tlBase = tlOutlets.length ? tlOutlets : tlDevices;
-          const tlX = tlBase.map(d => d.x_norm).filter(v => v != null);
-          const tlY = tlBase.map(d => d.y_norm).filter(v => v != null);
-          const boundsXMin = tlX.length ? Math.min(...tlX) - 0.06 : 0;
-          const boundsXMax = tlX.length ? Math.max(...tlX) + 0.06 : 1;
-          const boundsYMin = tlY.length ? Math.min(...tlY) - 0.06 : 0;
-          const boundsYMax = tlY.length ? Math.max(...tlY) + 0.06 : 1;
-
-          // Render page image for visual scan
-          const augVP  = pdfPage.getViewport({ scale: 1.8 });
-          const augCV  = document.createElement('canvas');
-          augCV.width  = augVP.width;
-          augCV.height = augVP.height;
-          await pdfPage.render({ canvasContext: augCV.getContext('2d'), viewport: augVP }).promise;
-          const pageImgB64 = augCV.toDataURL('image/jpeg', 0.85).split(',')[1];
-
-          // Existing text-layer positions for this page
-          const existingPos = (j.devices ?? []).map(d => ({
-            x_norm: d.x_norm, y_norm: d.y_norm
-          }));
-
-          let totalNew = 0;
-          for (const dt of augmentTypes) {
-            try {
-              const augResp = await fetch(`${base()}/api/pass-visual-augment`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  project_id:        projectId,
-                  page_id:           pageId,
-                  device_type_id:    dt.id,
-                  page_image_base64: pageImgB64,
-                  existing_positions: existingPos,
-                  demarc_pins:       demarcPins,
-                  page_width_pts:    W,
-                  page_height_pts:   H
-                })
-              });
-              const augData = await augResp.json();
-              if (augResp.ok && augData.new_instances > 0) {
-                // Filter to building footprint using text-layer bounds snapshot
-                const filtered = (augData.instances ?? []).filter(d =>
-                  d.x_norm >= boundsXMin && d.x_norm <= boundsXMax &&
-                  d.y_norm >= boundsYMin && d.y_norm <= boundsYMax
-                );
-                if (!filtered.length) continue;
-                totalNew += filtered.length;
-                const existing = batchResults[pageNum].devices ?? [];
-                const merged   = deduplicateInstances([...existing, ...filtered]);
-                batchResults[pageNum].devices      = merged;
-                batchResults[pageNum].device_count = merged.length;
-              }
-            } catch { /* soft fail per device type */ }
-          }
-
-          if (totalNew > 0) {
-            log.innerHTML += `<div style="color:#7ac0f0">pg${pageNum}: +${totalNew} visual (leader lines)</div>`;
-            log.scrollTop = log.scrollHeight;
-          }
-        } catch { /* visual augment is non-blocking */ }
-      }
 
     } catch(e) {
       log.innerHTML += `<div style="color:#f07a7a;">pg${pageNum}: ${e.message}</div>`;
@@ -1815,6 +1802,7 @@ function renderByPage() {
       <span style="color:#888;">${res.device_count} devices</span>
       ${res.tia_violations ? `<span style="color:#f07a7a;">⚠ ${res.tia_violations} TIA</span>` : ''}
       ${demarcInfo}
+      <button onclick="openLeaderModal(${pageNum})" class="info" style="padding:2px 9px; font-size:10px;">⤳ mark leaders</button>
     </div>`;
 
     // By-type summary
@@ -1847,6 +1835,149 @@ function renderByPage() {
   }
 
   el.innerHTML = html || '<div style="color:#555;">No results yet</div>';
+}
+
+// ── 1:N leader-cluster marking (multi-page, per page) ────────────────
+// Per page: click a detected cluster, enter how many outlets its leader feeds.
+// Re-runs that page's pass-batch with leader_overrides (server persists + replaces),
+// refreshes the page card. Marks pre-fill from the server-echoed leader_overrides.
+let lcPageNum = null, lcOverrides = [];
+let lcZoom = 1, lcPanX = 0, lcPanY = 0, lcDrag = null, lcCW = 0, lcCH = 0;
+let lcDevices = [], lcSel = null;
+
+function lcApplyTransform() {
+  const cv = document.getElementById('lc-canvas');
+  cv.style.transform = `translate(${lcPanX}px,${lcPanY}px) scale(${lcZoom})`;
+  document.getElementById('lc-zoom').textContent = Math.round(lcZoom*100) + '%';
+  lcRedraw();
+}
+function lcZoomBtn(f) {
+  const wrap = document.getElementById('lc-wrap');
+  const w = wrap.offsetWidth/2, h = wrap.offsetHeight/2;
+  lcPanX = w - (w - lcPanX)*f; lcPanY = h - (h - lcPanY)*f;
+  lcZoom = Math.min(10, Math.max(0.3, lcZoom*f));
+  lcApplyTransform();
+}
+function lcReset() { lcZoom = 1; lcPanX = 0; lcPanY = 0; lcApplyTransform(); }
+
+function lcOverrideFor(d) {
+  return lcOverrides.find(o => o.type === d.type &&
+    Math.abs(o.at[0]-d.x_norm) < 1e-6 && Math.abs(o.at[1]-d.y_norm) < 1e-6);
+}
+function lcRedraw() {
+  const wrap = document.getElementById('lc-wrap');
+  wrap.querySelectorAll('.lc-dot').forEach(e => e.remove());
+  const seen = new Set();
+  for (const d of lcDevices) {
+    if (d.x_norm == null || d.y_norm == null) continue;
+    const key = `${d.type}|${d.x_norm.toFixed(4)}|${d.y_norm.toFixed(4)}`;
+    if (seen.has(key)) continue;   // expanded leader siblings sit on the anchor — one dot
+    seen.add(key);
+    const ov = lcOverrideFor(d), sel = (d === lcSel);
+    const color = ov ? '#40f0a0' : (sel ? '#f0c040' : '#f07a7a');
+    const dot = document.createElement('div');
+    dot.className = 'lc-dot';
+    dot.style.cssText = `position:absolute; width:14px; height:14px; border-radius:50%;
+      border:2px solid ${color}; background:${ov?'rgba(64,240,160,.3)':'rgba(240,122,122,.18)'};
+      transform:translate(-50%,-50%); pointer-events:none; z-index:10;
+      ${sel?'box-shadow:0 0 0 3px rgba(240,192,64,.5);':''}`;
+    dot.style.left = (d.x_norm*lcCW*lcZoom + lcPanX) + 'px';
+    dot.style.top  = (d.y_norm*lcCH*lcZoom + lcPanY) + 'px';
+    if (ov) {
+      const badge = document.createElement('div');
+      badge.textContent = '×' + ov.quantity;
+      badge.style.cssText = 'position:absolute;left:11px;top:-11px;color:#40f0a0;font-size:11px;font-weight:bold;white-space:nowrap;';
+      dot.appendChild(badge);
+    }
+    wrap.appendChild(dot);
+  }
+}
+
+async function openLeaderModal(pageNum) {
+  const res = batchResults[pageNum];
+  if (!res || !pdfDoc) { alert('Run the batch for this page first'); return; }
+  lcPageNum = pageNum;
+  lcDevices = (res.devices || []).filter(d => d.x_norm != null && d.y_norm != null);
+  lcOverrides = (res.leader_overrides || []).map(o => ({ ...o }));   // pre-fill saved marks
+  lcSel = null; lcZoom = 1; lcPanX = 0; lcPanY = 0;
+
+  const cv = document.getElementById('lc-canvas');
+  const wrap = document.getElementById('lc-wrap');
+  document.getElementById('lc-title').textContent = `Mark 1:N Leader Clusters — pg${pageNum}`;
+  const pdfPage = await pdfDoc.getPage(pageNum);
+  const vp = pdfPage.getViewport({ scale: 2.5 });
+  cv.width = vp.width; cv.height = vp.height; lcCW = vp.width; lcCH = vp.height;
+  await pdfPage.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+  lcZoom = Math.min((wrap.offsetWidth || window.innerWidth*0.88) / vp.width, 1.0);
+  lcApplyTransform();
+
+  cv.onclick = (e) => {
+    const r = cv.getBoundingClientRect();
+    const xn = (e.clientX - r.left)/lcZoom/lcCW, yn = (e.clientY - r.top)/lcZoom/lcCH;
+    let best = null, bd = Infinity;
+    for (const d of lcDevices) { const dd = (d.x_norm-xn)**2 + (d.y_norm-yn)**2; if (dd<bd){bd=dd;best=d;} }
+    if (!best || bd > 0.03*0.03) { setStatus('lc-status','No cluster near that click','err'); return; }
+    lcSel = best;
+    const ov = lcOverrideFor(best);
+    document.getElementById('lc-qty').value = ov ? ov.quantity : '';
+    document.getElementById('lc-sel-info').textContent =
+      `${best.name || best.type} @ (${best.x_norm.toFixed(3)}, ${best.y_norm.toFixed(3)})`;
+    document.getElementById('lc-qty-row').style.display = 'flex';
+    document.getElementById('lc-qty').focus();
+    setStatus('lc-status','', '');
+    lcRedraw();
+  };
+  wrap.onwheel = (e) => { e.preventDefault();
+    const f = e.deltaY<0?1.15:1/1.15, wr = wrap.getBoundingClientRect();
+    lcPanX = (e.clientX-wr.left)-((e.clientX-wr.left)-lcPanX)*f;
+    lcPanY = (e.clientY-wr.top)-((e.clientY-wr.top)-lcPanY)*f;
+    lcZoom = Math.min(10, Math.max(0.3, lcZoom*f)); lcApplyTransform(); };
+  wrap.onmousedown = (e) => { lcDrag = {x:e.clientX,y:e.clientY,px:lcPanX,py:lcPanY,moved:false}; wrap.style.cursor='grabbing'; };
+  wrap.onmousemove = (e) => { if(!lcDrag||e.buttons!==1) return;
+    const dx=e.clientX-lcDrag.x, dy=e.clientY-lcDrag.y;
+    if (Math.abs(dx)+Math.abs(dy)>5) lcDrag.moved=true;
+    if (lcDrag.moved){ lcPanX=lcDrag.px+dx; lcPanY=lcDrag.py+dy; lcApplyTransform(); } };
+  wrap.onmouseup = () => { lcDrag=null; wrap.style.cursor='crosshair'; };
+
+  document.getElementById('lc-qty-row').style.display = 'none';
+  document.getElementById('lc-count').textContent = lcOverrides.length;
+  document.getElementById('lc-modal').style.display = 'flex';
+  lcRedraw();
+}
+
+function lcSetQty() {
+  if (!lcSel) return;
+  const n = parseInt(document.getElementById('lc-qty').value, 10);
+  const existing = lcOverrideFor(lcSel);
+  if (existing) lcOverrides = lcOverrides.filter(o => o !== existing);   // N<=1 clears it
+  if (Number.isFinite(n) && n > 1) lcOverrides.push({ type: lcSel.type, at: [lcSel.x_norm, lcSel.y_norm], quantity: n });
+  document.getElementById('lc-count').textContent = lcOverrides.length;
+  document.getElementById('lc-qty-row').style.display = 'none';
+  lcSel = null; lcRedraw();
+  setStatus('lc-status', `${lcOverrides.length} cluster(s) marked — Apply & re-run when the page is done`, '');
+}
+
+function closeLeaderModal() { document.getElementById('lc-modal').style.display = 'none'; }
+
+async function lcRerun() {
+  if (lcPageNum == null) return;
+  const stashed = batchPayloads[lcPageNum];
+  if (!stashed) { setStatus('lc-status','Re-run the batch for this page first','err'); return; }
+  setStatus('lc-status','Applying leaders…','running');
+  try {
+    const body = { ...stashed, leader_overrides: lcOverrides };
+    const r = await fetch(`${base()}/api/pass-batch`, {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)
+    });
+    const j = await r.json();
+    if (!r.ok) { setStatus('lc-status','Error: '+(j.error??r.status),'err'); return; }
+    batchResults[lcPageNum] = { ...j, devices: j.devices ?? [], device_count: (j.devices ?? []).length };
+    renderByPage();
+    lcDevices = (j.devices||[]).filter(d => d.x_norm!=null && d.y_norm!=null);
+    lcOverrides = (j.leader_overrides || lcOverrides).map(o => ({ ...o }));
+    setStatus('lc-status', `✓ Applied — pg${lcPageNum} now ${batchResults[lcPageNum].device_count} devices`, 'ok');
+    lcRedraw();
+  } catch(e) { setStatus('lc-status','Error: '+e.message,'err'); }
 }
 
 function renderByTR() {
@@ -1971,117 +2102,12 @@ async function loadProjectCard(pid) {
 }
 
 
-// ── Proximity deduplication ───────────────────────────────────────
-// Collapses device_instances that are within DEDUP_THRESH normalized
-// units of each other on the same page into one entry.
-// Handles DV#+DD#+N# stacked labels at the same outlet location.
-// Post-merge: splits entries with multiple DD# or DV# values (over-merges).
-const DEDUP_THRESH = 0.022; // max spread of stacked DV/DD/N labels
+// ── Merge layer ───────────────────────────────────────────────────
+// The bespoke outlet chain (parseLabelFamilies / splitOverMerge /
+// deduplicateInstances) was removed in the v2 refit. Detection now emits one
+// instance per anchor; reconcile() (public/lib/reconcile.js) owns the merge and
+// gets wired in at the call sites above in Step 5.
 
-// Extract label families from a raw_labels array
-function parseLabelFamilies(labels) {
-  const dvs = labels.filter(l => /^DV\d+$/.test(l));
-  const dds = labels.filter(l => /^DD\d+$/.test(l));
-  const ns  = labels.filter(l => /^N\d+$/.test(l));
-  return { dvs, dds, ns };
-}
-
-// Split an over-merged outlet entry into individual outlet entries.
-// Rule: each outlet has exactly one DV# (optional), one DD# (optional),
-// one N# — but always at least 2 components. Multiple DD# or DV# values
-// means multiple outlets were merged together.
-function splitOverMerge(entry) {
-  const labels = entry.raw_labels ?? [];
-  const { dvs, dds, ns } = parseLabelFamilies(labels);
-
-  // No over-merge if at most one of each family
-  if (dvs.length <= 1 && dds.length <= 1) return [entry];
-
-  // Determine how many outlets are hidden here
-  const count = Math.max(dvs.length, dds.length);
-  const outlets = [];
-
-  for (let i = 0; i < count; i++) {
-    const outletLabels = [];
-    // Assign one DV per outlet if available
-    if (dvs[i]) outletLabels.push(dvs[i]);
-    // Assign one DD per outlet if available
-    if (dds[i]) outletLabels.push(dds[i]);
-    // All outlets at this location share the same N# (nurse call)
-    if (ns[0]) outletLabels.push(ns[0]);
-
-    outlets.push({ ...entry, raw_labels: outletLabels });
-  }
-
-  return outlets;
-}
-
-function deduplicateInstances(instances) {
-  if (!instances?.length) return [];
-
-  // Group by page
-  const byPage = {};
-  instances.forEach(inst => {
-    const k = inst.page_id ?? 'unknown';
-    if (!byPage[k]) byPage[k] = [];
-    byPage[k].push(inst);
-  });
-
-  const result = [];
-
-  for (const pageInsts of Object.values(byPage)) {
-    const used = new Set();
-
-    for (let i = 0; i < pageInsts.length; i++) {
-      if (used.has(i)) continue;
-      const a = pageInsts[i];
-      const group = [a];
-      used.add(i);
-
-      for (let j = i + 1; j < pageInsts.length; j++) {
-        if (used.has(j)) continue;
-        const b = pageInsts[j];
-
-        // Only cluster instances of the same device type
-        // Prevents WAPs from absorbing nearby outlet labels
-        // Falls back to legend_id for live batch path (device_type_id not always present)
-        const aType = a.device_type_id ?? a.legend_id;
-        const bType = b.device_type_id ?? b.legend_id;
-        if (aType == null || aType !== bType) continue;
-
-        const dx = Math.abs((a.x_norm ?? 0) - (b.x_norm ?? 0));
-        const dy = Math.abs((a.y_norm ?? 0) - (b.y_norm ?? 0));
-        if (dx <= DEDUP_THRESH && dy <= DEDUP_THRESH) {
-          group.push(b);
-          used.add(j);
-        }
-      }
-
-      // Pick representative: prefer instance with most labels
-      const primary = group.reduce((best, inst) => {
-        const bestN = (best.data_ports?.length  ?? 0)
-                    + (best.voice_ports?.length ?? 0)
-                    + (best.node_labels?.length ?? 0);
-        const thisN = (inst.data_ports?.length  ?? 0)
-                    + (inst.voice_ports?.length ?? 0)
-                    + (inst.node_labels?.length ?? 0);
-        return thisN > bestN ? inst : best;
-      }, group[0]);
-
-      // Merge all raw_labels from the group
-      const allLabels = [...new Set(group.flatMap(g => g.raw_labels ?? []))];
-      const merged    = { ...primary, raw_labels: allLabels };
-
-      // Post-merge: split if multiple DD# or DV# values detected
-      // Each unique DD# or DV# represents a separate physical outlet
-      for (const outlet of splitOverMerge(merged)) {
-        result.push(outlet);
-      }
-    }
-  }
-
-  return result;
-}
 
 // ── Full state restore from Supabase ─────────────────────────────
 async function restoreFromSupabase(pid) {
@@ -2093,7 +2119,7 @@ async function restoreFromSupabase(pid) {
 
     const projPages = j.project_pages ?? [];
     const demarcs   = j.demarcs      ?? [];
-    const instances = deduplicateInstances(j.device_instances ?? []);
+    const instances = j.device_instances ?? []; // reconcile merges in Step 5
 
     // ── Restore selected pages ────────────────────────────────────
     if (projPages.length) {
@@ -2169,7 +2195,7 @@ async function restoreFromSupabase(pid) {
     // ── Restore batch results ─────────────────────────────────────
     if (instances.length) {
       const byPage = {};
-      for (const inst of deduplicateInstances(instances)) {
+      for (const inst of instances) {
         const pg = projPages.find(p => p.page_id === inst.page_id);
         const pgNum = pg?.eval_page_num;
         if (!pgNum) continue;

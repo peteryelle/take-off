@@ -1,3 +1,14 @@
 [build]
   functions = "netlify/functions"
   publish   = "public"
+
+# Symbol detection fans 8 strips out in parallel (one Anthropic vision call each),
+# so wall-clock ~= the slowest strip. The default 30s is usually enough; this raises
+# headroom toward Netlify's synchronous ceiling for slow/dense sheets. If a real
+# sheet still pushes past this, the right move is the background-function batch
+# driver (15-min async, polls Supabase), not a higher sync cap.
+[functions."pass-symbol"]
+  timeout = 60
+
+[functions."pass-visual-augment"]
+  timeout = 60
