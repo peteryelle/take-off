@@ -13,15 +13,14 @@
   const ITEMS = [
     { file: 'projects.html',     label: '⚡ Projects' },
     { file: 'discover.html',     label: '🔍 Discover' },
-    { file: 'index.html',        label: 'Single Page' },
     { file: 'multi-page.html',   label: 'Multi-Page' },
     { file: 'device-types.html', label: '⚙ Device Types' },
   ];
 
-  // Current page = last path segment, defaulting to index.html for "/" root.
+  // Current page = last path segment; site root resolves to the Projects page.
   function currentFile() {
     const seg = (location.pathname.split('/').pop() || '').toLowerCase();
-    return seg === '' ? 'index.html' : seg;
+    return seg === '' ? 'projects.html' : seg;
   }
 
   // project_id: URL param wins, else sessionStorage (the convention used app-wide).

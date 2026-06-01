@@ -3,7 +3,15 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Take-off — Single Page</title>
+<title>Take-off</title>
+<script>
+  // Single-page has been retired — the take-off is now multi-page only.
+  // Redirect any direct hit (old bookmark) to multi-page, preserving project_id.
+  (function () {
+    var pid = new URLSearchParams(location.search).get('project_id');
+    location.replace('multi-page.html' + (pid ? '?project_id=' + encodeURIComponent(pid) : ''));
+  })();
+</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }

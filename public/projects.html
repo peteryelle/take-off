@@ -276,13 +276,9 @@ function renderList(projects) {
                 style="padding:4px 12px; font-size:12px; margin-top:4px; color:#c79af0; border-color:#6a4a8a;">
           🔍 Discover →
         </button>
-        <button class="info" onclick="openSinglePage(${p.id}); event.stopPropagation();"
-                style="padding:4px 12px; font-size:12px; margin-top:4px;">
-          Single Page →
-        </button>
         <button class="info" onclick="openMultiPage(${p.id}); event.stopPropagation();"
-                style="padding:4px 12px; font-size:12px;">
-          Multi-Page →
+                style="padding:4px 12px; font-size:12px; margin-top:4px;">
+          Take-off →
         </button>
         <button class="info" onclick="toggleLibrary(${p.id}, ${p.is_library ? 'true' : 'false'}); event.stopPropagation();"
                 style="padding:4px 12px; font-size:11px; margin-top:4px; ${p.is_library ? 'color:#c79af0; border-color:#6a4a8a;' : 'color:#888;'}">
@@ -381,14 +377,7 @@ async function saveProjectEdits() {
   } catch(e) { setStatus('edit-status', 'Error: ' + e.message, 'err'); }
 }
 
-// ── Open in pipeline ──────────────────────────────────────────────
-function openSinglePage(id) {
-  localStorage.setItem('mp_project_id',  id);
-  localStorage.setItem('mp_netlify_url', base());
-  localStorage.setItem('mp_origin', 'index.html');
-  window.location.href = `index.html?project_id=${id}`;
-}
-
+// ── Open project in take-off (multi-page) ──────────────────────────
 function openMultiPage(id) {
   localStorage.setItem('mp_project_id',  id);
   localStorage.setItem('mp_netlify_url', base());
