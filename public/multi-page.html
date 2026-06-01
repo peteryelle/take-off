@@ -6,9 +6,15 @@
 <title>Multi-Page Takeoff</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: monospace; background: #0d0d0d; color: #e8e8e8; padding: 20px; font-size: 15px; }
-h1 { color: #f0c040; font-size: 16px; margin-bottom: 4px; letter-spacing: 2px; text-transform: uppercase; }
-.subtitle { color: #666; font-size: 11px; margin-bottom: 20px; }
+body { font-family: monospace; background: #0d0d0d; color: #e8e8e8; padding: 20px; font-size: 16px; }
+h1 { color: #f0c040; font-size: 18px; margin-bottom: 4px; letter-spacing: 2px; text-transform: uppercase; }
+.subtitle { color: #999; font-size: 13px; margin-bottom: 20px; }
+/* Readability floor: nothing smaller than 13px or dimmer than #aaa for body text.
+   The "1 pages scanned…" status line (#e8e8e8 / 15px) is the reference minimum. */
+.pa-role-host, .pa-role-served, .pa-role-offsheet, .pa-role-split { font-size:13px !important; }
+.pa-role-served { color:#cfcfcf !important; }
+.pa-tr-select { font-size:14px !important; color:#eee !important; }
+.pin-auto-tag, .pin-needs-tag { font-size:13px !important; }
 a { color: #7ac0f0; text-decoration: none; }
 
 /* ── Sections ── */
@@ -207,7 +213,7 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
 <!-- ── STEP 3: DEMARC SCAN ───────────────────────────────────────── -->
 <div class="section">
   <div class="section-title">3 · Demarc Scan</div>
-  <div style="font-size:11px; color:#666; margin-bottom:8px;">
+  <div style="font-size:13px; color:#aaa; margin-bottom:8px;">
     Runs Pass B on all selected pages to extract TR room references and build the demarc map.
   </div>
   <button onclick="runDemarcScan()">▶ Scan Selected Pages</button>
@@ -226,15 +232,15 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
     <!-- Page → TR Assignment Table -->
     <div id="pa-table-wrap" style="display:none; margin-bottom:16px;">
       <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
-        <div style="font-size:12px; color:#888; text-transform:uppercase; letter-spacing:1px;">
-          Page → TR Assignment <span style="color:#555; text-transform:none; letter-spacing:0;">— review and correct before confirming</span>
+        <div style="font-size:14px; color:#cfcfcf; text-transform:uppercase; letter-spacing:1px;">
+          Page → TR Assignment <span style="color:#aaa; text-transform:none; letter-spacing:0;">— review and correct before confirming</span>
         </div>
         <button class="info" onclick="collapseAssignmentTable()" id="pa-collapse-btn"
           style="font-size:11px; padding:3px 10px;">▲ Hide</button>
       </div>
-      <table style="width:100%; border-collapse:collapse; font-size:12px; font-family:monospace;">
+      <table style="width:100%; border-collapse:collapse; font-size:14px; font-family:monospace;">
         <thead>
-          <tr style="border-bottom:1px solid #2a2a2a; color:#666; text-align:left;">
+          <tr style="border-bottom:1px solid #2a2a2a; color:#aaa; text-align:left;">
             <th style="padding:6px 10px; width:52px;">PDF pg</th>
             <th style="padding:6px 10px;">Drawing</th>
             <th style="padding:6px 10px; width:200px;">Scale</th>
@@ -1492,14 +1498,16 @@ async function openPinModal(trName, targetPageNum) {
     : (trMap[trName]?.stub_ft ?? 0);
   document.getElementById('pin-jumper-ft').value = existingJumper;
 
-  // ── Click to place pin ──
-  cv.onclick = (e) => {
-    const cvRect = cv.getBoundingClientRect();
-    // Account for zoom+pan transform: canvas element is transformed
+  // ── Click to place pin ── (bound to the layer so it fires anywhere on the
+  // drawing; the dot is pointer-events:none so it never swallows the click)
+  const layer = document.getElementById('pin-layer');
+  layer.onclick = (e) => {
+    if (pinDragStart?.moved) return;            // a drag, not a click
+    const cvRect = cv.getBoundingClientRect();  // post-transform screen rect of the canvas
     const xInCanvas = (e.clientX - cvRect.left) / pinZoomLevel;
     const yInCanvas = (e.clientY - cvRect.top)  / pinZoomLevel;
-    pinTarget.xNorm = xInCanvas / pinCanvasNativeW;
-    pinTarget.yNorm = yInCanvas / pinCanvasNativeH;
+    pinTarget.xNorm = Math.min(1, Math.max(0, xInCanvas / pinCanvasNativeW));
+    pinTarget.yNorm = Math.min(1, Math.max(0, yInCanvas / pinCanvasNativeH));
     document.getElementById('pin-coords').textContent =
       `Pin at (${pinTarget.xNorm.toFixed(3)}, ${pinTarget.yNorm.toFixed(3)})`;
     setStatus('pin-status', '✓ Pin placed — adjust zoom to confirm position', 'ok');
@@ -1521,7 +1529,7 @@ async function openPinModal(trName, targetPageNum) {
 
   // ── Drag to pan ──
   wrap.onmousedown = (e) => {
-    if (e.target === cv) {
+    if (e.target === cv || e.target === layer) {
       pinIsDragging = false;  // will become drag if mouse moves
       pinDragStart  = { x: e.clientX, y: e.clientY, panX: pinPanX, panY: pinPanY, moved: false };
       wrap.style.cursor = 'grabbing';
