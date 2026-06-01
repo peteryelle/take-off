@@ -226,10 +226,9 @@ button.amber:hover { background: #332800; }
 <body>
 
 <h1>⚡ Device Types</h1>
-<p class="subtitle">
-  <a id="back-link" href="index.html">← Back to Pipeline</a>
-  &nbsp;·&nbsp; Manage device symbols per project
-</p>
+<nav id="to-nav"></nav>
+<script src="nav.js"></script>
+<p class="subtitle">Manage device symbols per project</p>
 
 <!-- ── Config bar ── -->
 <div class="config-bar">
@@ -727,12 +726,7 @@ async function copyFromProject() {
 })();
 
 function updateBackLink(pid) {
-  const link = document.getElementById('back-link');
-  if (!link) return;
-  // Return to whichever page the user came from
-  const origin = sessionStorage.getItem('to_origin_page') ?? 'index.html';
-  link.href  = `${origin}?project_id=${pid}`;
-  link.textContent = origin.includes('multi') ? '← Back to Multi-Page' : '← Back to Pipeline';
+  // Superseded by the shared top nav (nav.js); kept as a no-op for any legacy callers.
 }
 </script>
 </body>
