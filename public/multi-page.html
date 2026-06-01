@@ -94,7 +94,7 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
 .pin-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 100; flex-direction: column; align-items: center; justify-content: center; }
 .pin-modal.open { display: flex; }
 .pin-canvas-wrap { position: relative; border: 1px solid #333; cursor: crosshair; }
-.pin-canvas-wrap canvas { display: block; max-width: 90vw; max-height: 70vh; }
+.pin-canvas-wrap canvas { display: block; }
 .placed-pin { position: absolute; width: 14px; height: 14px; border-radius: 50%; border: 2px solid #f0c040; background: rgba(240,192,64,0.4); transform: translate(-50%, -50%); pointer-events: none; }
 .placed-pin::after { content: ''; position: absolute; top: 50%; left: 50%; width: 4px; height: 4px; background: #f0c040; border-radius: 50%; transform: translate(-50%,-50%); }
 .pin-controls { margin-top: 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
@@ -1511,16 +1511,24 @@ async function openPinModal(trName, targetPageNum) {
   // receives the click; the layer is 0×0 so it can't be the hit target. The dot
   // is pointer-events:none so it never swallows the click.)
   const layer = document.getElementById('pin-layer');
+  // Track the press position locally so the click decision never depends on a
+  // possibly-stale shared drag flag (that stale flag was suppressing clicks and
+  // leaving the pre-loaded corner value to be saved).
+  let pressX = null, pressY = null;
+  cv.addEventListener('mousedown', (e) => { pressX = e.clientX; pressY = e.clientY; });
+
   cv.onclick = (e) => {
-    if (pinDragStart?.moved) return;            // a drag, not a click
-    const cvRect = cv.getBoundingClientRect();  // post-transform screen rect of the canvas
-    const xInCanvas = (e.clientX - cvRect.left) / pinZoomLevel;
-    const yInCanvas = (e.clientY - cvRect.top)  / pinZoomLevel;
-    pinTarget.xNorm = Math.min(1, Math.max(0, xInCanvas / pinCanvasNativeW));
-    pinTarget.yNorm = Math.min(1, Math.max(0, yInCanvas / pinCanvasNativeH));
+    // If the pointer moved more than a few px since press, it was a drag — ignore.
+    if (pressX != null && (Math.abs(e.clientX - pressX) + Math.abs(e.clientY - pressY)) > 5) return;
+    const cvRect = cv.getBoundingClientRect();  // on-screen box; already includes zoom+pan+CSS
+    // Normalize against the rect's OWN dimensions — this encodes every transform and any
+    // CSS layout scaling, so we don't multiply by zoom×native (which mismatched the real
+    // rendered size and collapsed every click toward the corner).
+    pinTarget.xNorm = Math.min(1, Math.max(0, (e.clientX - cvRect.left) / cvRect.width));
+    pinTarget.yNorm = Math.min(1, Math.max(0, (e.clientY - cvRect.top)  / cvRect.height));
     document.getElementById('pin-coords').textContent =
       `Pin at (${pinTarget.xNorm.toFixed(3)}, ${pinTarget.yNorm.toFixed(3)})`;
-    setStatus('pin-status', '✓ Pin placed — adjust zoom to confirm position', 'ok');
+    setStatus('pin-status', '✓ Pin placed — Confirm Pin to save', 'ok');
     redrawPinDot();
   };
 
