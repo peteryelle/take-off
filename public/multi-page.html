@@ -1473,15 +1473,22 @@ async function openPinModal(trName, targetPageNum) {
   pinCanvasNativeH = vp.height;
   await pdfPage.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
 
-  // Fit the drawing to the wrap, top-left origin with pan 0 — mirrors the leader
-  // modal exactly (whose click math is identical and proven). A centering pan here
-  // desynced getBoundingClientRect from the click formula and mapped every click to
-  // the corner, so we keep pan at 0 and let the user pan/zoom from there.
+  // A fit-to-width zoom on a 7000px+ sheet is a ~0.2x thumbnail — too small to click
+  // to the foot, which made every click land near the corner. Open at a usable zoom
+  // and center the view on the existing pin (or page center) so the user starts where
+  // they need to be and scrolls/pans to fine-tune.
   const wrapW = wrap.offsetWidth  || window.innerWidth  * 0.88;
-  const initScale = Math.min(wrapW / vp.width, 1.0);
-  pinZoomLevel = initScale;
-  pinPanX = 0;
-  pinPanY = 0;
+  const wrapH = wrap.offsetHeight || window.innerHeight * 0.62;
+  const fitScale = Math.min(wrapW / vp.width, wrapH / vp.height);
+  // Start at 3x the fit (readable), capped so we don't overshoot.
+  pinZoomLevel = Math.min(Math.max(fitScale * 3, 0.4), 2.0);
+
+  // Center on the existing pin if there is one, else the page center.
+  const ex = (isExtraPin ? trMap[trName]?.extra_pins?.[pageNum] : trMap[trName]);
+  const focusX = (ex?.pin_x ?? ex?.x_norm ?? 0.5);
+  const focusY = (ex?.pin_y ?? ex?.y_norm ?? 0.5);
+  pinPanX = wrapW / 2 - focusX * vp.width  * pinZoomLevel;
+  pinPanY = wrapH / 2 - focusY * vp.height * pinZoomLevel;
   applyPinTransform();
 
   // Set up existing pin if any
