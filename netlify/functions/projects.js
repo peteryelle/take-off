@@ -146,6 +146,58 @@ export default async function handler(req) {
       return ok({ copied: inserted.length, device_types: inserted });
     }
 
+    // ── Action: delete a project and ALL its data (cascade) ─────
+    if (action === "delete_project") {
+      const { id, project_id } = body;
+      const pid = id ?? project_id;
+      if (!pid) return err("id required");
+
+      // Page ids for this project — needed for page-scoped child tables.
+      const { data: pageRows, error: pgErr } = await supabase
+        .from("pages").select("id").eq("project_id", pid);
+      if (pgErr) return err(pgErr.message, 500);
+      const pageIds = (pageRows ?? []).map((r) => r.id);
+
+      // Assembly ids — needed to clear assembly_parts before templates.
+      const { data: asmRows } = await supabase
+        .from("assembly_templates").select("id").eq("project_id", pid);
+      const asmIds = (asmRows ?? []).map((r) => r.id);
+
+      // Delete children first, deepest dependency to shallowest. Each guarded.
+      const steps = [];
+      if (pageIds.length) {
+        steps.push(supabase.from("device_instances").delete().in("page_id", pageIds));
+        steps.push(supabase.from("detections").delete().in("page_id", pageIds));
+        steps.push(supabase.from("detection_runs").delete().in("page_id", pageIds));
+      }
+      if (asmIds.length) {
+        steps.push(supabase.from("assembly_parts").delete().in("assembly_id", asmIds));
+      }
+      // project-scoped children
+      steps.push(supabase.from("bom_items").delete().eq("project_id", pid));
+      steps.push(supabase.from("demarcs").delete().eq("project_id", pid));
+      steps.push(supabase.from("discovery_results").delete().eq("project_id", pid));
+      steps.push(supabase.from("discovery_clusters").delete().eq("project_id", pid));
+      steps.push(supabase.from("discovery_sessions").delete().eq("project_id", pid));
+      steps.push(supabase.from("assembly_templates").delete().eq("project_id", pid));
+      steps.push(supabase.from("batch_runs").delete().eq("project_id", pid));
+      steps.push(supabase.from("project_pages").delete().eq("project_id", pid));
+      steps.push(supabase.from("device_types").delete().eq("project_id", pid));
+      steps.push(supabase.from("pages").delete().eq("project_id", pid));
+
+      // Run cascades in order; abort on first real error.
+      for (const step of steps) {
+        const { error } = await step;
+        if (error) return err(`cascade delete failed: ${error.message}`, 500);
+      }
+
+      // Finally the project row itself.
+      const { error: projErr } = await supabase.from("projects").delete().eq("id", pid);
+      if (projErr) return err(projErr.message, 500);
+
+      return ok({ deleted: true, id: pid, pages_removed: pageIds.length });
+    }
+
     // ── Action: update an existing project (e.g. mark as library) ──
     if (action === "update_project") {
       const { project_id, is_library, library_name, name, number, client } = body;

@@ -110,7 +110,7 @@ label { color: #888; font-size: 12px; display: block; margin-bottom: 3px; }
   padding: 24px; max-width: 360px; width: 90%;
 }
 .confirm-box h2 { color: #f0c040; font-size: 14px; margin-bottom: 10px; }
-.confirm-box p  { color: #aaa; font-size: 13px; line-height: 1.5; margin-bottom: 16px; }
+.confirm-box p  { color: #aaa; font-size: 13px; line-height: 1.5; margin-bottom: 16px; white-space: pre-line; }
 .confirm-box .btns { display: flex; gap: 8px; justify-content: flex-end; }
 </style>
 </head>
@@ -203,6 +203,8 @@ label { color: #888; font-size: 12px; display: block; margin-bottom: 3px; }
 let allProjects   = [];
 let selectedId    = null;
 let deleteTarget  = null;
+let deleteStage   = 1;
+let deleteName    = '';
 
 function base() { return document.getElementById('netlify-url').value.replace(/\/$/, ''); }
 
@@ -419,30 +421,52 @@ async function toggleLibrary(id, currentlyLibrary) {
 // ── Delete ────────────────────────────────────────────────────────
 function promptDelete(id, name) {
   deleteTarget = id;
+  deleteStage  = 1;
+  deleteName   = name;
   document.getElementById('confirm-msg').textContent =
-    `Delete "${name}" (ID: ${id})?\n\nThis permanently removes all pages, devices, demarc pins, and results. Cannot be undone.`;
+    `Delete "${name}" (ID: ${id})?\n\nThis permanently removes all pages, devices, demarc pins, discovery data, and results. Cannot be undone.`;
+  const btn = document.querySelector('#confirm-overlay .danger');
+  if (btn) btn.textContent = 'Delete';
   document.getElementById('confirm-overlay').classList.add('open');
 }
 
 function closeConfirm() {
   document.getElementById('confirm-overlay').classList.remove('open');
   deleteTarget = null;
+  deleteStage  = 1;
 }
 
 async function confirmDelete() {
   if (!deleteTarget) return;
+
+  // First click → escalate to a final "wipe everything" confirmation.
+  if (deleteStage === 1) {
+    deleteStage = 2;
+    document.getElementById('confirm-msg').textContent =
+      `⚠ FINAL CONFIRMATION\n\nThis will permanently wipe "${deleteName}" and ALL of its device types, pages, and device instances. There is no undo.\n\nClick "Wipe Everything" to proceed.`;
+    const btn = document.querySelector('#confirm-overlay .danger');
+    if (btn) btn.textContent = 'Wipe Everything';
+    return;
+  }
+
+  // Second click → actually delete.
+  const target = deleteTarget;
   closeConfirm();
   try {
     const r = await fetch(`${base()}/api/projects`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'delete_project', id: deleteTarget })
+      body: JSON.stringify({ action: 'delete_project', id: target })
     });
     if (r.ok) {
-      if (selectedId === deleteTarget) {
+      if (selectedId === target) {
         selectedId = null;
-        document.getElementById('edit-panel').style.display = 'none';
+        const ep = document.getElementById('edit-panel');
+        if (ep) ep.style.display = 'none';
       }
       await loadProjects();
+    } else {
+      const j = await r.json().catch(() => ({}));
+      alert('Delete failed: ' + (j.error || r.status));
     }
   } catch(e) { alert('Delete error: ' + e.message); }
 }
