@@ -1425,12 +1425,19 @@ function pinZoom(factor) {
   const cx = wRect.width / 2, cy = wRect.height / 2;
   pinPanX = cx - (cx - pinPanX) * factor;
   pinPanY = cy - (cy - pinPanY) * factor;
-  pinZoomLevel = Math.min(10, Math.max(0.5, pinZoomLevel * factor));
+  pinZoomLevel = Math.min(10, Math.max(0.05, pinZoomLevel * factor));
   applyPinTransform();
 }
 
 function pinResetZoom() {
-  pinZoomLevel = 1.0; pinPanX = 0; pinPanY = 0;
+  // Fit the whole drawing back into view (not zoom=1, which on a 7000px sheet only
+  // shows the corner). Always recovers a fully-visible drawing.
+  const wrap = document.getElementById('pin-canvas-wrap');
+  const cv   = document.getElementById('pin-canvas');
+  const wrapW = wrap.offsetWidth || window.innerWidth * 0.88;
+  const wrapH = wrap.offsetHeight || window.innerHeight * 0.62;
+  pinZoomLevel = (cv.width && cv.height) ? Math.min(wrapW / cv.width, wrapH / cv.height) : 1.0;
+  pinPanX = 0; pinPanY = 0;
   applyPinTransform();
 }
 
@@ -1473,22 +1480,15 @@ async function openPinModal(trName, targetPageNum) {
   pinCanvasNativeH = vp.height;
   await pdfPage.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
 
-  // A fit-to-width zoom on a 7000px+ sheet is a ~0.2x thumbnail — too small to click
-  // to the foot, which made every click land near the corner. Open at a usable zoom
-  // and center the view on the existing pin (or page center) so the user starts where
-  // they need to be and scrolls/pans to fine-tune.
+  // Open at fit-to-view so the WHOLE drawing is visible, then the user scrolls in to
+  // the room and clicks. (Centering on the existing pin at high zoom pushed the sheet
+  // off-screen when that pin was the bad corner value; fit-to-view avoids that and the
+  // click math is correct at any pan/zoom — verified via console instrumentation.)
   const wrapW = wrap.offsetWidth  || window.innerWidth  * 0.88;
   const wrapH = wrap.offsetHeight || window.innerHeight * 0.62;
-  const fitScale = Math.min(wrapW / vp.width, wrapH / vp.height);
-  // Start at 3x the fit (readable), capped so we don't overshoot.
-  pinZoomLevel = Math.min(Math.max(fitScale * 3, 0.4), 2.0);
-
-  // Center on the existing pin if there is one, else the page center.
-  const ex = (isExtraPin ? trMap[trName]?.extra_pins?.[pageNum] : trMap[trName]);
-  const focusX = (ex?.pin_x ?? ex?.x_norm ?? 0.5);
-  const focusY = (ex?.pin_y ?? ex?.y_norm ?? 0.5);
-  pinPanX = wrapW / 2 - focusX * vp.width  * pinZoomLevel;
-  pinPanY = wrapH / 2 - focusY * vp.height * pinZoomLevel;
+  pinZoomLevel = Math.min(wrapW / vp.width, wrapH / vp.height);
+  pinPanX = 0;
+  pinPanY = 0;
   applyPinTransform();
 
   // Set up existing pin if any
@@ -1533,7 +1533,7 @@ async function openPinModal(trName, targetPageNum) {
     const my = e.clientY - wRect.top;
     pinPanX = mx - (mx - pinPanX) * factor;
     pinPanY = my - (my - pinPanY) * factor;
-    pinZoomLevel = Math.min(10, Math.max(0.3, pinZoomLevel * factor));
+    pinZoomLevel = Math.min(10, Math.max(0.05, pinZoomLevel * factor));
     applyPinTransform();
   };
 
