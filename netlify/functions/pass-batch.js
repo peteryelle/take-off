@@ -34,7 +34,8 @@ export default async function handler(req) {
   try { body = await req.json(); } catch { return err("Invalid JSON"); }
 
   const { project_id, page_id, eval_page_num, text_items,
-          page_width_pts, page_height_pts, demarc_pins, symbol_instances, leader_overrides } = body;
+          page_width_pts, page_height_pts, demarc_pins, symbol_instances, leader_overrides,
+          scale_override } = body;
   if (!project_id || !page_id || !text_items?.length)
     return err("project_id, page_id and text_items required");
 
@@ -53,6 +54,19 @@ export default async function handler(req) {
     if (!page) return err("Page not found", 404);
     if (!deviceTypes?.length)
       return err("No device types with detection_config — run discovery or backfill the contract", 404);
+
+    // Scale override from the per-page editor: persist to the page row (so distances
+    // use it and it survives reload; redo replaces), then read it back for this run.
+    if (scale_override && Number.isFinite(scale_override.paper_value) && Number.isFinite(scale_override.real_value) && scale_override.real_value > 0) {
+      const ptsPer = (72 * scale_override.paper_value) / scale_override.real_value;
+      await supabase.from("pages").update({
+        scale_paper_in:   scale_override.paper_value,
+        scale_real_ft:    scale_override.real_value,
+        scale_pts_per_ft: ptsPer,
+        scale_label:      `${scale_override.paper_value}" = ${scale_override.real_value}'`
+      }).eq("id", page_id);
+      page.scale_pts_per_ft = ptsPer;   // use immediately
+    }
 
     const ptsPerFt = page.scale_pts_per_ft ?? null;
     const pins = demarc_pins ?? [];

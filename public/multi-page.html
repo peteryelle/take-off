@@ -237,6 +237,7 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
           <tr style="border-bottom:1px solid #2a2a2a; color:#666; text-align:left;">
             <th style="padding:6px 10px; width:52px;">PDF pg</th>
             <th style="padding:6px 10px;">Drawing</th>
+            <th style="padding:6px 10px; width:150px;">Scale</th>
             <th style="padding:6px 10px; width:130px;">TR Room</th>
             <th style="padding:6px 10px; width:160px;">Role</th>
           </tr>
@@ -908,6 +909,71 @@ function buildPageAssignments(trs) {
   }
 }
 
+// ── Per-page scale review + edit ──────────────────────────────────
+// Detected scale lives in pageCache[pg].passBResult.scale (set at scan, rehydrated
+// from the DB on restore). Edits are stashed here and sent to pass-batch as
+// scale_override, which persists them to the page row (authoritative for distance).
+let scaleOverrides = {};   // pageNum -> { paper_value, real_value }
+
+function effectiveScale(pgNum) {
+  if (scaleOverrides[pgNum]) return { ...scaleOverrides[pgNum], edited: true };
+  const s = pageCache[pgNum]?.passBResult?.scale?.text
+         ?? pageCache[pgNum]?.passBResult?.scale?.graphic;
+  if (s && s.paper_value != null && s.real_value != null)
+    return { paper_value: +s.paper_value, real_value: +s.real_value, edited: false };
+  return null;
+}
+
+function scaleCellHtml(pgNum) {
+  const s = effectiveScale(pgNum);
+  const label = s ? `${s.paper_value}" = ${s.real_value}'` : '⚠ none';
+  const color = !s ? '#f0a040' : (s.edited ? '#c08cff' : '#7af0a0');
+  const tag   = s && s.edited ? ' <span style="font-size:9px; color:#c08cff;">(edited)</span>' : '';
+  return `<span style="color:${color}; font-family:monospace; font-size:11px;">${label}</span>${tag}
+          <button onclick="openScaleEdit(${pgNum})" class="info" style="margin-left:6px; padding:1px 7px; font-size:10px;">edit</button>`;
+}
+
+function openScaleEdit(pgNum) {
+  const s = effectiveScale(pgNum) ?? { paper_value: 0.125, real_value: 1 };
+  const cell = document.getElementById(`pa-scale-${pgNum}`);
+  if (!cell) return;
+  cell.innerHTML = `
+    <span style="font-family:monospace; font-size:11px;">
+      <input id="sc-pv-${pgNum}" type="number" step="any" value="${s.paper_value}" style="width:58px; padding:2px;">" =
+      <input id="sc-rv-${pgNum}" type="number" step="any" value="${s.real_value}" style="width:48px; padding:2px;">'
+    </span>
+    <button onclick="applyScaleEdit(${pgNum})" style="margin-left:4px; padding:1px 7px; font-size:10px;">set</button>
+    <button onclick="cancelScaleEdit(${pgNum})" class="info" style="padding:1px 6px; font-size:10px;">×</button>
+    <button onclick="applyScaleToAll(${pgNum})" class="info" style="margin-left:4px; padding:1px 7px; font-size:10px;" title="apply this scale to every page">all pages</button>`;
+}
+
+function applyScaleEdit(pgNum) {
+  const pv = parseFloat(document.getElementById(`sc-pv-${pgNum}`).value);
+  const rv = parseFloat(document.getElementById(`sc-rv-${pgNum}`).value);
+  if (!Number.isFinite(pv) || !Number.isFinite(rv) || rv <= 0) { alert('Enter a valid scale, e.g. 0.0625" = 1\''); return; }
+  scaleOverrides[pgNum] = { paper_value: pv, real_value: rv };
+  const cell = document.getElementById(`pa-scale-${pgNum}`);
+  if (cell) cell.innerHTML = scaleCellHtml(pgNum);
+}
+
+function cancelScaleEdit(pgNum) {
+  const cell = document.getElementById(`pa-scale-${pgNum}`);
+  if (cell) cell.innerHTML = scaleCellHtml(pgNum);
+}
+
+// 90%-same-scale convenience: stamp one page's scale onto every selected page.
+function applyScaleToAll(pgNum) {
+  const pv = parseFloat(document.getElementById(`sc-pv-${pgNum}`).value);
+  const rv = parseFloat(document.getElementById(`sc-rv-${pgNum}`).value);
+  if (!Number.isFinite(pv) || !Number.isFinite(rv) || rv <= 0) { alert('Enter a valid scale first'); return; }
+  if (!confirm(`Apply ${pv}" = ${rv}' to all ${selectedPages.size} selected pages? You can still edit individual outliers after.`)) return;
+  for (const p of selectedPages) {
+    scaleOverrides[p] = { paper_value: pv, real_value: rv };
+    const cell = document.getElementById(`pa-scale-${p}`);
+    if (cell) cell.innerHTML = scaleCellHtml(p);
+  }
+}
+
 function renderPageAssignmentTable(trs) {
   buildPageAssignments(trs);
   const wrap  = document.getElementById('pa-table-wrap');
@@ -962,7 +1028,8 @@ function renderPageAssignmentTable(trs) {
     tr.id = `pa-row-${pgNum}`;
     tr.innerHTML = `
       <td style="padding:7px 10px; color:#f0c040; font-weight:bold;">pg${pgNum}</td>
-      <td style="padding:7px 10px; color:#aaa; max-width:320px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${raw}">${title}</td>
+      <td style="padding:7px 10px; color:#aaa; max-width:280px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${raw}">${title}</td>
+      <td style="padding:7px 10px;" id="pa-scale-${pgNum}">${scaleCellHtml(pgNum)}</td>
       <td style="padding:7px 10px;">${dropdown}</td>
       <td style="padding:7px 10px;" id="pa-role-${pgNum}">${roleHtml}</td>`;
     tbody.appendChild(tr);
@@ -1667,6 +1734,7 @@ async function runBatch() {
         page_height_pts: H,
         demarc_pins:    demarcPins
       };
+      if (scaleOverrides[pageNum]) batchBody.scale_override = scaleOverrides[pageNum];  // persisted by server
       batchPayloads[pageNum] = batchBody;   // reused by the leader-marking re-run
       const r = await fetch(`${base()}/api/pass-batch`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },

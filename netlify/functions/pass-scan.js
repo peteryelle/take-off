@@ -108,9 +108,10 @@ export default async function handler(req) {
         status:           'ready',
         scale_pts_per_ft: scalePtsPerFt,
         scale_paper_in:   s?.paper_value ?? null,
-        scale_real_ft:    s?.real_value  ?? null
+        scale_real_ft:    s?.real_value  ?? null,
+        scale_label:      scale?.display_label ?? (s ? `${s.paper_value}" = ${s.real_value}'` : null)
       }, { onConflict: "project_id,pdf_page_number" })
-      .select("id, pdf_page_number, building, level, area, tr_name")
+      .select("id, pdf_page_number, building, level, area, tr_name, scale_label, scale_paper_in, scale_real_ft, scale_pts_per_ft")
       .single();
 
     if (pgErr) {
