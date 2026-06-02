@@ -13,6 +13,18 @@
   })();
 </script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<!-- Vector symbol track (substeps 3-6): the main script below is not a module, so the
+     pure ESM libs are imported here and exposed on window.TakeoffVec. Deferred like all
+     module scripts, so it is set before any user-triggered detection runs. If it fails to
+     load, the symbol loop falls back to the existing LLM (pass-symbol) path unchanged. -->
+<script type="module">
+  import { contentFrame, extractFilledSubpaths, extractCameraBlobs } from './lib/geometry.js';
+  import { classifySheetClass, deriveSheetClassSignals } from './lib/sheet-class.js';
+  import { planSymbolDetection, locateVector, blobsToInstances } from './lib/locate.js';
+  window.TakeoffVec = { contentFrame, extractFilledSubpaths, extractCameraBlobs,
+                        classifySheetClass, deriveSheetClassSignals,
+                        planSymbolDetection, locateVector, blobsToInstances };
+</script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -1466,7 +1478,10 @@ async function getDeviceTextItems(pdfPage) {
   console.log(`=== MATCHED ITEMS (sent to server): ${items.length} ===`);
   console.table(items.slice(0, 20));
 
-  return { items, page_width_pts: W, page_height_pts: H };
+  // text_centers: the raw user-space centres the content-frame was built from. The
+  // vector symbol locator (geometry.js) rebuilds the SAME frame from these, so symbols
+  // land in the identical normalized space as text devices and the demarc.
+  return { items, page_width_pts: W, page_height_pts: H, text_centers: allRaw2.map(r => ({ cx: r.cx, cy: r.cy })) };
 }
 
 // Derive pts-per-foot from passBResult scale
@@ -1499,42 +1514,84 @@ async function runPassExtract() {
 
     const scalePtsPerFt = calcScalePtsPerFt(passBResult);
 
-    // ── Symbol detection (Step 7) — runs BEFORE reconcile so glyphs fold in SNAP.
-    // Render the page once, ask /api/pass-symbol per symbol-sourced type in parallel,
-    // collect {type,x,y} instances. reconcile (inside pass-extract) owns merge + flags.
+    // ── Symbol detection (Steps 4-6) — runs BEFORE reconcile so glyphs fold in SNAP.
+    // Probe the sheet, then route per type: VECTOR (deterministic geometry, client-side)
+    // where the sheet is vector and the type has a symbol_template, else the LLM strip
+    // locator (pass-symbol). reconcile (inside pass-extract) owns merge + flags.
     let symbolInstances = [];
+    let sheetClass = null;
     try {
-      const symVP = pdfPage.getViewport({ scale: 1.8 });
-      const symCV = document.createElement('canvas');
-      symCV.width = symVP.width; symCV.height = symVP.height;
-      await pdfPage.render({ canvasContext: symCV.getContext('2d'), viewport: symVP }).promise;
-      const pageImgB64 = symCV.toDataURL('image/jpeg', 0.85).split(',')[1];
+      const V = window.TakeoffVec;
+
+      // Probe (substep 4): route the locator + get persisted via the pass-extract payload.
+      if (V) {
+        try {
+          const sig = await V.deriveSheetClassSignals(pdfPage, pdfjsLib.OPS, { extractFilledSubpaths: V.extractFilledSubpaths });
+          sheetClass = V.classifySheetClass(sig);
+        } catch (e) { console.warn('[sheet_class]', e.message); }
+      }
 
       const dtR = await fetch(`${base()}/api/takeoff-summary?project_id=${projectId}`);
       const dtD = await dtR.json();
       const symTypes = (dtD.device_types ?? []).filter(dt =>
         (dt.detection_config?.sources ?? []).includes('symbol')
       );
-      if (symTypes.length) setStatus('pass-extract-status', `Scanning ${symTypes.length} symbol type(s)…`, 'running');
+      const byId = Object.fromEntries(symTypes.map(dt => [dt.id, dt]));
 
-      const symResults = await Promise.all(symTypes.map(async dt => {
+      // Render the page once, lazily, only if some type is LLM-routed.
+      let pageImgB64 = null;
+      const renderForLLM = async () => {
+        if (pageImgB64) return pageImgB64;
+        const symVP = pdfPage.getViewport({ scale: 1.8 });
+        const symCV = document.createElement('canvas');
+        symCV.width = symVP.width; symCV.height = symVP.height;
+        await pdfPage.render({ canvasContext: symCV.getContext('2d'), viewport: symVP }).promise;
+        pageImgB64 = symCV.toDataURL('image/jpeg', 0.85).split(',')[1];
+        return pageImgB64;
+      };
+      const llmLocate = async (dt) => {
         try {
           const sR = await fetch(`${base()}/api/pass-symbol`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ page_id: passBResult.page_id, device_type_id: dt.id, page_image_base64: pageImgB64 })
+            body: JSON.stringify({ page_id: passBResult.page_id, device_type_id: dt.id, page_image_base64: await renderForLLM() })
           });
           const sD = await sR.json();
           return sR.ok ? (sD.symbol_instances ?? []) : [];
         } catch { return []; }   // soft-fail per type; label+schedule still reconcile
-      }));
-      symbolInstances = symResults.flat();
-    } catch (e) { console.warn('[pass-symbol]', e.message); }
+      };
+
+      if (symTypes.length) setStatus('pass-extract-status', `Locating ${symTypes.length} symbol type(s)…`, 'running');
+
+      // Vector-first plan when the probe + libs are available; else the existing per-type LLM path.
+      const steps = (V && sheetClass)
+        ? V.planSymbolDetection(sheetClass, symTypes)
+        : symTypes.map(dt => ({ route: 'llm', device_type_id: dt.id, name: dt.name }));
+
+      for (const step of steps) {
+        if (step.route === 'vector') {
+          let res = { instances: [], degraded: true };
+          try {
+            res = await V.locateVector(pdfPage, pdfjsLib.OPS, textData.text_centers, step.group,
+              { extractCameraBlobs: V.extractCameraBlobs },
+              { vpW: page_width_pts, vpH: page_height_pts });
+          } catch (e) { console.warn('[vector locate]', e.message); }
+          if (res.degraded) {                         // found nothing -> LLM for each type in the group
+            for (const id of step.device_type_ids) symbolInstances.push(...await llmLocate(byId[id]));
+          } else {
+            symbolInstances.push(...res.instances);
+          }
+        } else {
+          symbolInstances.push(...await llmLocate(byId[step.device_type_id]));
+        }
+      }
+    } catch (e) { console.warn('[symbol-detect]', e.message); }
 
     const payload = {
       project_id:      projectId,
       page_id:         passBResult.page_id,
       text_items:      items,
       symbol_instances: symbolInstances,
+      sheet_class:      sheetClass,
       page_width_pts,
       page_height_pts,
       scale_pts_per_ft: scalePtsPerFt
