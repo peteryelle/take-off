@@ -217,6 +217,16 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
 
   <div class="thumb-grid" id="thumb-grid"></div>
   <div class="status" id="selection-status" style="margin-top:6px;">—</div>
+  <div id="bulk-role-bar" style="margin-top:8px; display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+    <span style="color:#aaa; font-size:12px;">Set selected pages →</span>
+    <button class="info" onclick="bulkSetRole('plan')"     style="padding:3px 10px; font-size:12px;">plan</button>
+    <button class="info" onclick="bulkSetRole('schedule')" style="padding:3px 10px; font-size:12px;">schedule</button>
+    <button class="info" onclick="bulkSetRole('legend')"   style="padding:3px 10px; font-size:12px;">legend</button>
+    <button class="info" onclick="bulkSetRole('detail')"   style="padding:3px 10px; font-size:12px;">detail</button>
+    <button class="info" onclick="bulkSetRole('skip')"     style="padding:3px 10px; font-size:12px;">skip</button>
+    <button onclick="bulkSetRole('')" style="padding:3px 10px; font-size:12px;" title="clear roles on selected pages">clear</button>
+    <span style="color:#666; font-size:11px;">— tip: type a range above (e.g. 1-39) &amp; Apply, stamp the common role, then fix exceptions in 🔍 view</span>
+  </div>
 </div>
 
 <!-- ── STEP 3: DEMARC SCAN ───────────────────────────────────────── -->
@@ -873,6 +883,35 @@ async function setPageRole(n, role) {
       body: JSON.stringify({ page_id: pageId, page_role: pageRole })
     });
   } catch (e) { console.warn('set-page-role:', e.message); }
+}
+
+// Bulk-assign one role to every currently SELECTED page (the 39-page ergonomics:
+// stamp the common role, then override the handful of exceptions in 🔍 view).
+// Still 100% human — this just turns N picks into one. '' clears the role.
+async function bulkSetRole(role) {
+  const pages = [...selectedPages].sort((a, b) => a - b);
+  if (!pages.length) {
+    setStatus('selection-status', 'Select pages first (click thumbnails or type a range and Apply)', 'err');
+    return;
+  }
+  const persists = [];
+  for (const n of pages) {
+    if (!pageCache[n]) pageCache[n] = {};
+    pageCache[n].page_role = role || null;
+    const sel = document.querySelector(`.role-select[data-page="${n}"]`);
+    if (sel) sel.value = role || '';
+    const pid = pageCache[n]?.pageId;
+    if (pid) persists.push(
+      fetch(`${base()}/api/set-page-role`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ page_id: pid, page_role: role || null })
+      }).catch(() => {})
+    );
+  }
+  markThumbRoleState();
+  const label = role || 'unassigned';
+  setStatus('selection-status', `Set ${pages.length} page${pages.length !== 1 ? 's' : ''} → ${label}`, 'ok');
+  await Promise.all(persists);
 }
 
 // Green border once a role is set, amber while it still needs one.
