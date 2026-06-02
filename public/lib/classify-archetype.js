@@ -127,4 +127,25 @@ export const ROUTE = {
   label_stamp: 'detect_anchor_count',
 };
 
+export const CLASSIFIER_VERSION = 'archetype-1';
+
+// Produce the persistable pages.route row from already-derived sheet signals.
+// Discovery calls this once per sheet and stores the result; buildDeviceList
+// reads pages.route to skip re-deriving. Pure: signals in, route row out.
+export function buildRoute(signals = {}) {
+  const r = classifySheet(signals);
+  return {
+    archetype: r.archetype,
+    route: r.route || (r.archetype === 'unknown' ? 'review' : ROUTE[r.archetype]),
+    score: r.score,
+    reasons: r.reasons || [],
+    signals: {
+      tableCount: (signals.tables || []).length,
+      anchorTokenCount: signals.anchorTokenCount || 0,
+    },
+    classified_at: new Date().toISOString(),
+    classifier_version: CLASSIFIER_VERSION,
+  };
+}
+
 export default classifySheet;

@@ -142,17 +142,24 @@ export function buildDeviceList(textItems = [], deviceTypes = [], scheduleCfg = 
     archetype = 'device_list';
     scheduleRows = parseSchedule(textItems, scheduleCfg, opts);
   } else {
-    // No explicit schedule config: classify the sheet to route it. Signals are
-    // either supplied by the host or derived here from the text layer.
-    const signals = opts.sheetSignals || deriveSheetSignals(textItems, deviceTypes);
-    routeInfo = classifySheet(signals);
-    archetype = routeInfo.archetype;
+    // Routing precedence:
+    //   1. opts.route   — stored pages.route from discovery (no re-derive)
+    //   2. opts.sheetSignals — host-supplied classifier inputs
+    //   3. derive here from the text layer
+    if (opts.route && opts.route.archetype) {
+      archetype = opts.route.archetype;
+      routeInfo = { ...opts.route, source: 'stored' };
+    } else {
+      const signals = opts.sheetSignals || deriveSheetSignals(textItems, deviceTypes);
+      routeInfo = classifySheet(signals);
+      archetype = routeInfo.archetype;
+    }
     if (archetype === 'device_list') {
       scheduleRows = parseSchedule(textItems, opts.scheduleCfg || scheduleCfg || {}, opts);
     } else if (archetype === 'quantity_matrix') {
       const matrix = parseMatrix(textItems, opts.matrixCfg || {}, opts);
       scheduleRows = matrixRowsToScheduleRows(matrix, opts.typeAliases || {});
-      routeInfo.matrix = { total: matrix.total, grand_total: matrix.grand_total, ties: matrix.ties, warnings: matrix.warnings };
+      routeInfo = { ...(routeInfo || {}), matrix: { total: matrix.total, grand_total: matrix.grand_total, ties: matrix.ties, warnings: matrix.warnings } };
       labelsForReconcile = [];
     }
     // label_stamp / unknown: scheduleRows stays [], labels drive the count.
