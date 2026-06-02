@@ -17,6 +17,79 @@ import { parseMatrix } from './matrix-schedule.js';
 import { classifySheet } from './classify-archetype.js';
 import { reconcile } from './reconcile.js';
 
+// Derive the classifier's sheet signals from the text layer the host already
+// has. Hosts (the Netlify functions, the browser pipeline) call this and pass
+// the result as opts.sheetSignals so a sheet routes itself. Pure: text in,
+// signals out — no PDF, no DOM.
+//
+//   anchorTokenCount : how many configured-anchor tokens stamp this sheet
+//                      (the label_stamp signal)
+//   tables           : [{ headers, idColumnValues, hasGrandTotalRow }] inferred
+//                      from header-keyword rows; empty when none detected
+//
+// Conservative by design: it reports what it can see and lets classifySheet
+// decide. No detectable table -> tables:[], which (with anchors) routes to
+// label_stamp and (without) to review.
+const HEADER_WORDS = /^(UIN|TAG|DEVICE|EQUIPMENT|OUTLET|ITEM|TYPE|QUANTITY|QTY|CABLE|HOMERUN|DETAIL|PORT|ROOM|DESIGNATOR|DESCRIPTION|HEIGHT|GRAND|TOTAL)$/i;
+
+export function deriveSheetSignals(textItems = [], deviceTypes = []) {
+  const norm = (s) => String(s).trim().toUpperCase().replace(/\s+/g, ' ');
+
+  // anchor token count: tokens matching any configured anchor matcher.
+  let anchorTokenCount = 0;
+  const matchers = [];
+  for (const dt of deviceTypes) {
+    const cfg = dt.detection_config;
+    if (!cfg || !cfg.anchor) continue;
+    if (cfg.anchor_mode === 'regex' || cfg.uin_pattern) {
+      try { const re = new RegExp(cfg.uin_pattern || cfg.anchor); matchers.push((s) => re.test(s)); } catch { /* skip bad pattern */ }
+    } else {
+      const A = norm(cfg.anchor); matchers.push((s) => s === A);
+    }
+  }
+  if (matchers.length) {
+    for (const it of textItems) {
+      const s = norm(it.str);
+      if (s && matchers.some((m) => m(s))) anchorTokenCount++;
+    }
+  }
+
+  // Header-row detection: group by y, find rows that are mostly header words.
+  const rowTol = 0.006;
+  const sorted = [...textItems].filter((it) => it.cy_norm != null).sort((a, b) => a.cy_norm - b.cy_norm);
+  const rows = [];
+  let cur = [], lastY = null;
+  for (const it of sorted) {
+    if (lastY == null || Math.abs(it.cy_norm - lastY) <= rowTol) cur.push(it);
+    else { rows.push(cur); cur = [it]; }
+    lastY = it.cy_norm;
+  }
+  if (cur.length) rows.push(cur);
+
+  const hasGrandTotalRow = textItems.some((it) => /grand/i.test(it.str))
+    && textItems.some((it) => /total/i.test(it.str));
+
+  const tables = [];
+  for (const row of rows) {
+    const words = row.map((it) => norm(it.str)).filter(Boolean);
+    if (words.length < 2) continue;
+    const headerHits = words.filter((w) => HEADER_WORDS.test(w)).length;
+    if (headerHits >= 2 && headerHits / words.length >= 0.4) {
+      const idHeader = row.find((it) => /^(UIN|TAG|DEVICE\s*ID|EQUIPMENT\s*ID|OUTLET\s*ID|ITEM|TYPE)$/i.test(norm(it.str)));
+      let idColumnValues = [];
+      if (idHeader) {
+        idColumnValues = textItems
+          .filter((it) => it.cy_norm > row[0].cy_norm + rowTol
+            && Math.abs(it.cx_norm - idHeader.cx_norm) <= 0.03)
+          .map((it) => norm(it.str)).filter(Boolean).slice(0, 300);
+      }
+      tables.push({ headers: words, idColumnValues, hasGrandTotalRow });
+    }
+  }
+
+  return { tables, anchorTokenCount };
+}
+
 // Expand a quantity-matrix result into per-device schedule rows reconcile can
 // seed from. A matrix gives counts per type, not per-device rows, so we synth
 // `quantity` UIN-less rows per type; reconcile treats them as count-authoritative
@@ -68,8 +141,11 @@ export function buildDeviceList(textItems = [], deviceTypes = [], scheduleCfg = 
   if (scheduleCfg && scheduleCfg.present !== false) {
     archetype = 'device_list';
     scheduleRows = parseSchedule(textItems, scheduleCfg, opts);
-  } else if (opts.sheetSignals) {
-    routeInfo = classifySheet(opts.sheetSignals);
+  } else {
+    // No explicit schedule config: classify the sheet to route it. Signals are
+    // either supplied by the host or derived here from the text layer.
+    const signals = opts.sheetSignals || deriveSheetSignals(textItems, deviceTypes);
+    routeInfo = classifySheet(signals);
     archetype = routeInfo.archetype;
     if (archetype === 'device_list') {
       scheduleRows = parseSchedule(textItems, opts.scheduleCfg || scheduleCfg || {}, opts);
@@ -77,10 +153,6 @@ export function buildDeviceList(textItems = [], deviceTypes = [], scheduleCfg = 
       const matrix = parseMatrix(textItems, opts.matrixCfg || {}, opts);
       scheduleRows = matrixRowsToScheduleRows(matrix, opts.typeAliases || {});
       routeInfo.matrix = { total: matrix.total, grand_total: matrix.grand_total, ties: matrix.ties, warnings: matrix.warnings };
-      // A quantity-matrix lives on a SCHEDULE sheet; the matrix IS the count.
-      // Type codes also appear as cell/header text here, so same-sheet label hits
-      // are noise that would inflate the count — suppress them. (Device positions
-      // come from the plan sheets, handled as their own label_stamp pass.)
       labelsForReconcile = [];
     }
     // label_stamp / unknown: scheduleRows stays [], labels drive the count.
