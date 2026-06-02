@@ -35,12 +35,20 @@ export default async function handler(req) {
 
   const { project_id, page_id, eval_page_num, text_items,
           page_width_pts, page_height_pts, demarc_pins, symbol_instances, leader_overrides,
-          scale_override } = body;
+          scale_override, sheet_class } = body;
   if (!project_id || !page_id || !text_items?.length)
     return err("project_id, page_id and text_items required");
 
   const supabase = getSupabase();
   await supabase.from("pages").update({ status: "running", status_msg: null }).eq("id", page_id);
+
+  // Persist the client-computed sheet_class probe (substep 4 wiring tail). Passive,
+  // best-effort — the client already used it to route the symbol locator; a probe
+  // write must never fail the count.
+  if (sheet_class && typeof sheet_class === "object") {
+    try { await supabase.from("pages").update({ sheet_class }).eq("id", page_id); }
+    catch (e) { console.warn("[sheet_class persist]", e?.message); }
+  }
 
   try {
     const [{ data: page }, { data: deviceTypes }] = await Promise.all([

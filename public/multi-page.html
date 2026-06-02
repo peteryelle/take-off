@@ -373,6 +373,18 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<!-- Vector symbol track (substeps 3-6): the main script below is not a module, so the
+     pure ESM libs are imported here and exposed on window.TakeoffVec. Deferred like all
+     module scripts, so it is set before any page processing runs. If it fails to load,
+     the per-page symbol loop falls back to the existing LLM (pass-symbol) path. -->
+<script type="module">
+  import { contentFrame, extractFilledSubpaths, extractCameraBlobs } from './lib/geometry.js';
+  import { classifySheetClass, deriveSheetClassSignals } from './lib/sheet-class.js';
+  import { planSymbolDetection, locateVector, blobsToInstances } from './lib/locate.js';
+  window.TakeoffVec = { contentFrame, extractFilledSubpaths, extractCameraBlobs,
+                        classifySheetClass, deriveSheetClassSignals,
+                        planSymbolDetection, locateVector, blobsToInstances };
+</script>
 <script>
 pdfjsLib.GlobalWorkerOptions.workerSrc =
   'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -1813,31 +1825,75 @@ async function runBatch() {
       // Build demarc pins for this page
       const demarcPins = buildPinsForPage(pageNum, passBRes, W, H);
 
-      // ── Symbol detection (Step 7) — BEFORE pass-batch so glyphs fold in SNAP.
-      // Per symbol-sourced type, in parallel; reconcile owns merge + flagging.
+      // ── Symbol detection (Steps 4-6) — BEFORE pass-batch so glyphs fold in SNAP.
+      // Probe the sheet, then route per type: VECTOR (deterministic geometry, client-side)
+      // where the sheet is vector and the type has a symbol_template, else the LLM strip
+      // locator (pass-symbol). reconcile owns merge + flagging.
       let symbolInstances = [];
+      let sheetClass = null;
       try {
+        const V = window.TakeoffVec;
         const symTypes = (augmentTypes ?? []).filter(dt => (dt.detection_config?.sources ?? []).includes('symbol'));
+
+        // Probe (substep 4): routes the locator + gets persisted via the pass-batch payload.
+        if (V) {
+          try {
+            const sig = await V.deriveSheetClassSignals(pdfPage, pdfjsLib.OPS, { extractFilledSubpaths: V.extractFilledSubpaths });
+            sheetClass = V.classifySheetClass(sig);
+          } catch (e) { console.warn('[sheet_class] pg' + pageNum, e.message); }
+        }
+
         if (symTypes.length) {
-          setPhase(`pg${pageNum}: symbol scan (${symTypes.length} type${symTypes.length !== 1 ? 's' : ''})`);
-          const symVP = pdfPage.getViewport({ scale: 1.8 });
-          const symCV = document.createElement('canvas');
-          symCV.width = symVP.width; symCV.height = symVP.height;
-          await pdfPage.render({ canvasContext: symCV.getContext('2d'), viewport: symVP }).promise;
-          const pageImgB64 = symCV.toDataURL('image/jpeg', 0.85).split(',')[1];
-          const symResults = await Promise.all(symTypes.map(async dt => {
+          setPhase(`pg${pageNum}: symbol locate (${symTypes.length} type${symTypes.length !== 1 ? 's' : ''})`);
+          const textCenters = allRaw.map(r => ({ cx: r.cx, cy: r.cy }));   // same centres as the text frame
+          const byId = Object.fromEntries(symTypes.map(dt => [dt.id, dt]));
+
+          // Render once, lazily, only if some type is LLM-routed.
+          let pageImgB64 = null;
+          const renderForLLM = async () => {
+            if (pageImgB64) return pageImgB64;
+            const symVP = pdfPage.getViewport({ scale: 1.8 });
+            const symCV = document.createElement('canvas');
+            symCV.width = symVP.width; symCV.height = symVP.height;
+            await pdfPage.render({ canvasContext: symCV.getContext('2d'), viewport: symVP }).promise;
+            pageImgB64 = symCV.toDataURL('image/jpeg', 0.85).split(',')[1];
+            return pageImgB64;
+          };
+          const llmLocate = async (dt) => {
             try {
               const sR = await fetch(`${base()}/api/pass-symbol`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ page_id: pageId, device_type_id: dt.id, page_image_base64: pageImgB64 })
+                body: JSON.stringify({ page_id: pageId, device_type_id: dt.id, page_image_base64: await renderForLLM() })
               });
               const sD = await sR.json();
               return sR.ok ? (sD.symbol_instances ?? []) : [];
             } catch { return []; }
-          }));
-          symbolInstances = symResults.flat();
+          };
+
+          // Vector-first plan when probe + libs are available; else the existing per-type LLM path.
+          const steps = (V && sheetClass)
+            ? V.planSymbolDetection(sheetClass, symTypes)
+            : symTypes.map(dt => ({ route: 'llm', device_type_id: dt.id, name: dt.name }));
+
+          for (const step of steps) {
+            if (step.route === 'vector') {
+              let res = { instances: [], degraded: true };
+              try {
+                res = await V.locateVector(pdfPage, pdfjsLib.OPS, textCenters, step.group,
+                  { extractCameraBlobs: V.extractCameraBlobs },
+                  { vpW: W, vpH: H });
+              } catch (e) { console.warn('[vector locate] pg' + pageNum, e.message); }
+              if (res.degraded) {                       // found nothing -> LLM for each type in the group
+                for (const id of step.device_type_ids) symbolInstances.push(...await llmLocate(byId[id]));
+              } else {
+                symbolInstances.push(...res.instances);
+              }
+            } else {
+              symbolInstances.push(...await llmLocate(byId[step.device_type_id]));
+            }
+          }
         }
-      } catch (e) { console.warn('[pass-symbol] pg' + pageNum, e.message); }
+      } catch (e) { console.warn('[symbol-detect] pg' + pageNum, e.message); }
 
       // Call pass-batch (label + schedule + symbol → reconcile)
       const batchBody = {
@@ -1846,6 +1902,7 @@ async function runBatch() {
         eval_page_num:  pageNum,
         text_items:     textItems,
         symbol_instances: symbolInstances,
+        sheet_class:     sheetClass,
         page_width_pts:  W,
         page_height_pts: H,
         demarc_pins:    demarcPins
