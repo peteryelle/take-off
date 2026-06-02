@@ -1,0 +1,11 @@
+{
+  "_archetype": "label_stamp",
+  "_source": "hand count off ATTACHMENT_9_-_Drawings_Telecommunications.pdf page 5 (VA Syracuse)",
+  "_assertion": "count N# primary-anchor instances with DV#-DD#-N# family collapsed onto the N# anchor",
+  "sheet": "ATTACHMENT_9 p5",
+  "primary_anchor": "N#",
+  "family": "DV#-DD#-N#",
+  "locked_count": 93,
+  "routes_to": "detect.js (anchor count)",
+  "note": "Leader-line ambiguities resolved via manual override in UI; not part of this count gate."
+}
