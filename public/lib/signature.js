@@ -190,10 +190,10 @@ export function computeSignature(blob = {}, opts = {}) {
   const medEnv = rawEnv.map((v) => v / med);
   const lobe_count = countLobes(medEnv, spikeRatio);
 
-  let filledN = 0, polyA = 0;
+  let filledN = 0, polyA = 0, bodyArea = 0;
   for (const sp of paths) {
     if (sp.filled) filledN++;
-    if ((sp.points || []).length >= 3) polyA += polyArea(sp.points);
+    if ((sp.points || []).length >= 3) { const a = polyArea(sp.points); polyA += a; if (a > bodyArea) bodyArea = a; }
   }
 
   return {
@@ -203,6 +203,7 @@ export function computeSignature(blob = {}, opts = {}) {
     area_ratio: Math.min(1, polyA / bboxArea),
     fill_ratio: paths.length ? filledN / paths.length : 0,
     spikiness: mx / med,
+    body_area: bodyArea,
     envelope: rawEnv.map((v) => v / mx),
   };
 }
@@ -265,5 +266,54 @@ export function prototypeFromSignatures(type, sigs = []) {
 }
 
 const round3 = (v) => parseFloat(Number(v).toFixed(3));
+
+// ── Radial arm counting (the robust real-glyph cone counter) ───────────────
+// The envelope `lobe_count` above works for single-path glyphs (synthetic cones)
+// but real symbols draw each appendage as its OWN sub-path, and real lens cones
+// are gentle bumps (~1.5x the hub), not sharp spikes — so on real cameras the
+// envelope undercounts. This counts arms structurally instead: take the sub-paths
+// sitting OUTSIDE the hub, cluster their centroids by ANGLE, and count the
+// clusters. It also reports `evenness` (max degrees off perfectly-even spacing),
+// which separates a confident symmetric hub (4 cones at ~90deg) from the
+// genuinely-ambiguous asymmetric 3-vs-4 case your estimator eyeballs.
+//
+// @param {Object} blob  { paths:[{points,...}] }  (needs multiple sub-paths)
+// @param {Object} opts  { outerFrac=0.4, gapDeg=40, evenTolDeg=25 }
+// @returns {{ arms, armAngles, evenness, confident }}
+//   confident=true  -> arms are near-evenly spaced; trust the count.
+//   confident=false -> asymmetric/ambiguous; flag for the cluster-and-ring verifier.
+export function countRadialArms(blob = {}, opts = {}) {
+  const outerFrac = opts.outerFrac ?? 0.4;
+  const gapDeg = opts.gapDeg ?? 40;
+  const evenTolDeg = opts.evenTolDeg ?? 25;
+  const paths = (blob.paths || []).filter((p) => (p.points || []).length >= 2);
+  if (paths.length < 2) return { arms: 0, armAngles: [], evenness: 360, confident: false };
+
+  const subC = paths.map((p) => centroid(p.points));
+  const all = paths.flatMap((p) => p.points);
+  const c = centroid(all);
+  const R = Math.max(...all.map(([x, y]) => Math.hypot(x - c[0], y - c[1])), 1e-9);
+  const angs = subC
+    .filter((sc) => Math.hypot(sc[0] - c[0], sc[1] - c[1]) > outerFrac * R)
+    .map((sc) => { let a = Math.atan2(sc[1] - c[1], sc[0] - c[0]) * 180 / Math.PI; return (a + 360) % 360; })
+    .sort((x, y) => x - y);
+  if (!angs.length) return { arms: 0, armAngles: [], evenness: 360, confident: false };
+
+  // circular gap clustering
+  const cl = [];
+  for (const a of angs) {
+    if (cl.length && a - cl[cl.length - 1].last <= gapDeg) cl[cl.length - 1].last = a;
+    else cl.push({ first: a, last: a });
+  }
+  if (cl.length > 1 && (cl[0].first + 360) - cl[cl.length - 1].last <= gapDeg) {
+    cl[0].first = cl[cl.length - 1].first; cl.pop();      // merge the wrap-around cluster
+  }
+  const arms = cl.length;
+  const armAngles = cl.map((g) => round3((g.first + g.last) / 2));
+  const gaps = armAngles.map((a, k) => ((armAngles[(k + 1) % arms] - a + 360) % 360));
+  const ideal = 360 / arms;
+  const evenness = arms > 1 ? Math.max(...gaps.map((g) => Math.abs(g - ideal))) : 0;
+  return { arms, armAngles, evenness: round3(evenness), confident: arms >= 1 && evenness <= evenTolDeg };
+}
 
 export default computeSignature;
