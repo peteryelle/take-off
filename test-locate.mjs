@@ -17,6 +17,7 @@ const subs = JSON.parse(readFileSync(new URL('./fixtures/qts-cameras-subpaths.js
 const protoFx = JSON.parse(readFileSync(new URL('./fixtures/qts-camera-prototypes.json', import.meta.url)));
 const blobs = groupSubpaths(subs, { bodyArea: 2e-5 });
 const camGroup = { fill_rgb: protoFx.fill_rgb, fill_tol: protoFx.fill_tol, body_area: protoFx.body_area, prototypes: protoFx.prototypes };
+const tokenOf = Object.fromEntries(protoFx.prototypes.map((p) => [p.lens_class, p.type])); // '1-lens' -> 'cam_1lens'
 
 console.log('route decision (vector-first, probe-driven fallback):');
 assert(chooseLocator({ vector_geometry: true }, camGroup) === 'vector', 'vector sheet + template -> vector');
@@ -40,11 +41,12 @@ console.log('blobs -> symbol_instances, PROTOTYPE path (symbol_template round-tr
 const protoInst = blobsToInstances(blobs, camGroup);
 const confident = protoInst.filter((i) => i.confidence === 'high');
 const flagged = protoInst.filter((i) => i.flag === 'verify_lens_count');
-const cn = (t) => confident.filter((i) => i.type === t).length;
+const cn = (tok) => confident.filter((i) => i.type === tok).length;
 assert(protoInst.length === 17 && protoInst.every((i) => i.type !== null), 'all 17 matched a prototype (none coerced to no_match)');
 assert(confident.length === 15, `15 confident calls (got ${confident.length})`);
-assert(cn('1-lens') === 11 && cn('4-lens') === 4, `confident split matches the rule: 11 directional + 4 symmetric (got ${cn('1-lens')}+${cn('4-lens')})`);
+assert(cn(tokenOf['1-lens']) === 11 && cn(tokenOf['4-lens']) === 4, `confident split: 11 ${tokenOf['1-lens']} + 4 ${tokenOf['4-lens']} (got ${cn(tokenOf['1-lens'])}+${cn(tokenOf['4-lens'])})`);
 assert(flagged.length === 2, `the 2 ambiguous hubs flagged for verification regardless of prototype distance (got ${flagged.length})`);
+assert(protoInst.every((i) => String(i.type).startsWith('cam_')), 'instances carry the stable cam_* join token (matches the row cfg.type the backfill writes)');
 
 console.log('plan groups types by fill (locate red once, split into 3 lens types):');
 const symTypes = [

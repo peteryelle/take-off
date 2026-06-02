@@ -203,25 +203,43 @@ export function groupSubpaths(subpaths = [], opts = {}) {
 export function classifyCameraBlob(blob, opts = {}) {
   const { prototypes = null, protoTol = 1.4, aspectHubMax = 2.2 } = opts;
   const sig = computeSignature(blob);
+  const arms = countRadialArms(blob);
+  // Lens-class rule (validated, prototype-independent): elongated body -> single
+  // directional; compact hub with confident four arms -> four-lens; otherwise the
+  // documented ambiguous hub (flagged for the ring verifier).
+  const ruleLens = sig.aspect > aspectHubMax ? '1-lens'
+    : (arms.confident && arms.arms === 4) ? '4-lens' : '3-lens';
+  const ruleAmbiguous = ruleLens === '3-lens';
+
+  // If prototypes are supplied, the emitted `type` is the prototype's join TOKEN, not
+  // the lens-class string — reconcile joins on it. Build the lens-class -> token map
+  // from the prototypes (they carry lens_class); fall back to the lens string if a
+  // class has no prototype, so a partially-seeded catalog still degrades sanely.
+  const tokenFor = (lens) => {
+    if (!prototypes) return lens;
+    const p = prototypes.find((q) => q.lens_class === lens);
+    return p ? p.type : lens;
+  };
+
   if (prototypes && prototypes.length) {
     const c = classifyBlob(sig, prototypes, protoTol);
     if (c.match === 'matched') {
-      // A prototype can NAME a glyph, but it must not claim confidence on the known-
-      // ambiguous hub call. A compact hub (aspect <= hubMax) whose arms aren't an
-      // even four is the documented 3-vs-4 (here even 3-vs-1) ambiguity: keep the
-      // matched type but FLAG it for the ring verifier, so the human reviews the same
-      // set whether the call came from the prototype or the rule. Flagging is half the
+      // A prototype can NAME a glyph, but must not claim confidence on the known-
+      // ambiguous hub call. A compact hub whose arms aren't a confident four is the
+      // documented ambiguity: keep the matched token but FLAG it, so the human reviews
+      // the same set whether the call came from prototype or rule. Flagging is half the
       // module — a prototype distance under tolerance does not buy past it.
-      const a = countRadialArms(blob);
-      const ambiguousHub = sig.aspect <= aspectHubMax && !(a.confident && a.arms === 4);
-      if (ambiguousHub) return { type: c.type, confidence: 'low', flag: 'verify_lens_count', via: 'prototype', arms: a.arms, score: c.score, sig };
-      return { type: c.type, confidence: 'high', flag: null, via: 'prototype', arms: a.arms, score: c.score, sig };
+      if (ruleAmbiguous) return { type: c.type, confidence: 'low', flag: 'verify_lens_count', via: 'prototype', arms: arms.arms, score: c.score, sig };
+      return { type: c.type, confidence: 'high', flag: null, via: 'prototype', arms: arms.arms, score: c.score, sig };
     }
+    // Prototype MISS: fall through to the rule but emit the rule lens-class's token, so
+    // an aspect-outlier directional camera that missed its prototype still joins. via
+    // records that the rule decided. Ambiguous hubs stay flagged.
+    return { type: tokenFor(ruleLens), confidence: ruleAmbiguous ? 'low' : 'high', flag: ruleAmbiguous ? 'verify_lens_count' : null, via: 'rule_fallthrough', arms: arms.arms, sig };
   }
-  if (sig.aspect > aspectHubMax) return { type: '1-lens', confidence: 'high', flag: null, via: 'rule', arms: null, sig };
-  const a = countRadialArms(blob);
-  if (a.confident && a.arms === 4) return { type: '4-lens', confidence: 'high', flag: null, via: 'rule', arms: a.arms, sig };
-  return { type: '3-lens', confidence: 'low', flag: 'verify_lens_count', via: 'rule', arms: a.arms, sig };
+
+  // No prototypes: emit the lens-class string directly (the original rule contract).
+  return { type: ruleLens, confidence: ruleAmbiguous ? 'low' : 'high', flag: ruleAmbiguous ? 'verify_lens_count' : null, via: 'rule', arms: arms.arms, sig };
 }
 
 /**
