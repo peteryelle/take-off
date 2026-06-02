@@ -381,9 +381,11 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
   import { contentFrame, extractFilledSubpaths, extractCameraBlobs } from './lib/geometry.js';
   import { classifySheetClass, deriveSheetClassSignals } from './lib/sheet-class.js';
   import { planSymbolDetection, locateVector, blobsToInstances } from './lib/locate.js';
+  import { runnerWorkForRole, unassignedPages } from './lib/plan-set.js';
   window.TakeoffVec = { contentFrame, extractFilledSubpaths, extractCameraBlobs,
                         classifySheetClass, deriveSheetClassSignals,
-                        planSymbolDetection, locateVector, blobsToInstances };
+                        planSymbolDetection, locateVector, blobsToInstances,
+                        runnerWorkForRole, unassignedPages };
 </script>
 <script>
 pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -1734,6 +1736,25 @@ async function runBatch() {
   const sortedPages = [...selectedPages].sort((a,b) => a-b);
   _anchorCache = null; // force fresh load — device types may have changed since last run
 
+  // ── Page-role gate (all-or-nothing) ─────────────────────────────
+  // 100% human-assigned: in a multi-page run, NO page counts until EVERY
+  // selected page has a role. An unnamed page blocks the entire batch — nothing
+  // counts unsupervised. Roles are assigned in the page table; source of truth
+  // is pages.page_role (no auto-classifier).
+  const Vg = window.TakeoffVec;
+  if (Vg && typeof Vg.unassignedPages === 'function') {
+    const roleRows = sortedPages.map(n => ({ pdf_page_number: n, page_role: pageCache[n]?.page_role ?? null }));
+    const missing = Vg.unassignedPages(roleRows);
+    if (missing.length) {
+      setStatus('batch-status',
+        `✗ Counting blocked — assign a role to every selected page first. Needs a role: ${missing.map(n=>'pg'+n).join(', ')}`,
+        'err');
+      const log0 = document.getElementById('batch-log');
+      if (log0) log0.innerHTML += `<div style="color:#f0c040;">⚠ ${missing.length} page${missing.length!==1?'s':''} unassigned — no pages counted. Set roles (plan / schedule / legend / detail / skip) and re-run.</div>`;
+      return;   // nothing counts
+    }
+  }
+
   // ── Liveness indicator ──────────────────────────────────────────
   // A single page spends its whole life inside the pass-batch LLM call, so the
   // per-page bar sat at 0% and the status text never moved — indistinguishable
@@ -1772,6 +1793,19 @@ async function runBatch() {
       log.innerHTML += `<div style="color:#f07a7a;">pg${pageNum}: no page record — skipping</div>`;
       continue;
     }
+
+    // Per-page role dispatch (the set-level gate above already guaranteed every
+    // page has a role). plan -> count+symbol; schedule -> read schedule, no
+    // symbol; legend/detail/skip -> not counted at all.
+    const pageRole  = cache.page_role ?? null;
+    const work      = (window.TakeoffVec?.runnerWorkForRole?.(pageRole)) ?? 'count';
+    if (work === 'skip') {
+      log.innerHTML += `<div style="color:#888;">pg${pageNum}: ${pageRole} — not counted</div>`;
+      done++;
+      bar.style.width = `${Math.round((done / sortedPages.length) * 100)}%`;
+      continue;
+    }
+    const countSymbols = (work === 'count');   // schedule pages skip symbol detection
 
     bar.classList.add('indeterminate');
     setPhase(`pg${pageNum}: reading text`);
@@ -1843,7 +1877,7 @@ async function runBatch() {
           } catch (e) { console.warn('[sheet_class] pg' + pageNum, e.message); }
         }
 
-        if (symTypes.length) {
+        if (countSymbols && symTypes.length) {
           setPhase(`pg${pageNum}: symbol locate (${symTypes.length} type${symTypes.length !== 1 ? 's' : ''})`);
           const textCenters = allRaw.map(r => ({ cx: r.cx, cy: r.cy }));   // same centres as the text frame
           const byId = Object.fromEntries(symTypes.map(dt => [dt.id, dt]));
@@ -2462,6 +2496,7 @@ async function restoreFromSupabase(pid) {
         if (!pg.eval_page_num) continue;
         pageCache[pg.eval_page_num] = {
           pageId: pg.page_id,
+          page_role: pg.page_role ?? null,
           passBResult: {
             page_id:     pg.page_id,
             sheet_title: pg.sheet_title ?? pg.drawing_number ?? `Page ${pg.eval_page_num}`,
