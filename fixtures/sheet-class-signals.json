@@ -1,0 +1,9 @@
+{
+  "_note": "Real per-sheet signal magnitudes measured from the source files (QTS PDFs in repo; VA from its text-items fixture, geometry unmeasurable without the VA PDF). Plus one synthetic raster_only case until a real scanned set arrives. Regenerate QTS/VA numbers with measure-class.mjs if sources change.",
+  "sheets": [
+    { "id": "QTS_1page",  "source": "QTS_1page.pdf p1",  "textCharCount": 1031, "filledSubpathCount": 255, "constructPathOps": 1096162, "imageCount": 8, "imageAreaFrac": 0.02, "expect": { "vector_text": true,  "vector_geometry": true,  "raster_only": false } },
+    { "id": "QTS_1pageB", "source": "QTS_1pageB.pdf p1", "textCharCount": 3400, "filledSubpathCount": 366, "constructPathOps": 63941,  "imageCount": 8, "imageAreaFrac": 0.02, "expect": { "vector_text": true,  "vector_geometry": true,  "raster_only": false } },
+    { "id": "VA_syracuse", "source": "va-labelstamp-textitems.json (text only; no PDF)", "textCharCount": 6855, "filledSubpathCount": null, "constructPathOps": null, "imageCount": null, "imageAreaFrac": null, "expect": { "vector_text": true }, "partial": "geometry half unverified pending the VA PDF" },
+    { "id": "synthetic_raster", "source": "constructed", "textCharCount": 12, "filledSubpathCount": 0, "constructPathOps": 30, "imageCount": 1, "imageAreaFrac": 0.95, "expect": { "vector_text": false, "vector_geometry": false, "raster_only": true } }
+  ]
+}
