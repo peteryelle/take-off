@@ -205,7 +205,18 @@ export function classifyCameraBlob(blob, opts = {}) {
   const sig = computeSignature(blob);
   if (prototypes && prototypes.length) {
     const c = classifyBlob(sig, prototypes, protoTol);
-    if (c.match === 'matched') return { type: c.type, confidence: 'high', flag: null, via: 'prototype', arms: null, score: c.score, sig };
+    if (c.match === 'matched') {
+      // A prototype can NAME a glyph, but it must not claim confidence on the known-
+      // ambiguous hub call. A compact hub (aspect <= hubMax) whose arms aren't an
+      // even four is the documented 3-vs-4 (here even 3-vs-1) ambiguity: keep the
+      // matched type but FLAG it for the ring verifier, so the human reviews the same
+      // set whether the call came from the prototype or the rule. Flagging is half the
+      // module — a prototype distance under tolerance does not buy past it.
+      const a = countRadialArms(blob);
+      const ambiguousHub = sig.aspect <= aspectHubMax && !(a.confident && a.arms === 4);
+      if (ambiguousHub) return { type: c.type, confidence: 'low', flag: 'verify_lens_count', via: 'prototype', arms: a.arms, score: c.score, sig };
+      return { type: c.type, confidence: 'high', flag: null, via: 'prototype', arms: a.arms, score: c.score, sig };
+    }
   }
   if (sig.aspect > aspectHubMax) return { type: '1-lens', confidence: 'high', flag: null, via: 'rule', arms: null, sig };
   const a = countRadialArms(blob);

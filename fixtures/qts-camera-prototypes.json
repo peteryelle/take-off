@@ -1,0 +1,54 @@
+{
+  "_note": "Hand-seeded camera prototypes for detection_config.symbol_template, from QTS_1page sub-paths. Replaced by the box-select UI (substep 7).",
+  "fill_rgb": [
+    255,
+    87,
+    87
+  ],
+  "fill_tol": 48,
+  "body_area": 0.00002,
+  "prototypes": [
+    {
+      "type": "1-lens",
+      "n": 11,
+      "sig": {
+        "lobe_count": 2,
+        "arms": 2,
+        "n_subpaths": 8,
+        "aspect": 3.3082742735512625,
+        "area_ratio": 0.42191353161446377,
+        "fill_ratio": 1,
+        "spikiness": 2.0699480255380625,
+        "envelope": []
+      }
+    },
+    {
+      "type": "3-lens",
+      "n": 2,
+      "sig": {
+        "lobe_count": 2,
+        "arms": 4,
+        "n_subpaths": 14,
+        "aspect": 2.0232921161065973,
+        "area_ratio": 0.4961187214612742,
+        "fill_ratio": 1,
+        "spikiness": 2.0161907113920132,
+        "envelope": []
+      }
+    },
+    {
+      "type": "4-lens",
+      "n": 4,
+      "sig": {
+        "lobe_count": 0,
+        "arms": 4,
+        "n_subpaths": 9,
+        "aspect": 1.3469447200400464,
+        "area_ratio": 0.4797418715445108,
+        "fill_ratio": 1,
+        "spikiness": 1.5115067662761885,
+        "envelope": []
+      }
+    }
+  ]
+}
