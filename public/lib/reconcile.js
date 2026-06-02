@@ -119,6 +119,10 @@ export function reconcile(catalog = {}, labelInstances = [], symbolInstances = [
     let best = null, bestD = snapR * snapR;
     for (const d of devices) {
       if (d.type !== s.type || d.x == null) continue;
+      // T1 corroborates a LABELED/SCHEDULED device. A device whose only evidence is
+      // a prior symbol is itself a bare glyph (a T3 synthetic) — folding onto it would
+      // merge two genuinely distinct unlabeled instances, so it is not a snap target.
+      if (d.sources.length === 1 && d.sources[0] === 'symbol') continue;
       const dd = (d.x - s.x) ** 2 + (d.y - s.y) ** 2;
       if (dd <= bestD) { bestD = dd; best = d; }
     }
