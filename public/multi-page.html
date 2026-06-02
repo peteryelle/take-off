@@ -42,6 +42,10 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
 
 /* ── Thumbnails ── */
 .thumb-grid { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.thumb-col { display: flex; flex-direction: column; gap: 4px; align-items: stretch; }
+.role-select { background:#1a1a1a; border:1px solid #7a5000; color:#f0c040; font-family:monospace;
+  font-size:11px; padding:3px 4px; border-radius:3px; width:72px; cursor:pointer; }
+.role-select.set { border-color:#3a7a3a; color:#7af07a; }
 .thumb { position: relative; cursor: pointer; border: 2px solid #222; border-radius: 3px; transition: border-color 0.15s; }
 .thumb canvas { display: block; width: 72px; height: 52px; }
 .thumb.selected { border-color: #7af07a; }
@@ -781,6 +785,9 @@ async function renderThumbnails() {
     cv.height  = vp.height;
     await page.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
 
+    const col = document.createElement('div');
+    col.className = 'thumb-col';
+
     const wrap = document.createElement('div');
     wrap.className = 'thumb';
     wrap.dataset.page = n;
@@ -790,8 +797,56 @@ async function renderThumbnails() {
     lbl.textContent = n;
     wrap.appendChild(lbl);
     wrap.onclick = () => togglePage(n);
-    grid.appendChild(wrap);
+    col.appendChild(wrap);
+
+    // Page-role picker — human stare-and-name. Every selected page must have a
+    // role before the batch will count (the runner blocks otherwise). Clicks on
+    // the select must not toggle page selection.
+    const sel = document.createElement('select');
+    sel.className = 'role-select';
+    sel.dataset.page = n;
+    sel.innerHTML =
+      '<option value="">— role —</option>' +
+      '<option value="plan">plan</option>' +
+      '<option value="schedule">schedule</option>' +
+      '<option value="legend">legend</option>' +
+      '<option value="detail">detail</option>' +
+      '<option value="skip">skip</option>';
+    sel.value = pageCache[n]?.page_role ?? '';
+    sel.onclick  = (e) => e.stopPropagation();
+    sel.onchange = (e) => { e.stopPropagation(); setPageRole(n, sel.value); };
+    col.appendChild(sel);
+
+    grid.appendChild(col);
   }
+  markThumbRoleState();
+}
+
+// Persist a human-assigned page role. Updates client state immediately (the gate
+// reads pageCache.page_role), and writes through to the DB when the page row
+// exists (restored projects + any page after the demarc scan). For a brand-new
+// PDF not yet scanned there's no page row to write to yet — assign roles after
+// the scan, or they'll persist once the row exists.
+async function setPageRole(n, role) {
+  const pageRole = role || null;
+  if (!pageCache[n]) pageCache[n] = {};
+  pageCache[n].page_role = pageRole;
+  markThumbRoleState();
+  const pageId = pageCache[n]?.pageId;
+  if (!pageId) return;   // no page row yet; held in client state for this session
+  try {
+    await fetch(`${base()}/api/set-page-role`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ page_id: pageId, page_role: pageRole })
+    });
+  } catch (e) { console.warn('set-page-role:', e.message); }
+}
+
+// Green border once a role is set, amber while it still needs one.
+function markThumbRoleState() {
+  document.querySelectorAll('.role-select').forEach((sel) => {
+    sel.classList.toggle('set', !!sel.value);
+  });
 }
 
 function togglePage(n) {
