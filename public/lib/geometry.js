@@ -201,7 +201,7 @@ export function groupSubpaths(subpaths = [], opts = {}) {
  * @returns {{ type, confidence, flag, via, arms, sig }}
  */
 export function classifyCameraBlob(blob, opts = {}) {
-  const { prototypes = null, protoTol = 1.4, aspectHubMax = 2.2 } = opts;
+  const { prototypes = null, protoTol = 1.4, aspectHubMax = 2.2, lensTokens = null } = opts;
   const sig = computeSignature(blob);
   const arms = countRadialArms(blob);
   // Lens-class rule (validated, prototype-independent): elongated body -> single
@@ -216,9 +216,12 @@ export function classifyCameraBlob(blob, opts = {}) {
   // from the prototypes (they carry lens_class); fall back to the lens string if a
   // class has no prototype, so a partially-seeded catalog still degrades sanely.
   const tokenFor = (lens) => {
-    if (!prototypes) return lens;
-    const p = prototypes.find((q) => q.lens_class === lens);
-    return p ? p.type : lens;
+    if (prototypes) {
+      const p = prototypes.find((q) => q.lens_class === lens);
+      if (p) return p.type;
+    }
+    if (lensTokens && lensTokens[lens]) return lensTokens[lens];
+    return lens;
   };
 
   if (prototypes && prototypes.length) {
@@ -238,8 +241,9 @@ export function classifyCameraBlob(blob, opts = {}) {
     return { type: tokenFor(ruleLens), confidence: ruleAmbiguous ? 'low' : 'high', flag: ruleAmbiguous ? 'verify_lens_count' : null, via: 'rule_fallthrough', arms: arms.arms, sig };
   }
 
-  // No prototypes: emit the lens-class string directly (the original rule contract).
-  return { type: ruleLens, confidence: ruleAmbiguous ? 'low' : 'high', flag: ruleAmbiguous ? 'verify_lens_count' : null, via: 'rule', arms: arms.arms, sig };
+  // No prototypes: emit the rule lens-class mapped through lensTokens (cam_*),
+  // falling back to the bare lens-class string when no map is configured.
+  return { type: tokenFor(ruleLens), confidence: ruleAmbiguous ? 'low' : 'high', flag: ruleAmbiguous ? 'verify_lens_count' : null, via: 'rule', arms: arms.arms, sig };
 }
 
 /**

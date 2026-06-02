@@ -17,7 +17,7 @@
 import { classifyCameraBlob } from './geometry.js';
 
 const fillKey = (rgb) => (Array.isArray(rgb) ? rgb.join(',') : 'none');
-const hasTemplate = (g) => !!(g && Array.isArray(g.prototypes) && g.prototypes.length && Array.isArray(g.fill_rgb));
+const hasTemplate = (g) => !!(g && Array.isArray(g.fill_rgb) && g.fill_rgb.length === 3);
 
 /**
  * Decide the locate route for one symbol group on one sheet. Pure.
@@ -40,7 +40,7 @@ export function chooseLocator(sheetClass, group) {
  * @returns {Array} [{ type, x, y, confidence, flag, via:'vector' }]
  */
 export function blobsToInstances(blobs = [], group = {}) {
-  const opts = { prototypes: group.prototypes || null, protoTol: group.proto_tol ?? 1.4, aspectHubMax: group.aspect_hub_max ?? 2.2 };
+  const opts = { prototypes: group.prototypes || null, protoTol: group.proto_tol ?? 1.4, aspectHubMax: group.aspect_hub_max ?? 2.2, lensTokens: group.lens_tokens || null };
   return blobs.map((b) => {
     const r = classifyCameraBlob(b, opts);
     return { type: r.type, x: b.x, y: b.y, confidence: r.confidence, flag: r.flag || (r.type === null ? 'no_match' : null), via: 'vector' };
@@ -66,8 +66,10 @@ export function planSymbolDetection(sheetClass, symTypes = []) {
   for (const dt of symTypes) {
     const cfg = dt.detection_config || {};
     const tmpl = cfg.symbol_template || null;
-    const group = tmpl && Array.isArray(tmpl.prototypes)
-      ? { fill_rgb: tmpl.fill_rgb, fill_tol: tmpl.fill_tol ?? 48, body_area: tmpl.body_area ?? 2e-5, prototypes: tmpl.prototypes, proto_tol: tmpl.proto_tol, aspect_hub_max: tmpl.aspect_hub_max }
+    const group = (tmpl && Array.isArray(tmpl.fill_rgb))
+      ? { fill_rgb: tmpl.fill_rgb, fill_tol: tmpl.fill_tol ?? 48, body_area: tmpl.body_area ?? 2e-5,
+          prototypes: (Array.isArray(tmpl.prototypes) && tmpl.prototypes.length) ? tmpl.prototypes : null,
+          proto_tol: tmpl.proto_tol, aspect_hub_max: tmpl.aspect_hub_max, lens_tokens: tmpl.lens_tokens || null }
       : null;
     if (chooseLocator(sheetClass, group) === 'vector') {
       const k = fillKey(group.fill_rgb);
@@ -94,10 +96,10 @@ export function planSymbolDetection(sheetClass, symTypes = []) {
  */
 export async function locateVector(page, OPS, textCenters, group, deps = {}, opts = {}) {
   const { extractCameraBlobs } = deps;
-  const { blobs } = await extractCameraBlobs(page, OPS, textCenters, {
+  const { blobs, n_subpaths_raw, n_subpaths_kept } = await extractCameraBlobs(page, OPS, textCenters, {
     vpW: opts.vpW, vpH: opts.vpH, fill: group.fill_rgb, fillTol: group.fill_tol ?? 48, bodyArea: group.body_area ?? 2e-5,
   });
-  return { instances: blobsToInstances(blobs, group), blob_count: blobs.length, degraded: blobs.length === 0 };
+  return { instances: blobsToInstances(blobs, group), blob_count: blobs.length, n_subpaths_raw, n_subpaths_kept, degraded: blobs.length === 0 };
 }
 
 export default { chooseLocator, blobsToInstances, planSymbolDetection, locateVector };
