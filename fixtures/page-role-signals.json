@@ -1,0 +1,150 @@
+[
+ {
+  "set": "APG",
+  "page": 1,
+  "truth_role": "plan",
+  "titlePhrases": [
+   "PLAN",
+   "KEY PLAN",
+   "GENERAL SHEET NOTES",
+   "FIRST FLOOR TELECOMMUNICATIONS PLAN -",
+   "FIRST FLOOR TELECOMMUNICATIONS PLAN - AREA A"
+  ],
+  "hasGrandTotal": false,
+  "hasScaleBar": true,
+  "roomNumberCount": 15,
+  "abbreviationDensity": 30
+ },
+ {
+  "set": "APG",
+  "page": 23,
+  "truth_role": "schedule",
+  "titlePhrases": [
+   "GENERAL SHEET NOTES",
+   "ELEVATION - TELECOM 110",
+   "OUTLET QUANTITY SCHEDULE - FIRST FLOOR",
+   "CABINET MOUNTED EQUIPMENT SCHEDULE - TELECOM 110",
+   "ELEVATION - SECURE ROOM 101",
+   "CABINET MOUNTED EQUIPMENT SCHEDULE - SECURE ROOM 101",
+   "CABINET SCHEDULE - SECURE ROOM 101"
+  ],
+  "hasGrandTotal": true,
+  "hasScaleBar": false,
+  "roomNumberCount": 46,
+  "abbreviationDensity": 25
+ },
+ {
+  "set": "APG",
+  "page": 25,
+  "truth_role": "schedule",
+  "titlePhrases": [
+   "GENERAL SHEET NOTES",
+   "ELEVATION - TELECOM 312 - BID OPTION"
+  ],
+  "hasGrandTotal": true,
+  "hasScaleBar": false,
+  "roomNumberCount": 39,
+  "abbreviationDensity": 22
+ },
+ {
+  "set": "APG",
+  "page": 28,
+  "truth_role": "detail",
+  "titlePhrases": [
+   "INDICATED ON PLAN",
+   "NOTES:",
+   "TYPICAL TELECOMMUNICATIONS",
+   "TYPICAL COMMUNICATIONS OUTLET BOX",
+   "TYPICAL FURNITURE FEED",
+   "TYPICAL MODULAR PLUG"
+  ],
+  "hasGrandTotal": false,
+  "hasScaleBar": false,
+  "roomNumberCount": 3,
+  "abbreviationDensity": 50
+ },
+ {
+  "set": "AE2",
+  "page": 1,
+  "truth_role": "legend",
+  "titlePhrases": [
+   "DIAGRAM",
+   "ELEVATION OR EXISTING TO BE RELOCATED",
+   "REFLECTED CEILING PLAN",
+   "TYPICAL",
+   "ABBREVIATIONS, GENERAL NOTES, AND",
+   "TNG001 - ABBREVIATIONS, GENERAL NOTES, AND SHEET INDEX",
+   "TNG003 - ABBREVIATIONS, GENERAL NOTES, AND SHEET INDEX",
+   "OVERHEAD PLAN"
+  ],
+  "hasGrandTotal": false,
+  "hasScaleBar": false,
+  "roomNumberCount": 8,
+  "abbreviationDensity": 123
+ },
+ {
+  "set": "AE2",
+  "page": 5,
+  "truth_role": "plan",
+  "titlePhrases": [
+   "TELECOMMUNICATIONS PLAN",
+   "GENERAL NOTES",
+   "KEY PLAN",
+   "KEY NOTES"
+  ],
+  "hasGrandTotal": false,
+  "hasScaleBar": false,
+  "roomNumberCount": 88,
+  "abbreviationDensity": 53
+ },
+ {
+  "set": "AE2",
+  "page": 72,
+  "truth_role": "detail",
+  "titlePhrases": [
+   "REFERENCE GENERAL AND KEY NOTES FOR SPECIFIC INFORMATION",
+   "GENERAL NOTES (FOR THIS SHEET ONLY)",
+   "ALL TELECOMMUNICATIONS ROOM (TR) DATA RACK DETAIL ELEVATIONS",
+   "KEY NOTES (FOR THIS SHEET ONLY)",
+   "TELECOMMUNICATIONS ENCLOSURE ELEVATION DETAIL"
+  ],
+  "hasGrandTotal": false,
+  "hasScaleBar": false,
+  "roomNumberCount": 9,
+  "abbreviationDensity": 79
+ },
+ {
+  "set": "QTS",
+  "page": 3,
+  "truth_role": "plan",
+  "titlePhrases": [
+   "SHEET NOTES",
+   "GENERAL NOTES",
+   "SITE SECURITY PLAN",
+   "SECURITY SITE PLAN - OVERALL",
+   "SE01-00 DETAIL SCHEDULE",
+   "DETAIL #",
+   "DETAIL SHEET"
+  ],
+  "hasGrandTotal": false,
+  "hasScaleBar": false,
+  "roomNumberCount": 20,
+  "abbreviationDensity": 6
+ },
+ {
+  "set": "QTS",
+  "page": 27,
+  "truth_role": "schedule",
+  "titlePhrases": [
+   "SCHEDULE CONT'D",
+   "NETWORK DEVICE SCHEDULE",
+   "DETAIL #",
+   "DETAIL SHEET",
+   "RIC5DC1-RISER 0146A-MEP-FP"
+  ],
+  "hasGrandTotal": false,
+  "hasScaleBar": false,
+  "roomNumberCount": 37,
+  "abbreviationDensity": 102
+ }
+]
