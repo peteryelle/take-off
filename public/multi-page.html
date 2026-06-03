@@ -211,7 +211,7 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
     </div>
     <div style="padding-top:16px;">
       <button class="info" onclick="applyRange()">Apply Range</button>
-      <button onclick="clearSelection()" style="margin-left:4px;">Clear</button>
+      <button onclick="clearSelection()" style="margin-left:4px;" title="clears the page selection only — does not change roles">Clear selection</button>
     </div>
   </div>
 
@@ -224,7 +224,7 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
     <button class="info" onclick="bulkSetRole('legend')"   style="padding:3px 10px; font-size:12px;">legend</button>
     <button class="info" onclick="bulkSetRole('detail')"   style="padding:3px 10px; font-size:12px;">detail</button>
     <button class="info" onclick="bulkSetRole('skip')"     style="padding:3px 10px; font-size:12px;">skip</button>
-    <button onclick="bulkSetRole('')" style="padding:3px 10px; font-size:12px;" title="clear roles on selected pages">clear</button>
+    <button onclick="bulkClearRoles()" style="padding:3px 10px; font-size:12px;" title="unset role on selected pages (does not change the selection)">clear roles</button>
     <span style="color:#666; font-size:11px;">— tip: type a range above (e.g. 1-39) &amp; Apply, stamp the common role, then fix exceptions in 🔍 view</span>
   </div>
 </div>
@@ -875,13 +875,19 @@ async function setPageRole(n, role) {
   if (!pageCache[n]) pageCache[n] = {};
   pageCache[n].page_role = pageRole;
   markThumbRoleState();
-  const pageId = pageCache[n]?.pageId;
-  if (!pageId) return;   // no page row yet; held in client state for this session
+  if (!projectId) {
+    setStatus('selection-status', 'Confirm a project first — roles save to the project', 'err');
+    return;
+  }
+  // Persist by (project, pdf page) so it saves regardless of scan/cache state;
+  // the row is created on demand. Capture the row id for downstream use.
   try {
-    await fetch(`${base()}/api/set-page-role`, {
+    const r = await fetch(`${base()}/api/set-page-role`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ page_id: pageId, page_role: pageRole })
+      body: JSON.stringify({ project_id: projectId, pdf_page_number: n, page_role: pageRole })
     });
+    const j = await r.json().catch(() => ({}));
+    if (j?.page_id) pageCache[n].pageId = j.page_id;
   } catch (e) { console.warn('set-page-role:', e.message); }
 }
 
@@ -894,24 +900,44 @@ async function bulkSetRole(role) {
     setStatus('selection-status', 'Select pages first (click thumbnails or type a range and Apply)', 'err');
     return;
   }
-  const persists = [];
+  if (!projectId) {
+    setStatus('selection-status', 'Confirm a project first — roles save to the project', 'err');
+    return;
+  }
   for (const n of pages) {
     if (!pageCache[n]) pageCache[n] = {};
     pageCache[n].page_role = role || null;
     const sel = document.querySelector(`.role-select[data-page="${n}"]`);
     if (sel) sel.value = role || '';
-    const pid = pageCache[n]?.pageId;
-    if (pid) persists.push(
-      fetch(`${base()}/api/set-page-role`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ page_id: pid, page_role: role || null })
-      }).catch(() => {})
-    );
   }
   markThumbRoleState();
   const label = role || 'unassigned';
-  setStatus('selection-status', `Set ${pages.length} page${pages.length !== 1 ? 's' : ''} → ${label}`, 'ok');
-  await Promise.all(persists);
+  setStatus('selection-status', `Saving ${pages.length} page${pages.length !== 1 ? 's' : ''} → ${label}…`, 'running');
+  // Persist by (project, pdf page) in parallel; capture row ids as they return.
+  const results = await Promise.all(pages.map(async (n) => {
+    try {
+      const r = await fetch(`${base()}/api/set-page-role`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: projectId, pdf_page_number: n, page_role: role || null })
+      });
+      const j = await r.json().catch(() => ({}));
+      if (j?.page_id) pageCache[n].pageId = j.page_id;
+      return r.ok;
+    } catch { return false; }
+  }));
+  const okN = results.filter(Boolean).length;
+  setStatus('selection-status',
+    `Saved ${okN}/${pages.length} page${pages.length !== 1 ? 's' : ''} → ${label}`,
+    okN === pages.length ? 'ok' : 'err');
+}
+
+// Clearing ROLES is distinct from clearing the SELECTION. Guarded so it can't be
+// hit by reflex next to the selection's "Clear selection" button.
+function bulkClearRoles() {
+  const k = selectedPages.size;
+  if (!k) { setStatus('selection-status', 'Select pages first', 'err'); return; }
+  if (!confirm(`Clear the role on ${k} selected page${k !== 1 ? 's' : ''}? This unsets roles only — it does not change your selection.`)) return;
+  bulkSetRole('');
 }
 
 // Green border once a role is set, amber while it still needs one.
