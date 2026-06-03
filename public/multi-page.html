@@ -2135,6 +2135,7 @@ async function runBatch() {
           const steps = (V && sheetClass)
             ? V.planSymbolDetection(sheetClass, symTypes)
             : symTypes.map(dt => ({ route: 'llm', device_type_id: dt.id, name: dt.name }));
+          console.log(`[route] pg${pageNum}: libs=${!!V} sheetClass=${JSON.stringify(sheetClass)} -> ${steps.map(s => s.route).join(',')}`);
 
           for (const step of steps) {
             if (step.route === 'vector') {
@@ -2146,6 +2147,7 @@ async function runBatch() {
                 console.log(`[vector] pg${pageNum}: raw=${res.n_subpaths_raw} kept=${res.n_subpaths_kept} blobs=${res.blob_count} instances=${res.instances?.length ?? 0} (frame ${W}x${H}, bodyArea ${step.group?.body_area ?? 2e-5})`);
               } catch (e) { console.warn('[vector locate] pg' + pageNum, e.message); }
               if (res.degraded) {                       // found nothing -> LLM for each type in the group
+                console.warn(`[vector] pg${pageNum}: degraded (0 blobs) -> LLM fallback for ${step.device_type_ids?.length ?? 0} types`);
                 for (const id of step.device_type_ids) symbolInstances.push(...await llmLocate(byId[id]));
               } else {
                 symbolInstances.push(...res.instances);

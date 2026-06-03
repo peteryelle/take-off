@@ -72,3 +72,5 @@ export default async function handler(req) {
 
   return ok({ page_id, page_role: role, cleared });
 }
+
+export const config = { path: "/api/set-page-role" };
