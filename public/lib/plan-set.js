@@ -25,6 +25,33 @@
 import { classifyPageRole } from './classify-page-role.js';
 import { classifySheet } from './classify-archetype.js';
 
+// Runner dispatch for a HUMAN-ASSIGNED page role — the authoritative path, no
+// auto-classifier. An unassigned/unknown role returns 'needs_role' so the runner
+// can BLOCK rather than count: nothing counts until a human has named the page.
+//   plan     -> 'count'          (detect + symbol)
+//   schedule -> 'read_schedule'  (schedule reader; symbol detection skipped)
+//   legend|detail|skip -> 'skip' (not counted)
+//   null / anything else -> 'needs_role' (BLOCK)
+export function runnerWorkForRole(role) {
+  switch (role) {
+    case 'plan': return 'count';
+    case 'schedule': return 'read_schedule';
+    case 'legend':
+    case 'detail':
+    case 'skip': return 'skip';
+    default: return 'needs_role';
+  }
+}
+
+// Set-level gate: in a multi-page run NO page counts until EVERY selected page
+// has a role. Returns the pages still missing a role; empty array => clear to run.
+// `pages` is [{ pdf_page_number, page_role }]. Pure.
+export function unassignedPages(pages = []) {
+  return pages
+    .filter((p) => runnerWorkForRole(p.page_role) === 'needs_role')
+    .map((p) => p.pdf_page_number);
+}
+
 // Map (role, archetype) -> the work the runner performs on this page.
 function workFor(role, archetype) {
   if (role === 'legend') return 'discover';
