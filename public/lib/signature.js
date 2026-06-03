@@ -204,20 +204,24 @@ export function computeSignature(blob = {}, opts = {}) {
     fill_ratio: paths.length ? filledN / paths.length : 0,
     spikiness: mx / med,
     body_area: bodyArea,
+    arms: countRadialArms(blob, opts).arms,   // robust real-glyph appendage count
     envelope: rawEnv.map((v) => v / mx),
   };
 }
 
-// Weighted, rotation-invariant feature distance. lobe_count dominates: a single
-// lobe of difference already exceeds the default tolerance, so a glyph can never
-// be forced onto a prototype with the wrong cone count.
-const W = { lobe: 1.0, subpaths: 0.15, aspect: 0.2, area: 0.25, fill: 0.2, spike: 0.1 };
+// Weighted, rotation-invariant feature distance. lobe_count and arms dominate:
+// a single appendage of difference already exceeds the default tolerance, so a
+// glyph can never be forced onto a prototype with the wrong cone/arm count. (On
+// single-path synthetic glyphs arms is uninformative and lobe_count carries it;
+// on real multi-sub-path glyphs lobe_count is weak and arms carries it.)
+const W = { lobe: 1.0, arms: 1.0, subpaths: 0.15, aspect: 0.2, area: 0.25, fill: 0.2, spike: 0.1 };
 
 export function sigDistance(a, b) {
   const relAspect = Math.abs(a.aspect - b.aspect) / Math.max(a.aspect, b.aspect, 1e-9);
   const relSpike = Math.abs(a.spikiness - b.spikiness) / Math.max(a.spikiness, b.spikiness, 1e-9);
   return (
     W.lobe * Math.abs(a.lobe_count - b.lobe_count) +
+    W.arms * Math.abs((a.arms ?? 0) - (b.arms ?? 0)) +
     W.subpaths * Math.abs(a.n_subpaths - b.n_subpaths) +
     W.aspect * relAspect +
     W.area * Math.abs(a.area_ratio - b.area_ratio) +
@@ -255,6 +259,7 @@ export function prototypeFromSignatures(type, sigs = []) {
     type, n: sigs.length,
     sig: {
       lobe_count: Math.round(mean('lobe_count')),
+      arms: Math.round(mean('arms')),
       n_subpaths: Math.round(mean('n_subpaths')),
       aspect: mean('aspect'),
       area_ratio: mean('area_ratio'),
