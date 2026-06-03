@@ -100,24 +100,6 @@ export default async function handler(req) {
     demarc_source:   pp.pages?.demarc_source   ?? null,
   }));
 
-  // Annotate redundant-overall suggestions (advisory; the human confirms in the picker).
-  // Reads the redundant_overall_suggestions view: a sheet titled "...OVERALL" that has
-  // enlarged segment siblings (e.g. SE02-01 with SE02-01AB / SE02-01C / ...) would
-  // double-count if tallied, so flag it for a one-click skip. Non-critical — never blocks.
-  try {
-    const { data: ros } = await supabase
-      .from("redundant_overall_suggestions")
-      .select("page_id, suggestion")
-      .eq("project_id", project_id);
-    const sug = new Map((ros ?? []).map(r => [r.page_id, r.suggestion]));
-    for (const pg of projectPages) {
-      if (sug.has(pg.page_id)) {
-        pg.suggest_skip   = true;
-        pg.suggest_reason = sug.get(pg.page_id);
-      }
-    }
-  } catch (_) { /* suggestions are non-critical */ }
-
   // Flatten device instances — lift nested device_types fields
   const instances = (instancesRes.data ?? []).map(inst => ({
     ...inst,

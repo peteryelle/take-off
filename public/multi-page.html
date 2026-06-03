@@ -802,7 +802,7 @@ async function loadPDF(input) {
       fetch(`${base()}/api/projects`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          action: 'update_project', id: projectId,
+          action: 'update_project', project_id: projectId,
           pdf_filename: file.name, pdf_page_count: totalPages
         })
       }).catch(() => {});
@@ -859,6 +859,25 @@ async function renderThumbnails() {
     sel.onclick  = (e) => e.stopPropagation();
     sel.onchange = (e) => { e.stopPropagation(); setPageRole(n, sel.value); };
     col.appendChild(sel);
+
+    // Redundant-overall suggestion — the takeoff-summary view flags whole-floor
+    // OVERALL sheets that have drawing-number segment-siblings (e.g. SE02-01 →
+    // SE02-01A/B/…). Counting them double-counts cameras already tallied on the
+    // segment sheets. This is a suggestion, never an auto-skip: one click sets the
+    // role to 'skip', syncs the picker, and dismisses the badge.
+    if (pageCache[n]?.suggest_skip) {
+      const skipBadge = document.createElement('button');
+      skipBadge.textContent = '⚠ redundant overall — skip?';
+      skipBadge.title = pageCache[n]?.suggest_reason ?? 'redundant overall — suggest skip';
+      skipBadge.style.cssText = 'font-size:9px; line-height:1.2; padding:2px 4px; background:#2a1a00; border:1px solid #7a5000; color:#f0c040; border-radius:3px; cursor:pointer; width:72px; white-space:normal;';
+      skipBadge.onclick = (e) => {
+        e.stopPropagation();
+        setPageRole(n, 'skip');
+        sel.value = 'skip';
+        skipBadge.remove();
+      };
+      col.appendChild(skipBadge);
+    }
 
     grid.appendChild(col);
   }
@@ -971,14 +990,26 @@ async function openPageReview(n) {
   await prRender();
 }
 
+// Serialize pdf.js renders on a SHARED canvas: cancel any in-flight render on this
+// canvas before starting a new one, so rapid re-renders (carousel nav, re-open, pin
+// dialogs) don't trip "Cannot use the same canvas during multiple render() operations".
+async function renderToCanvas(cv, page, vp) {
+  if (cv.__renderTask) { try { cv.__renderTask.cancel(); } catch (_) {} }
+  cv.width = vp.width; cv.height = vp.height;
+  const task = page.render({ canvasContext: cv.getContext('2d'), viewport: vp });
+  cv.__renderTask = task;
+  try { await task.promise; }
+  catch (e) { if (e?.name !== 'RenderingCancelledException') throw e; }
+  finally { if (cv.__renderTask === task) cv.__renderTask = null; }
+}
+
 async function prRender() {
   if (!pdfDoc || prPage == null) return;
   const cv   = document.getElementById('pr-canvas');
   const wrap = document.getElementById('pr-wrap');
   const page = await pdfDoc.getPage(prPage);
   const vp   = page.getViewport({ scale: 2.0 });
-  cv.width = vp.width; cv.height = vp.height;
-  await page.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+  await renderToCanvas(cv, page, vp);
   // Fit the whole page into the viewport on (re)load; user can scroll to zoom in.
   const ww = wrap.offsetWidth || window.innerWidth * 0.94;
   const wh = wrap.offsetHeight || window.innerHeight * 0.74;
@@ -1771,11 +1802,9 @@ async function openPinModal(trName, targetPageNum) {
   // Render at 2.5x for sharp zoom
   const pdfPage = await pdfDoc.getPage(pageNum);
   const vp      = pdfPage.getViewport({ scale: 2.5 });
-  cv.width      = vp.width;
-  cv.height     = vp.height;
   pinCanvasNativeW = vp.width;
   pinCanvasNativeH = vp.height;
-  await pdfPage.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+  await renderToCanvas(cv, pdfPage, vp);
 
   // Open at fit-to-view so the WHOLE drawing is visible, then the user scrolls in to
   // the room and clicks. (Centering on the existing pin at high zoom pushed the sheet
@@ -2502,8 +2531,8 @@ async function openLeaderModal(pageNum) {
   document.getElementById('lc-title').textContent = `Mark 1:N Leader Clusters — pg${pageNum}`;
   const pdfPage = await pdfDoc.getPage(pageNum);
   const vp = pdfPage.getViewport({ scale: 2.5 });
-  cv.width = vp.width; cv.height = vp.height; lcCW = vp.width; lcCH = vp.height;
-  await pdfPage.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+  lcCW = vp.width; lcCH = vp.height;
+  await renderToCanvas(cv, pdfPage, vp);
   lcZoom = Math.min((wrap.offsetWidth || window.innerWidth*0.88) / vp.width, 1.0);
   lcApplyTransform();
 
@@ -2727,6 +2756,8 @@ async function restoreFromSupabase(pid) {
         pageCache[pg.eval_page_num] = {
           pageId: pg.page_id,
           page_role: pg.page_role ?? null,
+          suggest_skip:   pg.suggest_skip ?? false,
+          suggest_reason: pg.suggest_reason ?? null,
           passBResult: {
             page_id:     pg.page_id,
             sheet_title: pg.sheet_title ?? pg.drawing_number ?? `Page ${pg.eval_page_num}`,

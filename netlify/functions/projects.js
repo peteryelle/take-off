@@ -200,14 +200,17 @@ export default async function handler(req) {
 
     // ── Action: update an existing project (e.g. mark as library) ──
     if (action === "update_project") {
-      const { project_id, is_library, library_name, name, number, client } = body;
+      const { id, is_library, library_name, name, number, client, pdf_filename, pdf_page_count } = body;
+      const project_id = body.project_id ?? id;   // accept either key
       if (!project_id) return err("project_id required");
       const patch = { updated_at: new Date() };
-      if (is_library   !== undefined) patch.is_library   = !!is_library;
-      if (library_name !== undefined) patch.library_name = library_name || null;
-      if (name         !== undefined) patch.name         = name;
-      if (number       !== undefined) patch.number       = number;
-      if (client       !== undefined) patch.client       = client;
+      if (is_library     !== undefined) patch.is_library     = !!is_library;
+      if (library_name   !== undefined) patch.library_name   = library_name || null;
+      if (name           !== undefined) patch.name           = name;
+      if (number         !== undefined) patch.number         = number;
+      if (client         !== undefined) patch.client         = client;
+      if (pdf_filename   !== undefined) patch.pdf_filename    = pdf_filename;
+      if (pdf_page_count !== undefined) patch.pdf_page_count  = pdf_page_count;
 
       const { data, error } = await supabase
         .from("projects")

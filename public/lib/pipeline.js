@@ -119,10 +119,18 @@ export function buildDeviceList(textItems = [], deviceTypes = [], scheduleCfg = 
   const catalog = {};
   for (const dt of deviceTypes) {
     const cfg = dt.detection_config;
-    if (!cfg || !cfg.anchor) continue;
-    const type = cfg.type || dt.name;
-    typeMap[type] = dt;
-    catalog[type] = { sources: Array.isArray(cfg.sources) && cfg.sources.length ? cfg.sources : ['label'] };
+    if (!cfg) continue;
+    if (cfg.anchor) {
+      const type = cfg.type || dt.name;
+      typeMap[type] = dt;
+      catalog[type] = { sources: Array.isArray(cfg.sources) && cfg.sources.length ? cfg.sources : ['label'] };
+    }
+    // Symbol types (e.g. cameras) carry a symbol_template and no anchor. Map the
+    // per-type token back to the device_types row so device_type_id resolves
+    // downstream (the BOM keys off it). lens_tokens is shared across the camera
+    // types, so each type declares the single token it represents via symbol_token.
+    const tok = cfg.symbol_token || cfg.symbol_template?.symbol_token;
+    if (tok) typeMap[tok] = dt;
   }
 
   const labelInstances = detectAll(textItems, deviceTypes, opts);
