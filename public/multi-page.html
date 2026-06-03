@@ -2143,6 +2143,7 @@ async function runBatch() {
                 res = await V.locateVector(pdfPage, pdfjsLib.OPS, textCenters, step.group,
                   { extractCameraBlobs: V.extractCameraBlobs },
                   { vpW: W, vpH: H });
+                console.log(`[vector] pg${pageNum}: raw=${res.n_subpaths_raw} kept=${res.n_subpaths_kept} blobs=${res.blob_count} instances=${res.instances?.length ?? 0} (frame ${W}x${H}, bodyArea ${step.group?.body_area ?? 2e-5})`);
               } catch (e) { console.warn('[vector locate] pg' + pageNum, e.message); }
               if (res.degraded) {                       // found nothing -> LLM for each type in the group
                 for (const id of step.device_type_ids) symbolInstances.push(...await llmLocate(byId[id]));
