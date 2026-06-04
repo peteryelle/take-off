@@ -76,6 +76,38 @@ console.log('QTS fixture (prefix UIN tokens -> by-type):');
   assert(!inst.some((d) => d.uin === 'AD' || d.uin === 'ADDITIONAL'), 'bare "AD"/"ADDITIONAL" rejected (dash required)');
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// QTS page 8: FP (fire panel) + ALM (alarm) prefix UIN tokens. Gate:
+// FP=12, ALM=21. Bare prefixes and chip labels (FP, FP*, ALM) must NOT be
+// counted — they appear in flaggedCandidates instead.
+// ─────────────────────────────────────────────────────────────────────────
+console.log('QTS page 8 (FP=12, ALM=21, flagged candidates):');
+{
+  const items = [];
+  for (let k = 1; k <= 12; k++) items.push(ti(`FP-${1000 + k}`, (k % 6) / 6, (k % 4) / 4));
+  for (let k = 1; k <= 21; k++) items.push(ti(`ALM-${2000 + k}`, (k % 7) / 7, 0.5 + (k % 4) / 8));
+  // distractors: bare prefix, chip label, unrelated word
+  items.push(ti('FP', 0.8, 0.1), ti('FP*', 0.82, 0.1), ti('ALM', 0.85, 0.1), ti('ALARM', 0.9, 0.1));
+  const deviceTypes = [
+    { name: 'FP', detection_config: { type: 'FP', anchor: 'FP', anchor_mode: 'regex', uin_pattern: '^FP-[0-9A-Z]+$', sources: ['label', 'symbol'], families: [] } },
+    { name: 'ALM', detection_config: { type: 'ALM', anchor: 'ALM', anchor_mode: 'regex', uin_pattern: '^ALM-[0-9A-Z]+$', sources: ['label', 'symbol'], families: [] } },
+  ];
+  const inst = detectAll(items, deviceTypes);
+  const byType = countBy(inst, (d) => d.type);
+  assert(byType.FP === 12, `FP count == 12 (got ${byType.FP || 0})`);
+  assert(byType.ALM === 21, `ALM count == 21 (got ${byType.ALM || 0})`);
+  assert(inst.length === 33, `total instances == 33 (got ${inst.length})`);
+  assert(inst.every((d) => d.uin && /-/.test(d.uin)), 'every instance carries full UIN with dash');
+  assert(!inst.some((d) => d.uin === 'FP' || d.uin === 'ALM'), 'bare prefixes not counted as instances');
+  // flagged candidates: bare prefix tokens that matched the anchor but failed uin_pattern
+  const flagged = inst.flaggedCandidates || [];
+  assert(flagged.length >= 2, `flagged candidates include prefix-only tokens (got ${flagged.length})`);
+  assert(flagged.some((f) => f.token === 'FP'), 'bare FP flagged as prefix_only');
+  assert(flagged.some((f) => f.token === 'ALM'), 'bare ALM flagged as prefix_only');
+  assert(flagged.some((f) => f.token === 'FP*'), 'FP* chip flagged as prefix_only');
+  assert(!flagged.some((f) => f.token === 'ALARM'), 'ALARM not flagged (does not start with ALM)');
+}
+
 // ── family attach: nearest-anchor only, anchor token excluded, no neighbor bleed ──
 console.log('Family attach (anchor exclusion + nearest-anchor):');
 {

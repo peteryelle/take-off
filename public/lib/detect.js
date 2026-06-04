@@ -47,11 +47,19 @@ export function detectLabels(textItems = [], config = {}, opts = {}) {
   }
 
   // Find anchor tokens — each is exactly one device.
+  // When uin_pattern is set, also collect prefix-matching tokens that fail the
+  // pattern (bare "FP", "FP*" chips) as flagged candidates — they are NOT counted.
   const anchors = [];
+  const flaggedCandidates = [];
+  const hasUinPattern = !!(config.uin_pattern && mode === 'regex');
+  const prefix = hasUinPattern ? String(config.anchor).trim().toUpperCase() : null;
   for (const t of textItems) {
     const s = String(t.str).trim().toUpperCase();
     if (!s) continue;
-    if (matches(s)) anchors.push({ s, x: t.cx_norm, y: t.cy_norm });
+    if (matches(s)) { anchors.push({ s, x: t.cx_norm, y: t.cy_norm }); }
+    else if (hasUinPattern && s.startsWith(prefix)) {
+      flaggedCandidates.push({ token: s, type, x: t.cx_norm, y: t.cy_norm, flag: 'prefix_only' });
+    }
   }
 
   // Attach family codes to anchors by NEAREST anchor (not every anchor in radius),
@@ -78,7 +86,7 @@ export function detectLabels(textItems = [], config = {}, opts = {}) {
     if (bi >= 0) bucket[bi].push(f.s);
   }
 
-  return anchors.map((a, i) => {
+  const result = anchors.map((a, i) => {
     const codes = [...new Set(bucket[i])].filter((c) => c !== a.s);  // dedupe + drop the anchor token
     const fams = [...new Set(codes.map(leadAlpha))];
     return {
@@ -92,17 +100,23 @@ export function detectLabels(textItems = [], config = {}, opts = {}) {
       codes,
     };
   });
+  if (flaggedCandidates.length) result.flaggedCandidates = flaggedCandidates;
+  return result;
 }
 
 /** Run the detector across every configured device type and concatenate. */
 export function detectAll(textItems = [], deviceTypes = [], opts = {}) {
   const out = [];
+  const flagged = [];
   for (const dt of deviceTypes) {
     const cfg = dt.detection_config;
     if (!cfg || !cfg.anchor) continue; // un-migrated types are skipped (need discovery/backfill)
     const merged = { ...cfg, type: cfg.type || dt.name };
-    out.push(...detectLabels(textItems, merged, opts));
+    const instances = detectLabels(textItems, merged, opts);
+    out.push(...instances);
+    if (instances.flaggedCandidates) flagged.push(...instances.flaggedCandidates);
   }
+  if (flagged.length) out.flaggedCandidates = flagged;
   return out;
 }
 

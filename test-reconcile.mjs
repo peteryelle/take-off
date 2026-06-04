@@ -107,5 +107,45 @@ console.log('codes + leader flag:');
     `8 siblings inherit the base codes (got ${sib.length})`);
 }
 
+// ── QTS page 8: FP=12 + ALM=21 label-only reconcile + flag coverage ─────
+console.log('QTS page 8 (FP=12 + ALM=21, label UIN reconcile):');
+{
+  const labelInstances = [];
+  for (let k = 1; k <= 12; k++) labelInstances.push({ uin: `FP-${1000 + k}`, type: 'FP', x: (k % 6) / 6, y: (k % 4) / 4 });
+  for (let k = 1; k <= 21; k++) labelInstances.push({ uin: `ALM-${2000 + k}`, type: 'ALM', x: (k % 7) / 7, y: 0.5 + (k % 4) / 8 });
+  const catalog = { FP: { sources: ['label', 'symbol'] }, ALM: { sources: ['label', 'symbol'] } };
+  const devices = reconcile(catalog, labelInstances, [], []);
+  const byType = countBy(devices, (d) => d.type);
+  assert(byType.FP === 12, `FP count == 12 (got ${byType.FP || 0})`);
+  assert(byType.ALM === 21, `ALM count == 21 (got ${byType.ALM || 0})`);
+  assert(devices.length === 33, `total devices == 33 (got ${devices.length})`);
+  assert(devices.every((d) => d.uin && /-/.test(d.uin)), 'every device carries its full UIN');
+  assert(devices.every((d) => d.xy_source === 'label'), 'all placed by label');
+}
+
+// ── QTS page 8: schedule-backed with unmatched plate + unscheduled UIN ──
+console.log('QTS page 8 (unmatched plate + unscheduled UIN flags):');
+{
+  const scheduleRows = [], labelInstances = [];
+  for (let k = 1; k <= 12; k++) {
+    const uin = `FP-${1000 + k}`;
+    scheduleRows.push({ uin, type: 'FP', attributes: {} });
+    labelInstances.push({ uin, type: 'FP', x: (k % 6) / 6, y: (k % 4) / 4 });
+  }
+  // unmatched plate: label UIN not in schedule
+  labelInstances.push({ uin: 'FP-9999', type: 'FP', x: 0.9, y: 0.9 });
+  // unscheduled UIN: schedule row with no label match
+  scheduleRows.push({ uin: 'FP-8888', type: 'FP', attributes: {} });
+  const catalog = { FP: { sources: ['schedule', 'label', 'symbol'] } };
+  const devices = reconcile(catalog, labelInstances, [], scheduleRows);
+  assert(devices.length === 14, `14 devices: 12 matched + 1 unmatched plate + 1 unscheduled (got ${devices.length})`);
+  const unmatched = devices.filter((d) => d.flags.includes('not_in_schedule'));
+  assert(unmatched.length === 1 && unmatched[0].uin === 'FP-9999', 'unmatched plate FP-9999 flagged not_in_schedule');
+  const unplaced = devices.filter((d) => d.flags.includes('needs_placement'));
+  assert(unplaced.length === 1 && unplaced[0].uin === 'FP-8888', 'unscheduled UIN FP-8888 flagged needs_placement');
+  const matched = devices.filter((d) => d.confidence === 'high');
+  assert(matched.length === 12, `12 matched devices have confidence high (got ${matched.length})`);
+}
+
 console.log(failures === 0 ? '\nALL GATES PASS' : `\n${failures} ASSERTION(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

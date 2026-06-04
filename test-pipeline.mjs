@@ -112,5 +112,38 @@ console.log('VA end-to-end (label-only, dupes collapse -> 93):');
   assert(devices.every((d) => routedFt(d) != null), 'distances compute on the reconciled list');
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// QTS page 8: FP=12 + ALM=21, label-only (no schedule). Bare prefix
+// tokens and chip labels rejected; flaggedCandidates surfaced.
+// ─────────────────────────────────────────────────────────────────────────
+console.log('QTS page 8 end-to-end (FP=12 + ALM=21, label-only):');
+{
+  const items = [];
+  for (let k = 1; k <= 12; k++) items.push(ti(`FP-${1000 + k}`, 0.1 + (k % 6) * 0.12, 0.1 + (k % 4) * 0.08));
+  for (let k = 1; k <= 21; k++) items.push(ti(`ALM-${2000 + k}`, 0.1 + (k % 7) * 0.11, 0.5 + (k % 4) * 0.08));
+  // distractors
+  items.push(ti('FP', 0.8, 0.1), ti('FP*', 0.82, 0.1), ti('ALM', 0.85, 0.1), ti('ALARM', 0.9, 0.1));
+
+  const deviceTypes = [
+    { id: 'dt_FP', name: 'FP', legend_id: 'LEG_FP',
+      detection_config: { type: 'FP', anchor: 'FP', anchor_mode: 'regex', uin_pattern: '^FP-[0-9A-Z]+$', sources: ['label', 'symbol'], families: [] } },
+    { id: 'dt_ALM', name: 'ALM', legend_id: 'LEG_ALM',
+      detection_config: { type: 'ALM', anchor: 'ALM', anchor_mode: 'regex', uin_pattern: '^ALM-[0-9A-Z]+$', sources: ['label', 'symbol'], families: [] } },
+  ];
+
+  const { devices, labelInstances } = buildDeviceList(items, deviceTypes, { present: false });
+  assert(labelInstances.length === 33, `detector found 33 UIN labels (got ${labelInstances.length})`);
+  assert(devices.length === 33, `reconciled to 33 devices (got ${devices.length})`);
+  const byType = countBy(devices, (d) => d.type);
+  assert(byType.FP === 12, `FP == 12 (got ${byType.FP || 0})`);
+  assert(byType.ALM === 21, `ALM == 21 (got ${byType.ALM || 0})`);
+  assert(devices.every((d) => d.uin && /-/.test(d.uin)), 'every device carries its full UIN');
+  // flaggedCandidates pass through from detectAll
+  const flagged = labelInstances.flaggedCandidates || [];
+  assert(flagged.length >= 3, `flaggedCandidates surfaced (got ${flagged.length})`);
+  assert(flagged.some((f) => f.token === 'FP') && flagged.some((f) => f.token === 'FP*'),
+    'bare FP and FP* chip flagged');
+}
+
 console.log(failures === 0 ? '\nALL GATES PASS' : `\n${failures} ASSERTION(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

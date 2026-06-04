@@ -126,6 +126,7 @@ export default async function handler(req) {
       dev, dt,
       row: {
         page_id, device_type_id: dt.id ?? null, detection_method: "reconciled",
+        uin: dev.uin || null,
         x_norm: hasXY ? parseFloat(cx.toFixed(4)) : null,
         y_norm: hasXY ? parseFloat(cy.toFixed(4)) : null,
         x_ft: xFt, y_ft: yFt,
