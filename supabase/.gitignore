@@ -1,0 +1,4 @@
+# Supabase CLI local artifacts — not part of the tracked migration baseline.
+.branches
+.temp
+.env

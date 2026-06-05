@@ -11,6 +11,7 @@
 //   x_norm,         -- null if off_sheet
 //   y_norm,
 //   stub_ft,        -- additional fixed distance (off-sheet runs)
+//   region_id,      -- schematic (page_regions) this TR lives in; null = off-sheet/unscoped
 //   note
 // }
 // ─────────────────────────────────────────────────────────────────
@@ -41,7 +42,7 @@ export default async function handler(req) {
     let body;
     try { body = await req.json(); } catch { return err("Invalid JSON"); }
 
-    const { project_id, page_id, name, source, x_norm, y_norm, stub_ft, note } = body;
+    const { project_id, page_id, name, source, x_norm, y_norm, stub_ft, region_id, note } = body;
     if (!project_id || !name || !source) return err("project_id, name and source required");
 
     const row = {
@@ -54,6 +55,9 @@ export default async function handler(req) {
       stub_ft:  stub_ft ?? 0,
       note:     note    ?? null
     };
+    // Only set region_id when the caller supplies it, so a coords-only update
+    // (e.g. an exit pin) never nulls an existing schematic link on upsert.
+    if (region_id !== undefined) row.region_id = region_id ?? null;
 
     const { data, error } = await supabase
       .from("demarcs")
