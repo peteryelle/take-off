@@ -95,7 +95,39 @@ export default async function handler(req) {
     // Overrides come from the body when the client just marked them (and get persisted
     // below), else fall back to whatever was saved on the page. undefined = use saved.
     const leaderOv = (leader_overrides !== undefined) ? leader_overrides : (page.leader_overrides ?? []);
-    const { devices: reconciled, typeMap } = buildDeviceList(text_items, deviceTypes, page.schedule, {}, symbol_instances || [], leaderOv);
+
+    // ── seed reconcile from the persisted schedule (authoritative device list) ──
+    // Only types configured with 'schedule' in their detection sources are seeded,
+    // so unconfigured/uncounted classes present in the schedule never become phantom
+    // devices. Plan labels join these by UIN; a scheduled type's plan label with no
+    // matching schedule UIN is surfaced by reconcile as not_in_schedule (e.g. ALM-1100B).
+    const scheduledTypeByPrefix = new Map();   // anchor prefix (UPPER) -> reconcile type key
+    for (const dt of deviceTypes) {
+      const cfg = dt.detection_config || {};
+      if (cfg.anchor && Array.isArray(cfg.sources) && cfg.sources.includes("schedule")) {
+        scheduledTypeByPrefix.set(String(cfg.anchor).trim().toUpperCase(), cfg.type || dt.name);
+      }
+    }
+    let seededScheduleRows = [];
+    if (scheduledTypeByPrefix.size) {
+      const { data: schedRows, error: schedErr } = await supabase
+        .from("schedule_rows")
+        .select("uin, device_prefix, detail_sheet, cable_dest_1, cable_dest_2")
+        .eq("page_id", page_id);
+      if (schedErr) console.warn("[schedule_rows load]", schedErr.message);
+      seededScheduleRows = (schedRows || []).map((r) => {
+        const prefix = String(r.device_prefix || (r.uin || "").split("-")[0] || "").trim().toUpperCase();
+        const type = scheduledTypeByPrefix.get(prefix);
+        if (!type) return null;                    // unconfigured/uncounted type -> not seeded
+        const cable_dest = [r.cable_dest_1, r.cable_dest_2].filter(Boolean);
+        return { uin: String(r.uin).trim().toUpperCase(), type,
+                 attributes: { cable_dest, detail_sheet: r.detail_sheet || null } };
+      }).filter(Boolean);
+    }
+
+    const { devices: reconciled, typeMap } = buildDeviceList(
+      text_items, deviceTypes, page.schedule,
+      { scheduleRows: seededScheduleRows }, symbol_instances || [], leaderOv);
 
     const instances = reconciled.map((dev) => {
       const dt = typeMap[dev.type] || {};
@@ -131,6 +163,7 @@ export default async function handler(req) {
         dev, dt,
         row: {
           page_id, device_type_id: dt.id ?? null, detection_method: "reconciled",
+          uin: dev.uin ?? null,
           x_norm: hasXY ? parseFloat(cx.toFixed(4)) : null,
           y_norm: hasXY ? parseFloat(cy.toFixed(4)) : null,
           x_ft: xFt, y_ft: yFt,

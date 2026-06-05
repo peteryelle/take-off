@@ -146,7 +146,15 @@ export function buildDeviceList(textItems = [], deviceTypes = [], scheduleCfg = 
   let archetype = 'label_stamp';
   let routeInfo = null;
   let labelsForReconcile = labelInstances;
-  if (scheduleCfg && scheduleCfg.present !== false) {
+  if (Array.isArray(opts.scheduleRows) && opts.scheduleRows.length) {
+    // Host seeded the authoritative device list directly from the schedule_rows
+    // table, bypassing the text re-parse. reconcile counts these as authoritative
+    // for scheduled types and flags plan labels whose UIN isn't among them as
+    // not_in_schedule. Takes precedence over a text-parsed scheduleCfg.
+    archetype = 'device_list';
+    scheduleRows = opts.scheduleRows;
+    routeInfo = { archetype, source: 'seeded_rows', count: scheduleRows.length };
+  } else if (scheduleCfg && scheduleCfg.present !== false) {
     archetype = 'device_list';
     scheduleRows = parseSchedule(textItems, scheduleCfg, opts);
   } else {

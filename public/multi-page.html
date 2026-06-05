@@ -1455,68 +1455,80 @@ function renderTRMap(trs) {
   document.getElementById('tr-map-section').style.display = 'block';
 
   // Summary bar
-  const onSheet  = trs.filter(t => t.status === 'on_sheet' || t.on_sheet);
-  const offSheet = trs.filter(t => t.status !== 'on_sheet' && !t.on_sheet);
-  const needPins = trs.filter(t => t.on_sheet && (t.pages ?? []).some(p =>
-    p.eval_page_num !== t.demarc_page_num && !t.extra_pins?.[p.eval_page_num]
-  ));
+  const onSheet      = trs.filter(t => t.on_sheet);
+  const offSheet     = trs.filter(t => !t.on_sheet);
+  const schematicIds = [...new Set(trs.map(t => t.schematic_id).filter(v => v != null))];
   document.getElementById('tr-summary-text').textContent =
-    `${trs.length} TR room${trs.length !== 1 ? 's' : ''} · ${onSheet.length} on-sheet · ${offSheet.length} off-sheet`;
+    `${trs.length} TR room${trs.length !== 1 ? 's' : ''} · ${schematicIds.length} schematic${schematicIds.length !== 1 ? 's' : ''} · ${onSheet.length} on-sheet · ${offSheet.length} off-sheet`;
+  const noDemarc = trs.filter(t => !t.demarc_id);
   document.getElementById('tr-warnings-text').textContent =
-    needPins.length > 0 ? `⚠ ${needPins.length} TR${needPins.length > 1 ? 's' : ''} need cross-floor exit pins` : '';
+    noDemarc.length > 0 ? `⚠ ${noDemarc.length} TR${noDemarc.length > 1 ? 's' : ''} need a demarc + pin` : '';
 
+  // No schematics anywhere (legacy / non-schedule project) → flat list, as before.
+  if (!schematicIds.length) {
+    for (const tr of trs) renderTRCard(tr, container);
+    return;
+  }
+
+  // Group page → schematic → TR. null-schematic TRs go in a trailing off-sheet group.
+  const groups = new Map();   // schematic_id -> { label, page, pageId, trs:[] }
+  const offSheetTrs = [];
   for (const tr of trs) {
-    const isOn     = tr.status === 'on_sheet' || tr.on_sheet;
+    if (tr.schematic_id == null) { offSheetTrs.push(tr); continue; }
+    if (!groups.has(tr.schematic_id)) {
+      groups.set(tr.schematic_id, {
+        label:  tr.schematic || `Schematic ${tr.schematic_id}`,
+        page:   tr.demarc_page_num,
+        pageId: tr.demarc_page_id,
+        trs:    []
+      });
+    }
+    groups.get(tr.schematic_id).trs.push(tr);
+  }
+
+  for (const [sid, g] of groups) {
+    const primary = g.trs.find(t => t.is_primary);
+    const runs    = g.trs.reduce((s, t) => s + (t.runs ?? 0), 0);
+    const header  = document.createElement('div');
+    header.className = 'schematic-header';
+    header.style.cssText = 'display:flex; align-items:center; gap:10px; margin:14px 0 6px; padding:6px 10px; background:#0a0a0a; border-left:3px solid #3a7a3a; border-radius:3px;';
+    header.innerHTML = `
+      <span style="color:#cfcfcf; font-size:13px; text-transform:uppercase; letter-spacing:1px;">▣ ${g.label}</span>
+      ${g.page ? `<span style="color:#888; font-size:12px;">pg${g.page}</span>` : ''}
+      ${primary ? `<span class="badge on" style="font-size:10px;">primary: ${primary.name}</span>` : ''}
+      <span style="color:#666; font-size:12px;">${runs} run${runs !== 1 ? 's' : ''}</span>
+      <button class="info" style="font-size:11px; padding:3px 10px; margin-left:auto;"
+        onclick="addTRRoom(${sid}, ${g.page ?? null}, '${g.pageId ?? ''}')">+ Add TR room</button>`;
+    container.appendChild(header);
+
+    // primary first, then extras
+    const ordered = [...g.trs].sort((a, b) => (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0));
+    for (const tr of ordered) renderTRCard(tr, container);
+  }
+
+  if (offSheetTrs.length) {
+    const header = document.createElement('div');
+    header.className = 'schematic-header';
+    header.style.cssText = 'display:flex; align-items:center; gap:10px; margin:14px 0 6px; padding:6px 10px; background:#0a0a0a; border-left:3px solid #7a5000; border-radius:3px;';
+    header.innerHTML = `
+      <span style="color:#f0c040; font-size:13px; text-transform:uppercase; letter-spacing:1px;">⚠ Off-sheet / unscoped</span>
+      <span style="color:#666; font-size:12px;">${offSheetTrs.length} TR${offSheetTrs.length !== 1 ? 's' : ''} — pin on home page</span>`;
+    container.appendChild(header);
+    for (const tr of offSheetTrs) renderTRCard(tr, container);
+  }
+}
+
+// Render one TR card: header + Step 1 (demarc page) + Step 2 (pin) + served floors.
+// Pin coords come from the schedule contract / demarcs (tr.pin_x / tr.demarc_x);
+// no Pass B pageCache inference here.
+function renderTRCard(tr, container) {
+  {
+    const isOn     = tr.on_sheet;
     const location = [tr.building, tr.floor, tr.area].filter(Boolean).join(' · ')
       || (tr.demarc_page_num ? `pg${tr.demarc_page_num}` : '— off sheet —');
 
-    // ── Auto-infer host page from pageCache ─────────────────────────
-    // If pass-scan.js couldn't determine the host (demarc_page_num null
-    // or on_sheet false), scan pageCache for the first page in this TR's
-    // served list that has Pass B demarcation coords → use it as host.
-    if (!tr.on_sheet || (tr.pin_x ?? tr.demarc_x) == null) {
-      // Try existing demarc_page_num first
-      let hostPage = tr.demarc_page_num
-        ? pageCache[tr.demarc_page_num]?.passBResult?.demarcation
-        : null;
-
-      // If no coords on stated demarc page, scan all served pages for coords
-      if (!(hostPage?.x != null)) {
-        for (const pg of (tr.pages ?? [])) {
-          const d = pageCache[pg.eval_page_num]?.passBResult?.demarcation;
-          if (d?.found && d.x != null && d.y != null) {
-            hostPage = d;
-            tr.demarc_page_num = pg.eval_page_num;
-            tr.building        = pg.building ?? tr.building;
-            tr.floor           = pg.floor    ?? tr.floor;
-            break; // first page with coords wins
-          }
-        }
-      }
-
-      if (hostPage?.x != null) {
-        tr.demarc_x       = hostPage.x;
-        tr.demarc_y       = hostPage.y;
-        tr.pin_x          = hostPage.x;
-        tr.pin_y          = hostPage.y;
-        tr.on_sheet       = true;
-        tr.status         = 'on_sheet';
-        tr.host_confirmed = true;
-      }
-    }
-
-    // Coords present but pin not explicitly set — sync them
-    if (tr.demarc_page_num && (tr.pin_x ?? tr.demarc_x) == null) {
-      const cached = pageCache[tr.demarc_page_num]?.passBResult?.demarcation;
-      if (cached?.found && cached.x != null) {
-        tr.demarc_x = cached.x; tr.demarc_y = cached.y;
-        tr.pin_x    = cached.x; tr.pin_y    = cached.y;
-      }
-    }
-
     const hasDemarcPin = (tr.pin_x ?? tr.demarc_x) != null;
     const servedPages  = (tr.pages ?? []).filter(p => p.eval_page_num !== tr.demarc_page_num);
-    const allPinned    = servedPages.length > 0 && servedPages.every(p => tr.extra_pins?.[p.eval_page_num]);
 
     // ── Card shell ────────────────────────────────────────────────
     const card = document.createElement('div');
@@ -1712,6 +1724,29 @@ function renderTRMap(trs) {
       body.appendChild(step);
     }
   }
+}
+
+// Add a new (non-primary) TR room to a schematic: name it, seed a trMap entry
+// scoped to the schematic, then place its pin (confirmPin POSTs the region_id).
+async function addTRRoom(schematicId, pageNum, pageId) {
+  const name = (prompt('New TR room name (e.g. SDF0140):') || '').trim();
+  if (!name) return;
+  if (trMap[name]) { alert(`TR "${name}" already exists.`); return; }
+  trMap[name] = {
+    name,
+    on_sheet:        true,
+    region_id:       schematicId,
+    schematic_id:    schematicId,
+    is_primary:      false,
+    runs:            0,
+    demarc_page_num: pageNum ?? null,
+    demarc_page_id:  pageId || null,
+    pages:           pageNum != null ? [{ eval_page_num: pageNum }] : [],
+    extra_pins:      {},
+    source:          'user_pin',
+    status:          'on this page'
+  };
+  await openPinModal(name, pageNum ?? undefined);   // confirmPin POSTs region_id
 }
 
 // Expand a collapsed floor row (override after auto-suggest)
@@ -1914,6 +1949,8 @@ async function confirmPin() {
   const jumperFt = parseFloat(document.getElementById('pin-jumper-ft').value) || 0;
   const { trName, xNorm, yNorm, pageNum } = pinTarget;
   const pageId = pageCache[pageNum]?.pageId;
+  // Schematic this TR belongs to (so the demarc row carries its region link).
+  const regionId = trMap[trName]?.region_id ?? trMap[trName]?.schematic_id ?? null;
 
   try {
     // For extra pins (exit points on served pages), store with page-scoped name
@@ -1930,7 +1967,8 @@ async function confirmPin() {
         source:     'user_pin',
         x_norm:     xNorm,
         y_norm:     yNorm,
-        stub_ft:    jumperFt
+        stub_ft:    jumperFt,
+        region_id:  regionId
       })
     });
     const j = await r.json();
@@ -1973,10 +2011,11 @@ async function lockDemarcs() {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           project_id: projectId, name: trName,
-          source: tr.status === 'on_sheet' ? 'auto' : 'off_sheet',
+          source: tr.on_sheet ? 'auto' : 'off_sheet',
           x_norm: tr.pin_x ?? tr.demarc_x ?? null,
           y_norm: tr.pin_y ?? tr.demarc_y ?? null,
-          stub_ft: tr.stub_ft
+          stub_ft: tr.stub_ft,
+          region_id: tr.region_id ?? tr.schematic_id ?? null
         })
       });
     }
@@ -2742,9 +2781,11 @@ async function restoreFromSupabase(pid) {
     const j = await r.json();
     if (!r.ok) { setStatus('project-status', 'Restore error: ' + j.error, 'err'); return; }
 
-    const projPages = j.project_pages ?? [];
-    const demarcs   = j.demarcs      ?? [];
-    const instances = j.device_instances ?? []; // reconcile merges in Step 5
+    const projPages   = j.project_pages ?? [];
+    const demarcs     = j.demarcs      ?? [];
+    const pageRegions = j.page_regions ?? [];   // schematics (page → 1+ regions)
+    const regionById  = new Map(pageRegions.map(rg => [rg.id, rg]));
+    const instances   = j.device_instances ?? []; // reconcile merges in Step 5
 
     // ── Restore selected pages ────────────────────────────────────
     // Populate pageCache for every persisted page (so scale/demarc/TR are ready the
@@ -2796,7 +2837,20 @@ async function restoreFromSupabase(pid) {
         }
       } else {
         trMap[d.name] = trMap[d.name] ?? {};
-        const pageForDemarc = projPages.find(p => p.page_id === d.page_id);
+        // The TR's schematic (region) determines its home page; fall back to the
+        // page the pin was placed on for legacy / unscoped demarcs.
+        const region     = d.region_id != null ? regionById.get(d.region_id) : null;
+        const homePageId = region?.page_id ?? d.page_id;
+        const pageForDemarc = projPages.find(p => p.page_id === homePageId);
+        // Served pages: legacy tr_name match, else at least the home page itself.
+        let pages = projPages
+          .filter(p => p.tr_name === d.name)
+          .map(p => ({ page_id: p.page_id, eval_page_num: p.eval_page_num,
+                       building: p.building, floor: p.level ?? p.floor }));
+        if (!pages.length && pageForDemarc) {
+          pages = [{ page_id: homePageId, eval_page_num: pageForDemarc.eval_page_num,
+                     building: pageForDemarc.building, floor: pageForDemarc.level ?? pageForDemarc.floor }];
+        }
         Object.assign(trMap[d.name], {
           name:            d.name,
           demarc_id:       d.id,
@@ -2806,13 +2860,16 @@ async function restoreFromSupabase(pid) {
           building:        d.building,
           floor:           d.floor,
           on_sheet:        d.source !== 'off_sheet',
-          status:          d.source !== 'off_sheet' ? 'on_sheet' : 'off_sheet',
+          status:          d.source !== 'off_sheet' ? 'on this page' : 'OFF-SHEET / unscoped',
+          region_id:       d.region_id ?? null,
+          schematic_id:    d.region_id ?? null,
+          schematic:       region?.label ?? null,
+          is_primary:      !!d.is_primary,
+          pinned:          d.x_norm != null,
+          runs:            0,
           demarc_page_num: pageForDemarc?.eval_page_num ?? null,
-          demarc_page_id:  d.page_id,
-          pages: projPages
-            .filter(p => p.tr_name === d.name)
-            .map(p => ({ eval_page_num: p.eval_page_num,
-                         building: p.building, floor: p.level ?? p.floor })),
+          demarc_page_id:  homePageId,
+          pages,
           extra_pins: trMap[d.name]?.extra_pins ?? {}
         });
       }

@@ -18,7 +18,7 @@ export default async function handler(req) {
   // Run all queries in parallel
   const [
     devicesRes, pagesRes, rollupRes, pageSummaryRes, violationsRes, flaggedRes,
-    projectPagesRes, demarcsRes, instancesRes
+    projectPagesRes, demarcsRes, instancesRes, regionsRes
   ] = await Promise.all([
 
     // Device types — full fields needed for detection and restore
@@ -56,9 +56,9 @@ export default async function handler(req) {
       .eq("project_id", project_id)
       .order("eval_page_num"),
 
-    // Demarcs — TR room pins and exit pins
+    // Demarcs — TR room pins and exit pins (region_id = schematic link, is_primary = schematic's primary TR)
     supabase.from("demarcs")
-      .select("id, name, page_id, x_norm, y_norm, stub_ft, source, building, floor, area")
+      .select("id, name, page_id, x_norm, y_norm, stub_ft, source, building, floor, area, region_id, is_primary")
       .eq("project_id", project_id)
       .order("name"),
 
@@ -76,7 +76,13 @@ export default async function handler(req) {
       .in("page_id",
         // subquery: all page_ids for this project
         (await supabase.from("pages").select("id").eq("project_id", project_id)).data?.map(p => p.id) ?? []
-      )
+      ),
+
+    // Page regions — schematics (one or more per page); demarc_id = the schematic's primary TR
+    supabase.from("page_regions")
+      .select("id, page_id, label, demarc_id, polygon, x0, y0, x1, y1")
+      .eq("project_id", project_id)
+      .order("page_id")
   ]);
 
   // Flatten project_pages rows — lift nested pages fields to top level
@@ -138,6 +144,7 @@ export default async function handler(req) {
     // New restore fields
     project_pages:    projectPages,
     demarcs:          demarcsRes.data   ?? [],
+    page_regions:     regionsRes.data   ?? [],
     device_instances: instances
   });
 }

@@ -31,37 +31,6 @@ function parseSheetTitle(title) {
   };
 }
 
-// Extract TR room name from demarcation description or note text
-// e.g. "Telecommunications Room BT03 on Level 00B serving data outlets"
-// e.g. "DATA OUTLETS SHALL BE SERVED FROM TELECOMMUNICATIONS ROOM SL06"
-function extractTRName(passBResult) {
-  const candidates = [];
-
-  // From demarcation label (most reliable)
-  const demarc = passBResult?.demarcation;
-  if (demarc?.found && demarc?.label) {
-    candidates.push(demarc.label.trim());
-  }
-
-  // From demarcation description (natural language)
-  const desc = demarc?.description ?? '';
-  const descMatch = desc.match(/\b([A-Z]{1,4}[\d]{2,4}[A-Z]?)\b/g);
-  if (descMatch) candidates.push(...descMatch);
-
-  // From warnings / notes (Pass B sometimes puts TR ref in warnings)
-  const warnings = passBResult?.warnings ?? [];
-  for (const w of warnings) {
-    const wMatch = w.match(/\b([A-Z]{1,4}[\d]{2,4}[A-Z]?)\b/g);
-    if (wMatch) candidates.push(...wMatch);
-  }
-
-  // Filter to likely TR name patterns: 2-6 chars + 2-4 digits optional suffix
-  const trPattern = /^([A-Z]{1,4}\d{2,4}[A-Z]?)$/;
-  const trNames = [...new Set(candidates)].filter(c => trPattern.test(c));
-
-  return trNames[0] ?? null;  // Best guess — first match
-}
-
 export default async function handler(req) {
   if (req.method === "OPTIONS") return new Response("", { headers: CORS });
   if (req.method !== "POST")    return err("POST required", 405);
@@ -75,27 +44,25 @@ export default async function handler(req) {
 
   const supabase = getSupabase();
 
-  // ── Process each page result ──────────────────────────────────
-  const pageRecords  = [];
-  const trMap        = {};   // TR name → { pages[], onSheet: bool, demarc_xy }
+  // ── 1. Persist each page (title, scale, building/floor/area) ──────────
+  // TR identity is no longer derived from plan labels — it comes from the
+  // schedule (v_page_tr_contract). Pages without a schedule contribute no
+  // auto TRs; the user assigns them manually downstream.
+  const pageRecords = [];
+  const pageMeta    = {};   // page_id -> { eval_page_num, building, floor, area }
 
   for (const { eval_page_num, page_b_result } of pages) {
     if (!page_b_result) continue;
 
-    const { building, floor, area } = parseSheetTitle(
-      page_b_result.sheet_title
-    );
-    const trName = extractTRName(page_b_result);
-    const scale  = page_b_result.scale;
+    const { building, floor, area } = parseSheetTitle(page_b_result.sheet_title);
+    const scale = page_b_result.scale;
 
-    // Calc pts_per_ft from scale
     let scalePtsPerFt = null;
     const s = scale?.text ?? scale?.graphic;
     if (s?.paper_value && s?.real_value && s?.paper_unit === 'in') {
       scalePtsPerFt = (72 * s.paper_value) / s.real_value;
     }
 
-    // Upsert page record
     const { data: pageRec, error: pgErr } = await supabase
       .from("pages")
       .upsert({
@@ -104,14 +71,13 @@ export default async function handler(req) {
         building,
         level: floor,          // pages table uses 'level' not 'floor'
         area,
-        tr_name:          trName,
         status:           'ready',
         scale_pts_per_ft: scalePtsPerFt,
         scale_paper_in:   s?.paper_value ?? null,
         scale_real_ft:    s?.real_value  ?? null,
         scale_label:      scale?.display_label ?? (s ? `${s.paper_value}" = ${s.real_value}'` : null)
       }, { onConflict: "project_id,pdf_page_number" })
-      .select("id, pdf_page_number, building, level, area, tr_name, scale_label, scale_paper_in, scale_real_ft, scale_pts_per_ft")
+      .select("id, pdf_page_number, building, level, area, scale_label, scale_paper_in, scale_real_ft, scale_pts_per_ft")
       .single();
 
     if (pgErr) {
@@ -119,7 +85,6 @@ export default async function handler(req) {
       continue;
     }
 
-    // Upsert project_pages entry
     await supabase.from("project_pages").upsert({
       project_id,
       page_id:       pageRec.id,
@@ -129,105 +94,97 @@ export default async function handler(req) {
     }, { onConflict: "project_id,eval_page_num" });
 
     pageRecords.push(pageRec);
+    pageMeta[pageRec.id] = { eval_page_num, building, floor, area };
+  }
 
-    // Build TR map
-    if (trName) {
-      if (!trMap[trName]) {
-        trMap[trName] = {
-          name:       trName,
-          pages:      [],
-          on_sheet:   false,
-          demarc_x:   null,
-          demarc_y:   null,
-          building:   null,
-          floor:      null,
-          area:       null
-        };
-      }
-      trMap[trName].pages.push({
-        page_id:      pageRec.id,
-        eval_page_num,
-        building,
-        floor,
-        area
+  // ── 2. Seed the TR map from the schedule contract ─────────────────────
+  // v_page_tr_contract yields, per page, each distinct cable destination (TR
+  // room) with its run count, demarc, schematic (page_regions) and pin state.
+  // A TR keys by name and accumulates the pages whose schedule references it.
+  const trMap   = {};
+  const pageIds = pageRecords.map(p => p.id);
+  if (pageIds.length) {
+    const { data: contract, error: cErr } = await supabase
+      .from("v_page_tr_contract")
+      .select("page_id, tr_room, runs, demarc_id, pin_x, pin_y, stub_ft, schematic_id, schematic, pinned, is_primary, status")
+      .in("page_id", pageIds);
+    if (cErr) console.error("v_page_tr_contract query error:", cErr.message);
+
+    for (const row of (contract ?? [])) {
+      const name = row.tr_room;
+      const meta = pageMeta[row.page_id] ?? {};
+      const onThisPage = row.status === 'on this page';
+
+      const tr = trMap[name] ?? (trMap[name] = {
+        name,
+        pages:           [],
+        runs:            0,
+        on_sheet:        false,
+        region_id:       null,
+        schematic_id:    null,
+        schematic:       null,
+        is_primary:      false,
+        demarc_id:       null,
+        pinned:          false,
+        demarc_x:        null,
+        demarc_y:        null,
+        pin_x:           null,
+        pin_y:           null,
+        stub_ft:         0,
+        building:        null,
+        floor:           null,
+        area:            null,
+        demarc_page_id:  null,
+        demarc_page_num: null,
+        status:          row.status
       });
 
-      const d = page_b_result.demarcation;
-
-      // ── HOST: TR room physically drawn here (is_host=true, new scans) ──
-      // Once confirmed, nothing overwrites it.
-      if (d?.found && d?.is_host === true && !trMap[trName].host_confirmed) {
-        trMap[trName].host_confirmed  = true;
-        trMap[trName].on_sheet        = true;
-        trMap[trName].demarc_x        = d.x;
-        trMap[trName].demarc_y        = d.y;
-        trMap[trName].building        = building;
-        trMap[trName].floor           = floor;
-        trMap[trName].area            = area;
-        trMap[trName].demarc_page_id  = pageRec.id;
-        trMap[trName].demarc_page_num = eval_page_num;
-
-      // ── FALLBACK: no confirmed host yet, but this page has coords ──
-      // Handles legacy scans (no is_host field) and cases where Claude
-      // didn't return is_host. First page with found=true AND x/y wins.
-      // A later page with is_host=true can still promote itself above this.
-      } else if (!trMap[trName].host_confirmed && d?.found && d?.x != null && d?.y != null) {
-        trMap[trName].on_sheet        = true;   // critical — was missing before
-        trMap[trName].demarc_x        = d.x;
-        trMap[trName].demarc_y        = d.y;
-        trMap[trName].building        = building;
-        trMap[trName].floor           = floor;
-        trMap[trName].area            = area;
-        trMap[trName].demarc_page_id  = pageRec.id;
-        trMap[trName].demarc_page_num = eval_page_num;
-        // host_confirmed stays false — a real is_host page can still win
-
-      // ── REFERENCE ONLY: TR mentioned in notes, no coords ──
-      // Page is served by this TR but the room isn't drawn here.
-      // Never overwrite an already-found host or fallback.
+      if (!tr.pages.find(p => p.page_id === row.page_id)) {
+        tr.pages.push({ page_id: row.page_id, eval_page_num: meta.eval_page_num,
+                        building: meta.building, floor: meta.floor, area: meta.area });
       }
-      // (pages[] already pushed above — no action needed here)
+      tr.runs        += row.runs ?? 0;
+      tr.demarc_id    = tr.demarc_id    ?? row.demarc_id    ?? null;
+      tr.region_id    = tr.region_id    ?? row.schematic_id ?? null;
+      tr.schematic_id = tr.schematic_id ?? row.schematic_id ?? null;
+      tr.schematic    = tr.schematic    ?? row.schematic    ?? null;
+      tr.is_primary   = tr.is_primary   || !!row.is_primary;
+      tr.pinned       = tr.pinned       || !!row.pinned;
+      if (row.pin_x != null) { tr.pin_x = row.pin_x; tr.demarc_x = row.pin_x; }
+      if (row.pin_y != null) { tr.pin_y = row.pin_y; tr.demarc_y = row.pin_y; }
+      if (row.stub_ft != null) tr.stub_ft = row.stub_ft;
+
+      // The TR's home page is the sheet carrying its schematic.
+      if (onThisPage) {
+        tr.on_sheet        = true;
+        tr.status          = 'on this page';
+        tr.demarc_page_id  = row.page_id;
+        tr.demarc_page_num = meta.eval_page_num;
+        tr.building        = meta.building;
+        tr.floor           = meta.floor;
+        tr.area            = meta.area;
+      } else if (tr.status !== 'on this page') {
+        tr.status = row.status;   // keep the most-resolved status
+      }
     }
   }
 
-  // ── Upsert demarc records for on-sheet TRs ────────────────────
-  const demarcsCreated = [];
-  for (const tr of Object.values(trMap)) {
-    if (!tr.on_sheet) continue;   // off-sheet → user sets pin manually
-
-    const { data: demarcRec, error: dmErr } = await supabase
-      .from("demarcs")
-      .upsert({
-        project_id,
-        page_id:  tr.demarc_page_id,
-        name:     tr.name,
-        source:   'auto',
-        x_norm:   tr.demarc_x,
-        y_norm:   tr.demarc_y,
-        stub_ft:  0,
-        building: tr.building,
-        floor:    tr.floor,
-        area:     tr.area
-      }, { onConflict: "project_id,name" })
-      .select("id, name, x_norm, y_norm")
-      .single();
-
-    if (!dmErr) demarcsCreated.push(demarcRec);
-  }
-
-  // ── Summary ───────────────────────────────────────────────────
-  const trList = Object.values(trMap).map(tr => ({
-    ...tr,
-    status: tr.on_sheet ? 'on_sheet' : 'off_sheet'
-  }));
-
-  const offSheet = trList.filter(t => !t.on_sheet);
+  // ── 3. Summary ────────────────────────────────────────────────────────
+  const trList   = Object.values(trMap);
   const onSheet  = trList.filter(t => t.on_sheet);
+  const offSheet = trList.filter(t => !t.on_sheet);
 
   const warnings = [];
+  const noDemarc = trList.filter(t => !t.demarc_id);
+  if (noDemarc.length) {
+    warnings.push(
+      `${noDemarc.length} TR room(s) have no demarc yet — add + pin required: ` +
+      noDemarc.map(t => t.name).join(', ')
+    );
+  }
   if (offSheet.length) {
     warnings.push(
-      `${offSheet.length} TR room(s) not found on selected pages — pin placement required: ` +
+      `${offSheet.length} TR room(s) not on a scanned schematic — pin on home page: ` +
       offSheet.map(t => t.name).join(', ')
     );
   }
@@ -240,7 +197,6 @@ export default async function handler(req) {
     on_sheet:      onSheet.length,
     off_sheet:     offSheet.length,
     tr_map:        trList,
-    demarcs_created: demarcsCreated.length,
     warnings
   });
 }

@@ -1,0 +1,11 @@
+# Supabase project config — reconstructed to match the live project.
+# Linked project ref (project_id in app tables = 5; this is the Supabase ref):
+project_id = "lpjpqmpjxtwsnakcwqvb"
+
+[db]
+# Default local dev port; remote migrations are tracked under supabase/migrations.
+port = 54322
+major_version = 15
+
+[db.migrations]
+# Files here mirror the remote supabase_migrations.schema_migrations ledger.
