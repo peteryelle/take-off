@@ -247,6 +247,8 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
     <div id="tr-summary-bar" style="display:flex; gap:24px; padding:8px 12px; background:#0a0a0a; border:1px solid #2a2a2a; border-radius:4px; margin-bottom:10px; font-size:13px; align-items:center; flex-wrap:wrap;">
       <span id="tr-summary-text" style="color:#aaa; flex:1;">—</span>
       <span id="tr-warnings-text" style="color:#f0c040;"></span>
+      <button class="info" onclick="openAddSchematic()" style="font-size:11px; padding:3px 10px;"
+        title="Draw a schematic boundary on a page and add its primary TR">+ Add schematic</button>
     </div>
     <!-- Page → TR Assignment Table -->
     <div id="pa-table-wrap" style="display:none; margin-bottom:16px;">
@@ -348,6 +350,42 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
   <div style="margin-top:6px; display:flex; gap:16px; align-items:center;">
     <div class="status" id="pin-status"></div>
     <span id="pin-coords" style="color:#555; font-size:12px; font-family:monospace;"></span>
+  </div>
+</div>
+
+<!-- ── SCHEMATIC (page region) DRAW MODAL ─────────────────────────── -->
+<div class="pin-modal" id="region-modal">
+  <div style="color:#f0c040; font-size:14px; font-weight:bold; margin-bottom:4px;">
+    Add schematic — draw its boundary
+  </div>
+  <div style="color:#aaa; font-size:13px; margin-bottom:8px;">
+    Click two opposite corners to box the schematic · Scroll to zoom · Drag to pan
+  </div>
+
+  <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap;">
+    <label style="color:#aaa; font-size:13px;">Page</label>
+    <select id="region-page-sel" onchange="openRegionModal(parseInt(this.value))"
+            style="background:#1a1a1a; border:1px solid #3a3a3a; color:#ddd; padding:4px 8px; border-radius:3px; font-size:13px; font-family:monospace;"></select>
+    <label style="color:#aaa; font-size:13px; margin-left:8px;">Label</label>
+    <input type="text" id="region-label" placeholder="e.g. Level One - Segment A"
+           style="width:220px; font-size:13px; padding:5px 8px;">
+    <button onclick="regZoom(1.5)" style="padding:3px 12px; font-size:13px; margin-left:8px;">＋</button>
+    <button onclick="regZoom(1/1.5)" style="padding:3px 12px; font-size:13px;">－</button>
+    <button onclick="regResetZoom()" style="padding:3px 10px; font-size:11px;" class="info">Reset</button>
+    <button onclick="clearRegionRect()" style="padding:3px 10px; font-size:11px;" class="info">Clear box</button>
+  </div>
+
+  <div class="pin-canvas-wrap" id="region-canvas-wrap"
+       style="overflow:hidden; width:88vw; height:58vh; position:relative; cursor:crosshair; border:1px solid #333;">
+    <div id="region-layer" style="position:absolute; top:0; left:0; transform-origin:0 0;">
+      <canvas id="region-canvas" style="position:absolute; top:0; left:0; display:block;"></canvas>
+    </div>
+  </div>
+
+  <div class="pin-controls" style="margin-top:8px;">
+    <button onclick="confirmRegion()" style="padding:8px 20px; font-size:14px;">✓ Create schematic + add primary TR</button>
+    <button class="danger" onclick="closeRegionModal()" style="padding:8px 16px; font-size:14px;">✗ Cancel</button>
+    <div class="status" id="region-status"></div>
   </div>
 </div>
 
@@ -1973,6 +2011,15 @@ async function confirmPin() {
     });
     const j = await r.json();
     if (r.ok) {
+      // If this pin is a schematic's primary TR, link the region back to its demarc.
+      if (!pinTarget.isExtraPin && trMap[trName]?.is_primary && trMap[trName]?.region_id != null) {
+        try {
+          await fetch(`${base()}/api/page-regions`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: trMap[trName].region_id, demarc_id: j.id })
+          });
+        } catch (_) { /* primary link is best-effort */ }
+      }
       if (pinTarget.isExtraPin) {
         if (!trMap[trName].extra_pins) trMap[trName].extra_pins = {};
         trMap[trName].extra_pins[pinTarget.pageNum] = {
@@ -1997,6 +2044,189 @@ async function confirmPin() {
 
 function closePinModal() {
   document.getElementById('pin-modal').classList.remove('open');
+}
+
+// ── Schematic (page region) draw modal ───────────────────────────
+// Reuses the pin modal's canvas/zoom/pan pattern. The boundary is captured with
+// TWO clicks (opposite corners) so drag stays free for panning. On confirm it
+// creates a page_regions row and immediately seeds + pins the schematic's primary TR
+// (confirmPin then links region.demarc_id back).
+let regZoomLevel = 1.0, regPanX = 0, regPanY = 0;
+let regDragStart = null, regCanvasNativeW = 0, regCanvasNativeH = 0;
+let regPageNum = null, regCorners = [];
+
+function applyRegionTransform() {
+  const layer = document.getElementById('region-layer');
+  layer.style.transform = `translate(${regPanX}px, ${regPanY}px) scale(${regZoomLevel})`;
+  redrawRegionRect();
+}
+function regZoom(factor) {
+  const wrap = document.getElementById('region-canvas-wrap');
+  const wRect = wrap.getBoundingClientRect();
+  const cx = wRect.width / 2, cy = wRect.height / 2;
+  regPanX = cx - (cx - regPanX) * factor;
+  regPanY = cy - (cy - regPanY) * factor;
+  regZoomLevel = Math.min(10, Math.max(0.05, regZoomLevel * factor));
+  applyRegionTransform();
+}
+function regResetZoom() {
+  const wrap = document.getElementById('region-canvas-wrap');
+  const cv   = document.getElementById('region-canvas');
+  const wrapW = wrap.offsetWidth || window.innerWidth * 0.88;
+  const wrapH = wrap.offsetHeight || window.innerHeight * 0.58;
+  regZoomLevel = (cv.width && cv.height) ? Math.min(wrapW / cv.width, wrapH / cv.height) : 1.0;
+  regPanX = 0; regPanY = 0;
+  applyRegionTransform();
+}
+function clearRegionRect() { regCorners = []; redrawRegionRect(); setStatus('region-status', 'Box cleared — click two corners', ''); }
+
+function redrawRegionRect() {
+  const layer = document.getElementById('region-layer');
+  layer.querySelectorAll('.region-box').forEach(el => el.remove());
+  if (regCorners.length === 2) {
+    const [a, b] = regCorners;
+    const x0 = Math.min(a.x, b.x), y0 = Math.min(a.y, b.y);
+    const x1 = Math.max(a.x, b.x), y1 = Math.max(a.y, b.y);
+    const box = document.createElement('div');
+    box.className = 'region-box';
+    box.style.cssText = `position:absolute; left:${x0 * regCanvasNativeW}px; top:${y0 * regCanvasNativeH}px;`
+      + `width:${(x1 - x0) * regCanvasNativeW}px; height:${(y1 - y0) * regCanvasNativeH}px;`
+      + `border:2px solid #3a7a3a; background:rgba(58,122,58,0.15); pointer-events:none;`;
+    layer.appendChild(box);
+  } else if (regCorners.length === 1) {
+    const a = regCorners[0];
+    const dot = document.createElement('div');
+    dot.className = 'region-box';
+    dot.style.cssText = `position:absolute; left:${a.x * regCanvasNativeW}px; top:${a.y * regCanvasNativeH}px;`
+      + `width:8px; height:8px; margin:-4px 0 0 -4px; background:#f0c040; border-radius:50%;`
+      + `pointer-events:none; transform:scale(${1 / regZoomLevel}); transform-origin:center;`;
+    layer.appendChild(dot);
+  }
+}
+
+// Entry point — wired to the "+ Add schematic" button on the TR map summary bar.
+function openAddSchematic() {
+  const pages = [...selectedPages].sort((a, b) => a - b);
+  if (!pages.length) { alert('Select at least one page first.'); return; }
+  const sel = document.getElementById('region-page-sel');
+  sel.innerHTML = pages.map(n => {
+    const t = pageCache[n]?.passBResult?.sheet_title;
+    const label = t ? `pg ${n} — ${t.replace(/TELECOMMUNICATIONS.*/i, '').trim().replace(/[-·]+$/, '').trim()}` : `pg ${n}`;
+    return `<option value="${n}">${label}</option>`;
+  }).join('');
+  document.getElementById('region-label').value = '';
+  openRegionModal(pages[0]);
+}
+
+async function openRegionModal(pageNum) {
+  regPageNum = pageNum;
+  regCorners = [];
+  regZoomLevel = 1.0; regPanX = 0; regPanY = 0;
+
+  const modal = document.getElementById('region-modal');
+  const cv    = document.getElementById('region-canvas');
+  const wrap  = document.getElementById('region-canvas-wrap');
+  const layer = document.getElementById('region-layer');
+
+  const pdfPage = await pdfDoc.getPage(pageNum);
+  const vp      = pdfPage.getViewport({ scale: 2.5 });
+  regCanvasNativeW = vp.width; regCanvasNativeH = vp.height;
+  await renderToCanvas(cv, pdfPage, vp);
+
+  const wrapW = wrap.offsetWidth  || window.innerWidth  * 0.88;
+  const wrapH = wrap.offsetHeight || window.innerHeight * 0.58;
+  regZoomLevel = Math.min(wrapW / vp.width, wrapH / vp.height);
+  regPanX = 0; regPanY = 0;
+  applyRegionTransform();
+  setStatus('region-status', 'Click the first corner of the schematic', '');
+
+  // Two-click corner capture (a click that didn't drag).
+  let pressX = null, pressY = null;
+  cv.addEventListener('mousedown', (e) => { pressX = e.clientX; pressY = e.clientY; });
+  cv.onclick = (e) => {
+    if (pressX != null && (Math.abs(e.clientX - pressX) + Math.abs(e.clientY - pressY)) > 5) return;
+    const cvRect = cv.getBoundingClientRect();
+    const xN = Math.min(1, Math.max(0, (e.clientX - cvRect.left) / cvRect.width));
+    const yN = Math.min(1, Math.max(0, (e.clientY - cvRect.top)  / cvRect.height));
+    if (regCorners.length >= 2) regCorners = [];
+    regCorners.push({ x: xN, y: yN });
+    redrawRegionRect();
+    setStatus('region-status',
+      regCorners.length === 1 ? 'Click the opposite corner' : '✓ Box set — name it and Create', 'ok');
+  };
+
+  // Scroll to zoom.
+  wrap.onwheel = (e) => {
+    e.preventDefault();
+    const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+    const wRect = wrap.getBoundingClientRect();
+    const mx = e.clientX - wRect.left, my = e.clientY - wRect.top;
+    regPanX = mx - (mx - regPanX) * factor;
+    regPanY = my - (my - regPanY) * factor;
+    regZoomLevel = Math.min(10, Math.max(0.05, regZoomLevel * factor));
+    applyRegionTransform();
+  };
+  // Drag to pan.
+  wrap.onmousedown = (e) => {
+    if (e.target === cv || e.target === layer) {
+      regDragStart = { x: e.clientX, y: e.clientY, panX: regPanX, panY: regPanY, moved: false };
+      wrap.style.cursor = 'grabbing';
+    }
+  };
+  wrap.onmousemove = (e) => {
+    if (!regDragStart || e.buttons !== 1) return;
+    const dx = e.clientX - regDragStart.x, dy = e.clientY - regDragStart.y;
+    if (Math.abs(dx) + Math.abs(dy) > 5) regDragStart.moved = true;
+    if (regDragStart.moved) { regPanX = regDragStart.panX + dx; regPanY = regDragStart.panY + dy; applyRegionTransform(); }
+  };
+  wrap.onmouseup = (e) => {
+    if (regDragStart?.moved) e.stopPropagation();
+    regDragStart = null;
+    wrap.style.cursor = 'crosshair';
+  };
+
+  modal.classList.add('open');
+}
+
+function closeRegionModal() {
+  document.getElementById('region-modal').classList.remove('open');
+}
+
+async function confirmRegion() {
+  if (regCorners.length !== 2) { setStatus('region-status', 'Click two opposite corners first', 'err'); return; }
+  const label = (document.getElementById('region-label').value || '').trim();
+  if (!label) { setStatus('region-status', 'Give the schematic a label', 'err'); return; }
+  const pageId = pageCache[regPageNum]?.pageId;
+  if (!pageId) { setStatus('region-status', 'Page not persisted — run the scan first', 'err'); return; }
+
+  const [a, b] = regCorners;
+  const x0 = Math.min(a.x, b.x), y0 = Math.min(a.y, b.y);
+  const x1 = Math.max(a.x, b.x), y1 = Math.max(a.y, b.y);
+  const polygon = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+
+  try {
+    const r = await fetch(`${base()}/api/page-regions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: projectId, page_id: pageId, label, polygon, x0, y0, x1, y1 })
+    });
+    const region = await r.json();
+    if (!r.ok) { setStatus('region-status', 'Save error: ' + region.error, 'err'); return; }
+
+    const trName = (prompt(`Primary TR room for "${label}":`) || '').trim();
+    if (!trName) { setStatus('region-status', '✓ Schematic saved — add its primary TR from the card', 'ok'); closeRegionModal(); return; }
+    if (trMap[trName]) { alert(`TR "${trName}" already exists.`); return; }
+
+    trMap[trName] = {
+      name: trName, on_sheet: true,
+      region_id: region.id, schematic_id: region.id, schematic: label,
+      is_primary: true, runs: 0,
+      demarc_page_num: regPageNum, demarc_page_id: pageId,
+      pages: [{ page_id: pageId, eval_page_num: regPageNum }],
+      extra_pins: {}, source: 'user_pin', status: 'on this page'
+    };
+    closeRegionModal();
+    await openPinModal(trName, regPageNum);   // confirmPin posts region_id + links primary
+  } catch (e) { setStatus('region-status', 'Error: ' + e.message, 'err'); }
 }
 
 // ── Lock demarcs + start batch ────────────────────────────────────
