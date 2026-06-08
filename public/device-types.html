@@ -68,7 +68,7 @@ button.amber:hover { background: #332800; }
 
 .device-row {
   display: grid;
-  grid-template-columns: 72px 90px 1fr 1fr 140px 100px;
+  grid-template-columns: 72px 150px minmax(220px, 1fr) 170px 110px;
   gap: 0;
   background: #111;
   border: 1px solid #1e1e1e;
@@ -95,6 +95,9 @@ button.amber:hover { background: #332800; }
   display: flex; flex-direction: column;
   justify-content: center;
   font-size: 11px;
+  min-width: 0;               /* allow grid cell to shrink so text can wrap */
+  overflow-wrap: anywhere;    /* break long tokens (e.g. CROP_1780520132586) */
+  word-break: break-word;
 }
 .cell:last-child { border-right: none; }
 
@@ -253,7 +256,6 @@ button.amber:hover { background: #332800; }
     <div class="cell">Image</div>
     <div class="cell">Legend ID</div>
     <div class="cell">Name + Human Desc</div>
-    <div class="cell">LLM Description</div>
     <div class="cell">Anchors</div>
     <div class="cell">Actions</div>
   </div>
@@ -369,7 +371,6 @@ function renderGrid(types) {
       <div class="cell">Image</div>
       <div class="cell">Legend ID</div>
       <div class="cell">Name + Human Desc</div>
-      <div class="cell">LLM Description</div>
       <div class="cell">Anchors</div>
       <div class="cell">Actions</div>
     </div>`;
@@ -409,12 +410,11 @@ function renderGrid(types) {
 
     row.innerHTML = `
       <div class="cell cell-image">${imgHtml}</div>
-      <div class="cell cell-id"><strong>${escHtml(dt.legend_id ?? '')}</strong>${escHtml(dt.name ?? '').slice(0,4)}</div>
+      <div class="cell cell-id"><strong>${escHtml(dt.legend_id ?? '')}</strong></div>
       <div class="cell cell-name">
         <strong>${escHtml(dt.name ?? '')}</strong>
         <span class="human">${escHtml((dt.human_description ?? dt.description ?? '').slice(0, 120))}</span>
       </div>
-      <div class="cell cell-llm" id="llm-cell-${dt.id}">${llmHtml}</div>
       <div class="cell cell-anchors">${primary}${assoc}</div>
       <div class="cell cell-actions">
         <button class="info" onclick="editDevice(${dt.id})">Edit</button>
