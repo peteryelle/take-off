@@ -224,6 +224,35 @@ button.amber:hover { background: #332800; }
   white-space: pre-wrap; font-size: 10px; color: #aaa;
   margin-top: 8px;
 }
+
+/* ── Assembly (kit) ── */
+button.kit { background: #10242a; border-color: #2a6a7a; color: #7ad0e0; }
+button.kit:hover { background: #163138; }
+.modal.asm { width: 800px; max-width: 95vw; max-height: 88vh; overflow: auto; }
+.asm-sub { color: #666; font-size: 10px; margin: -6px 0 12px; }
+.asm-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.asm-tab {
+  background: #10242a; border: 1px solid #2a4a52; color: #7ad0e0;
+  border-radius: 3px; padding: 3px 10px; font-size: 11px;
+  cursor: pointer; font-family: monospace;
+}
+.asm-tab.active { background: #163a44; border-color: #3a8a9a; color: #aef0ff; font-weight: bold; }
+.asm-table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+.asm-table th {
+  color: #666; font-size: 9px; text-transform: uppercase; letter-spacing: 1px;
+  text-align: left; padding: 4px 6px; border-bottom: 1px solid #222; font-weight: normal;
+}
+.asm-table td { padding: 3px 4px; border-bottom: 1px solid #141414; }
+.asm-table td.num { color: #555; text-align: center; width: 28px; font-size: 11px; }
+.asm-table td.rm  { width: 26px; text-align: center; }
+.asm-table input {
+  width: 100%; background: #1a1a1a; border: 1px solid #333; color: #e0e0e0;
+  padding: 5px 6px; border-radius: 3px; font-family: monospace; font-size: 11px;
+}
+.asm-table input.qty { width: 54px; text-align: center; }
+.asm-x { background: none; border: none; color: #555; cursor: pointer; font-size: 13px; padding: 0 4px; }
+.asm-x:hover { color: #f07a7a; }
+.asm-add { background: none; border: 1px dashed #3a7a3a; color: #7af07a; }
 </style>
 </head>
 <body>
@@ -331,6 +360,27 @@ button.amber:hover { background: #332800; }
   </div>
 </div>
 
+<!-- ── Assembly editor modal ── -->
+<div class="modal-overlay" id="asm-modal">
+  <div class="modal asm">
+    <h2 id="asm-title">⊞ Assembly</h2>
+    <div class="asm-sub">Supporting parts pulled together as a kit. Quantity = parts per assembly.</div>
+    <div class="asm-tabs" id="asm-tabs"></div>
+    <table class="asm-table">
+      <thead><tr>
+        <th>#</th><th>Device Name</th><th>Manufacturer</th><th>Part Name</th><th>Model #</th><th>Qty</th><th></th>
+      </tr></thead>
+      <tbody id="asm-tbody"></tbody>
+    </table>
+    <button class="asm-add" onclick="addAsmRow()">+ Add Row</button>
+    <div class="status" id="asm-status" style="margin-top:8px;"></div>
+    <div class="actions">
+      <button class="danger" onclick="closeAssembly()">Cancel</button>
+      <button onclick="saveAssembly()">✓ Save Assembly</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ── State ────────────────────────────────────────────────────────
 let deviceTypes   = [];
@@ -408,6 +458,9 @@ function renderGrid(types) {
       `<span class="anchor-pill" style="background:#1a1a2a;border-color:#2a2a5a;color:#aaaaff;">${a}</span>`
     ).join('');
 
+    const asmKinds = Object.values(dt.assembly || {}).filter(a => Array.isArray(a) && a.length).length;
+    const asmBadge = asmKinds ? ` (${asmKinds})` : '';
+
     row.innerHTML = `
       <div class="cell cell-image">${imgHtml}</div>
       <div class="cell cell-id"><strong>${escHtml(dt.legend_id ?? '')}</strong></div>
@@ -419,6 +472,7 @@ function renderGrid(types) {
       <div class="cell cell-actions">
         <button class="info" onclick="editDevice(${dt.id})">Edit</button>
         <button class="amber" onclick="regenDevice(${dt.id})">✦ Re-gen</button>
+        <button class="kit" onclick="openAssembly(${dt.id})">⊞ Assembly${asmBadge}</button>
         <button class="danger" onclick="deleteDevice(${dt.id})">Delete</button>
       </div>`;
 
@@ -440,6 +494,155 @@ function toggleLLM(btn) {
 
 function enlargeImage(img) {
   window.open(img.src, '_blank');
+}
+
+// ── Assembly editor ───────────────────────────────────────────────
+// A device type's drops are grouped into per-kind kits (N#, DV#, DD#).
+// Kind = anchor token with trailing digits stripped (N2 -> N, DD3 -> DD).
+// Each kit row is one orderable part: { device_name, manufacturer, part_name, model, qty }.
+// Persisted as device_types.assembly jsonb, keyed by kind: { "N": [...], "DV": [...] }.
+let asmDeviceId   = null;
+let asmKinds      = [];
+let asmActiveKind = null;
+let asmData       = {};
+
+function asmBlankRow() { return { device_name:'', manufacturer:'', part_name:'', model:'', qty:1 }; }
+
+function asmKindOf(anchor) {
+  const k = String(anchor).replace(/\d+$/, '');
+  return k || String(anchor);   // all-digit / empty token -> use raw token
+}
+
+function asmKindsForDevice(dt) {
+  const a   = dt.text_anchors ?? {};
+  const all = [...(a.primary ?? []), ...(a.associated ?? [])];
+  const kinds = [];
+  for (const t of all) {
+    const k = asmKindOf(t);
+    if (k && !kinds.includes(k)) kinds.push(k);
+  }
+  return kinds.length ? kinds : [dt.legend_id || 'default'];
+}
+
+function asmRowFilled(r) {
+  return ((r.device_name || '') + (r.manufacturer || '') + (r.part_name || '') + (r.model || '')).trim() !== '';
+}
+
+function openAssembly(id) {
+  const dt = deviceTypes.find(d => d.id === id);
+  if (!dt) return;
+  asmDeviceId = id;
+  asmKinds    = asmKindsForDevice(dt);
+  const saved = (dt.assembly && typeof dt.assembly === 'object') ? dt.assembly : {};
+  asmData = {};
+  for (const k of asmKinds) {
+    const rows = Array.isArray(saved[k]) ? saved[k].map(r => ({ ...asmBlankRow(), ...r })) : [];
+    asmData[k] = rows.length ? rows : [asmBlankRow()];   // opens with one row
+  }
+  asmActiveKind = asmKinds[0];
+  document.getElementById('asm-title').textContent =
+    `⊞ Assembly — ${dt.legend_id ?? ''} · ${dt.name ?? ''}`;
+  setStatus('asm-status', asmKinds.length > 1
+    ? `${asmKinds.length} kinds on this device — one kit each` : '', '');
+  renderAsmTabs();
+  renderAsmTable();
+  document.getElementById('asm-modal').classList.add('open');
+}
+
+function closeAssembly() {
+  document.getElementById('asm-modal').classList.remove('open');
+  asmDeviceId = null;
+}
+
+function renderAsmTabs() {
+  const el = document.getElementById('asm-tabs');
+  if (asmKinds.length <= 1) { el.innerHTML = ''; return; }
+  el.innerHTML = asmKinds.map(k => {
+    const n   = (asmData[k] || []).filter(asmRowFilled).length;
+    const cls = k === asmActiveKind ? 'asm-tab active' : 'asm-tab';
+    return `<button class="${cls}" onclick="switchAsmKind('${escHtml(k)}')">${escHtml(k)}#${n ? ` · ${n}` : ''}</button>`;
+  }).join('');
+}
+
+function renderAsmTable() {
+  const rows = asmData[asmActiveKind] || [];
+  document.getElementById('asm-tbody').innerHTML = rows.map((r, i) => `
+    <tr>
+      <td class="num">${i + 1}</td>
+      <td><input value="${escHtml(r.device_name)}"  oninput="asmUpd(${i},'device_name',this.value)"  placeholder="component"></td>
+      <td><input value="${escHtml(r.manufacturer)}" oninput="asmUpd(${i},'manufacturer',this.value)" placeholder="manufacturer"></td>
+      <td><input value="${escHtml(r.part_name)}"    oninput="asmUpd(${i},'part_name',this.value)"    placeholder="part name"></td>
+      <td><input value="${escHtml(r.model)}"        oninput="asmUpd(${i},'model',this.value)"        placeholder="model #"></td>
+      <td><input class="qty" type="number" min="1" step="1" value="${Number(r.qty) || 1}" oninput="asmUpd(${i},'qty',Math.max(1,parseInt(this.value)||1))"></td>
+      <td class="rm"><button class="asm-x" title="remove" onclick="rmAsmRow(${i})">✕</button></td>
+    </tr>`).join('');
+}
+
+function asmUpd(i, field, val) {
+  const rows = asmData[asmActiveKind];
+  if (rows && rows[i]) rows[i][field] = val;   // no re-render -> keeps input focus
+}
+
+function addAsmRow() {
+  (asmData[asmActiveKind] ||= []).push(asmBlankRow());
+  renderAsmTable();
+}
+
+function rmAsmRow(i) {
+  const rows = asmData[asmActiveKind];
+  if (!rows) return;
+  rows.splice(i, 1);
+  if (!rows.length) rows.push(asmBlankRow());
+  renderAsmTable();
+  renderAsmTabs();
+}
+
+function switchAsmKind(k) {
+  asmActiveKind = k;
+  renderAsmTabs();
+  renderAsmTable();
+}
+
+async function saveAssembly() {
+  if (!projId()) { setStatus('asm-status', 'Enter Project ID', 'err'); return; }
+  const clean = {};
+  for (const k of asmKinds) {
+    const rows = (asmData[k] || []).filter(asmRowFilled).map(r => ({
+      device_name:  (r.device_name  || '').trim(),
+      manufacturer: (r.manufacturer || '').trim(),
+      part_name:    (r.part_name    || '').trim(),
+      model:        (r.model        || '').trim(),
+      qty:          Math.max(1, parseInt(r.qty) || 1)
+    }));
+    if (rows.length) clean[k] = rows;
+  }
+
+  setStatus('asm-status', 'Saving…', 'running');
+  try {
+    const r = await fetch(`${base()}/api/projects`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        action:     'save_device_assembly',
+        project_id: parseInt(projId()),
+        id:         asmDeviceId,
+        assembly:   clean
+      })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      setStatus('asm-status',
+        'Error: ' + (j.error ?? r.status) + ' — needs save_device_assembly in projects.js', 'err');
+      return;
+    }
+    const dt = deviceTypes.find(d => d.id === asmDeviceId);
+    if (dt) dt.assembly = clean;
+    renderGrid(deviceTypes);
+    setStatus('asm-status', '✓ Saved', 'ok');
+    closeAssembly();
+  } catch(e) {
+    setStatus('asm-status', 'Error: ' + e.message, 'err');
+  }
 }
 
 // ── Add form ──────────────────────────────────────────────────────
