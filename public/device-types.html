@@ -260,6 +260,7 @@ button.kit:hover { background: #163138; }
 <h1>⚡ Device Types</h1>
 <nav id="to-nav"></nav>
 <script src="nav.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <p class="subtitle">Manage device symbols per project</p>
 
 <!-- ── Config bar ── -->
@@ -276,6 +277,10 @@ button.kit:hover { background: #163138; }
 <div class="toolbar">
   <button onclick="openAddForm()">+ Add Device Type</button>
   <button class="info" onclick="openCopyModal()">⎘ Copy from Project</button>
+  <button class="info" onclick="exportAssembliesXlsx()" title="Download an Excel of every device's assembly to fill in">⬇ Export Assemblies</button>
+  <button class="info" onclick="document.getElementById('asm-xlsx-input').click()" title="Upload the filled-in Excel to write assemblies back">⬆ Import Assemblies</button>
+  <input type="file" id="asm-xlsx-input" accept=".xlsx,.xls" style="display:none"
+         onchange="if (this.files[0]) importAssembliesXlsx(this.files[0]); this.value='';">
   <div class="status" id="toolbar-status"></div>
 </div>
 
@@ -410,6 +415,104 @@ async function loadDeviceTypes() {
   } catch(e) {
     setStatus('load-status', 'Error: ' + e.message, 'err');
   }
+}
+
+// ── Assembly Excel round-trip ─────────────────────────────────────
+// Export each device's per-kind assembly to one row per component; device_id is the
+// immutable join key. Edit in Excel, then import: rows are grouped back by device_id,
+// each device's assembly jsonb is rebuilt, and saved through the same
+// save_device_assembly path the modal uses. Replace-per-device, but only for devices
+// whose rows carry at least one filled component — a partly-filled export never wipes
+// the assemblies you didn't touch, and re-importing an unedited export is a no-op.
+const ASM_COLS = ['device_id','type_name','legend_id','kind','component','manufacturer','part_name','model','qty'];
+
+function exportAssembliesXlsx() {
+  if (typeof XLSX === 'undefined') { setStatus('load-status','Excel library not loaded — check connection','err'); return; }
+  if (!deviceTypes.length)         { setStatus('load-status','Load device types first','err'); return; }
+  const rows = [ASM_COLS.slice()];
+  for (const dt of deviceTypes) {
+    const kinds = asmKindsForDevice(dt);
+    const saved = (dt.assembly && typeof dt.assembly === 'object') ? dt.assembly : {};
+    for (const k of kinds) {
+      const parts = Array.isArray(saved[k]) ? saved[k] : [];
+      if (parts.length) {
+        for (const p of parts) rows.push([dt.id, dt.name ?? '', dt.legend_id ?? '', k,
+          p.device_name ?? '', p.manufacturer ?? '', p.part_name ?? '', p.model ?? '', Math.max(1, parseInt(p.qty) || 1)]);
+      } else {
+        rows.push([dt.id, dt.name ?? '', dt.legend_id ?? '', k, '', '', '', '', 1]);   // blank slot to fill
+      }
+    }
+  }
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = [{wch:9},{wch:18},{wch:14},{wch:6},{wch:22},{wch:18},{wch:22},{wch:16},{wch:5}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Assemblies');
+  const stamp = new Date().toISOString().slice(0,16).replace(/[:T]/g,'-');
+  XLSX.writeFile(wb, `assemblies_project${projId()}_${stamp}.xlsx`);
+  setStatus('load-status', `✓ Exported ${rows.length - 1} assembly row(s) — fill in components and re-import`, 'ok');
+}
+
+async function importAssembliesXlsx(file) {
+  if (typeof XLSX === 'undefined') { setStatus('load-status','Excel library not loaded','err'); return; }
+  if (!projId())                   { setStatus('load-status','Enter Project ID','err'); return; }
+  if (!deviceTypes.length)         { setStatus('load-status','Load device types first so IDs can be matched','err'); return; }
+  setStatus('load-status','Reading Excel…','running');
+
+  let json;
+  try {
+    const buf = await file.arrayBuffer();
+    const wb  = XLSX.read(buf, { type:'array' });
+    json = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval:'' });
+  } catch(e) { setStatus('load-status','Parse error: '+e.message,'err'); return; }
+
+  const known   = new Set(deviceTypes.map(d => d.id));
+  const byId     = new Map();     // device_id -> { [kind]: [parts] }
+  const unknown  = new Set();
+  let filledRows = 0;
+  for (const r of json) {
+    const id = parseInt(r.device_id);
+    if (!Number.isFinite(id)) continue;
+    if (!known.has(id)) { unknown.add(id); continue; }
+    const kind = String(r.kind ?? '').trim();
+    if (!kind) continue;
+    const part = {
+      device_name:  String(r.component    ?? '').trim(),
+      manufacturer: String(r.manufacturer ?? '').trim(),
+      part_name:    String(r.part_name    ?? '').trim(),
+      model:        String(r.model        ?? '').trim(),
+      qty:          Math.max(1, parseInt(r.qty) || 1)
+    };
+    if ((part.device_name + part.manufacturer + part.part_name + part.model).trim() === '') continue;  // blank slot
+    filledRows++;
+    if (!byId.has(id)) byId.set(id, {});
+    (byId.get(id)[kind] ||= []).push(part);
+  }
+
+  if (!byId.size) {
+    setStatus('load-status', `No filled assembly rows found${unknown.size ? ` (${unknown.size} unknown id(s) skipped)` : ''}`, 'err');
+    return;
+  }
+
+  let okN = 0, failN = 0;
+  for (const [id, assembly] of byId) {
+    try {
+      const r = await fetch(`${base()}/api/projects`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ action:'save_device_assembly', project_id: parseInt(projId()), id, assembly })
+      });
+      if (!r.ok) { failN++; continue; }
+      const dt = deviceTypes.find(d => d.id === id);
+      if (dt) dt.assembly = assembly;
+      okN++;
+    } catch { failN++; }
+  }
+  renderGrid(deviceTypes);
+  const notes = [];
+  if (unknown.size) notes.push(`${unknown.size} unknown id(s) skipped`);
+  if (failN)        notes.push(`${failN} failed — check save_device_assembly in projects.js`);
+  setStatus('load-status',
+    `✓ Imported ${okN} device assembl${okN === 1 ? 'y' : 'ies'} from ${filledRows} component row(s)${notes.length ? ' · ' + notes.join(' · ') : ''}`,
+    failN ? 'err' : 'ok');
 }
 
 // ── Render grid ───────────────────────────────────────────────────
