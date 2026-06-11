@@ -479,6 +479,7 @@ let trMap        = {};           // TR name → config
 let pinTarget    = null;         // { trName, pageNum } — current pin placement
 let batchResults = {};           // pageNum → result
 let batchPayloads = {};          // pageNum → the pass-batch body sent (for leader re-runs)
+let scopeRegions = {};           // page_id → [ {x0,y0,x1,y1} ] — mark-area distance scope
 
 function base() { return document.getElementById('netlify-url').value.replace(/\/$/, ''); }
 function pid()  { return parseInt(document.getElementById('project-id').value.trim()); }
@@ -2218,6 +2219,10 @@ async function confirmRegion() {
     const region = await r.json();
     if (!r.ok) { setStatus('region-status', 'Save error: ' + region.error, 'err'); return; }
 
+    // Register the box for distance scoping right away (so this run scopes even
+    // before a reload), keyed by the page it was drawn on.
+    (scopeRegions[pageId] ??= []).push({ id: region.id, x0, y0, x1, y1 });
+
     const trName = (prompt(`Primary TR room for "${label}":`) || '').trim();
     if (!trName) { setStatus('region-status', '✓ Schematic saved — add its primary TR from the card', 'ok'); closeRegionModal(); return; }
     if (trMap[trName]) { alert(`TR "${trName}" already exists.`); return; }
@@ -2511,15 +2516,22 @@ async function runBatch() {
   setStatus('batch-status', `✓ Complete — ${done} page${done !== 1 ? 's' : ''} processed in ${Math.round((Date.now() - t0) / 1000)}s`, 'ok');
   document.getElementById('results-section').style.display = 'block';
   document.getElementById('results-section').scrollIntoView({ behavior: 'smooth' });
+  applyDistanceScope();   // null distances for devices outside the marked box(es)
   renderResults();
 }
 
 // Build demarc pins for a page using the TR map
 function buildPinsForPage(pageNum, passBRes, pageW, pageH) {
   const pins = [];
+  const pageId = pageCache[pageNum]?.pageId;
   for (const [trName, tr] of Object.entries(trMap)) {
     const servesThisPage = (tr.pages ?? []).some(p => p.eval_page_num === pageNum);
     if (!servesThisPage) continue;
+
+    // The box this TR's pin owns (if any) — lets the server scope distance per box
+    // instead of nearest-pin. Matched on region_id, which both fresh and restored TRs carry.
+    const box      = (scopeRegions[pageId] || []).find(rg => rg.id === tr.region_id);
+    const scopeBox = box ? { x0: box.x0, y0: box.y0, x1: box.x1, y1: box.y1 } : undefined;
 
     // Priority 1: page has a dedicated exit pin
     const extraPin = tr.extra_pins?.[pageNum];
@@ -2529,7 +2541,8 @@ function buildPinsForPage(pageNum, passBRes, pageW, pageH) {
         name:      trName,
         x_norm:    extraPin.x_norm,
         y_norm:    extraPin.y_norm,
-        stub_ft:   extraPin.stub_ft ?? 0
+        stub_ft:   extraPin.stub_ft ?? 0,
+        scope_box: scopeBox
       });
       continue;
     }
@@ -2544,7 +2557,8 @@ function buildPinsForPage(pageNum, passBRes, pageW, pageH) {
         name:      trName,
         x_norm:    xNorm,
         y_norm:    yNorm,
-        stub_ft:   tr.stub_ft ?? 0
+        stub_ft:   tr.stub_ft ?? 0,
+        scope_box: scopeBox
       });
     }
     // Served but not demarc page + no exit pin = skip (no dist calculated)
@@ -2579,6 +2593,31 @@ function showTab(name) {
     tc.classList.remove('active');
     if (tc.id === `tab-${name}`) tc.classList.add('active');
   });
+}
+
+// ── Distance scope (mark-area) ────────────────────────────────────
+// A device inside any box on its page keeps its routed length; a device outside
+// every box on a page that HAS boxes is counted but not measured — total_ft and
+// demarc_id nulled, flagged out_of_scope. A page with no box stays page-wide
+// (unchanged, so VA etc. are untouched). The null is deliberate: a blank is
+// honest; a length routed to the wrong exit is a trap the estimator can't see.
+function inAnyRegion(regions, x, y) {
+  if (x == null || y == null) return false;
+  return regions.some(rg => x >= rg.x0 && x <= rg.x1 && y >= rg.y0 && y <= rg.y1);
+}
+
+function applyDistanceScope() {
+  for (const [pageNum, res] of Object.entries(batchResults)) {
+    const pageId  = pageCache[pageNum]?.pageId;
+    const regions = (pageId != null ? scopeRegions[pageId] : null) ?? [];
+    if (!regions.length) continue;                 // no box on this page → page-wide
+    for (const d of (res.devices ?? [])) {
+      if (inAnyRegion(regions, d.x_norm, d.y_norm)) continue;
+      d.total_ft  = null;
+      d.demarc_id = null;
+      const fl = new Set(d.flags ?? []); fl.add('out_of_scope'); d.flags = [...fl];
+    }
+  }
 }
 
 function renderResults() {
@@ -2641,7 +2680,9 @@ function renderByPage() {
         ? `<strong style="color:${d.tia_flag ? '#f07a7a' : '#7af07a'}">${d.total_ft}ft</strong>`
         : '—';
       const fl = d.flags ?? [];
-      const badge = fl.includes('leader_expanded')
+      const badge = fl.includes('out_of_scope')
+        ? ' <span title="outside the marked distance area — counted, not measured" style="color:#888; font-size:9px; border:1px solid #555; border-radius:3px; padding:0 3px;">no-dist</span>'
+        : fl.includes('leader_expanded')
         ? ' <span title="added via 1:N leader markup" style="color:#c08cff; font-size:9px; border:1px solid #6b4ea8; border-radius:3px; padding:0 3px;">⤳ leader</span>'
         : fl.includes('no_uin')
         ? ' <span title="unlabeled symbol — no UIN" style="color:#f0a040; font-size:9px; border:1px solid #7a5a20; border-radius:3px; padding:0 3px;">no-uin</span>'
@@ -3021,6 +3062,12 @@ async function restoreFromSupabase(pid) {
     const demarcs     = j.demarcs      ?? [];
     const pageRegions = j.page_regions ?? [];   // schematics (page → 1+ regions)
     const regionById  = new Map(pageRegions.map(rg => [rg.id, rg]));
+    // Distance-scope boxes, keyed by page_id (devices are scoped against these).
+    scopeRegions = {};
+    for (const rg of pageRegions) {
+      if (rg.page_id == null || rg.x0 == null) continue;
+      (scopeRegions[rg.page_id] ??= []).push(rg);
+    }
     const instances   = j.device_instances ?? []; // reconcile merges in Step 5
 
     // ── Restore selected pages ────────────────────────────────────

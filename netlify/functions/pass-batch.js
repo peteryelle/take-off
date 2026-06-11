@@ -78,17 +78,29 @@ export default async function handler(req) {
 
     const ptsPerFt = page.scale_pts_per_ft ?? null;
     const pins = demarc_pins ?? [];
+    const scopedPins   = pins.filter((p) => p && p.scope_box);
+    const unscopedPins = pins.filter((p) => p && !p.scope_box);
 
-    function nearestPin(cx, cy) {
-      if (!pins.length) return null;
-      let best = null, bestDist = Infinity;
-      for (const pin of pins) {
-        const dx = (cx - pin.x_norm) * (page_width_pts  ?? 1);
-        const dy = (cy - pin.y_norm) * (page_height_pts ?? 1);
-        const d  = Math.sqrt(dx * dx + dy * dy);
-        if (d < bestDist) { bestDist = d; best = pin; }
-      }
-      return { pin: best, dist_pts: bestDist };
+    function euclidPts(cx, cy, pin) {
+      const dx = (cx - pin.x_norm) * (page_width_pts  ?? 1);
+      const dy = (cy - pin.y_norm) * (page_height_pts ?? 1);
+      return Math.sqrt(dx * dx + dy * dy);
+    }
+    function inBox(b, x, y) { return x >= b.x0 && x <= b.x1 && y >= b.y0 && y <= b.y1; }
+    function nearestOf(pool, cx, cy) {
+      let best = null, bd = Infinity;
+      for (const p of pool) { const d = euclidPts(cx, cy, p); if (d < bd) { bd = d; best = p; } }
+      return best;
+    }
+    // Scope-aware pin assignment. A scoped pin claims only the devices inside its box,
+    // so per-box exits measure to the right exit instead of the nearest one. A device in
+    // no box on a fully-scoped page is out of scope (null distance — honest blank, not a
+    // wrong length). With no scoped pins this reduces to nearest-pin (back-compat: VA and
+    // every unboxed page behave exactly as before).
+    function assignPin(cx, cy) {
+      for (const p of scopedPins) if (inBox(p.scope_box, cx, cy)) return p;
+      if (scopedPins.length && !unscopedPins.length) return null;
+      return nearestOf(unscopedPins.length ? unscopedPins : pins, cx, cy);
     }
 
     // ── detect + schedule + symbol → reconcile ──────────────────
@@ -147,17 +159,20 @@ export default async function handler(req) {
       const xFt = hasXY && ptsPerFt && page_width_pts  ? parseFloat((cx * page_width_pts  / ptsPerFt).toFixed(1)) : null;
       const yFt = hasXY && ptsPerFt && page_height_pts ? parseFloat((cy * page_height_pts / ptsPerFt).toFixed(1)) : null;
 
-      let demarcId = null, runLengthFt = null, totalFt = null, tiaFlag = false, tiaReason = null;
+      let demarcId = null, runLengthFt = null, totalFt = null, tiaFlag = false, tiaReason = null, outOfScope = false;
       if (hasXY) {
-        const pinResult = nearestPin(cx, cy);
-        demarcId = pinResult?.pin?.demarc_id ?? null;
-        if (pinResult?.pin && ptsPerFt) {
-          runLengthFt = parseFloat((pinResult.dist_pts * ROUTE_FACTOR / ptsPerFt).toFixed(1));
-          totalFt     = parseFloat((runLengthFt + (pinResult.pin.stub_ft ?? 0)).toFixed(1));
+        const pin = assignPin(cx, cy);
+        demarcId  = pin?.demarc_id ?? null;
+        outOfScope = scopedPins.length > 0 && !pin;   // scoped page, device inside no box
+        if (pin && ptsPerFt) {
+          const distPts = euclidPts(cx, cy, pin);
+          runLengthFt = parseFloat((distPts * ROUTE_FACTOR / ptsPerFt).toFixed(1));
+          totalFt     = parseFloat((runLengthFt + (pin.stub_ft ?? 0)).toFixed(1));
           const limit = /WAP/i.test(dt.name || "") ? TIA_WAP_FT : TIA_OUTLET_FT;
           if (totalFt > limit) { tiaFlag = true; tiaReason = `${totalFt}ft exceeds ${limit}ft TIA limit`; }
         }
       }
+      const mergedFlags = outOfScope ? [ ...(dev.flags || []), "out_of_scope" ] : (dev.flags || []);
 
       return {
         dev, dt,
@@ -172,7 +187,7 @@ export default async function handler(req) {
           port_count_data: ports.port_count_data, port_count_voice: ports.port_count_voice,
           demarc_id: demarcId, run_length_ft: runLengthFt, total_ft: totalFt,
           tia_flag: tiaFlag, tia_reason: tiaReason, confidence: dev.confidence,
-          flags: (dev.flags && dev.flags.length) ? dev.flags : null
+          flags: mergedFlags.length ? mergedFlags : null
         }
       };
     });
@@ -211,7 +226,7 @@ export default async function handler(req) {
         uin: x.dev.uin, type: x.dev.type, legend_id: x.dt.legend_id ?? null, name: x.dt.name ?? x.dev.type,
         x_norm: x.row.x_norm, y_norm: x.row.y_norm, x_ft: x.row.x_ft, y_ft: x.row.y_ft,
         raw_labels: x.row.raw_labels,
-        sources: x.dev.sources, confidence: x.dev.confidence, flags: x.dev.flags, attributes: x.dev.attributes,
+        sources: x.dev.sources, confidence: x.dev.confidence, flags: x.row.flags, attributes: x.dev.attributes,
         total_ft: x.row.total_ft, tia_flag: x.row.tia_flag, tia_reason: x.row.tia_reason, demarc_id: x.row.demarc_id
       }))
     });
