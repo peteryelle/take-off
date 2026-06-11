@@ -146,6 +146,24 @@ export default async function handler(req) {
       return ok({ copied: inserted.length, device_types: inserted });
     }
 
+    // ── Action: save device assembly (jsonb on device_types) ────
+    // Replace the whole assembly object for one device type. Used by the Assembly
+    // modal's Save and by the bulk Excel import (one call per device). updated_at is
+    // set explicitly — device_types has no auto-update trigger.
+    if (action === "save_device_assembly") {
+      const { project_id, id, assembly } = body;
+      if (!project_id || !id) return err("project_id and id required");
+
+      const { error } = await supabase
+        .from("device_types")
+        .update({ assembly: assembly ?? {}, updated_at: new Date() })
+        .eq("id", id)
+        .eq("project_id", project_id);
+
+      if (error) return err(error.message, 500);
+      return ok({ saved: true, id });
+    }
+
     // ── Action: delete a project and ALL its data (cascade) ─────
     if (action === "delete_project") {
       const { id, project_id } = body;
