@@ -1175,8 +1175,7 @@ async function runDemarcScan() {
       const j = await r.json();
       if (r.ok) {
         // Merge, don't overwrite — a bare assignment here drops page_role (and
-        // suggest_skip/reason) that was set before this scan, which then trips the
-        // Step-4 role gate on exactly the page(s) you just scanned.
+        // suggest_skip/reason) set before this scan, tripping the Step-4 role gate.
         pageCache[pageNum] = { ...pageCache[pageNum], passBResult: j, pageId: j.page_id };
         pageBResults.push({ eval_page_num: pageNum, page_b_result: j });
       }
@@ -1589,7 +1588,11 @@ function renderTRCard(tr, container) {
       <div class="tr-card-body" id="tr-body-${tr.name}"></div>`;
     container.appendChild(card);
 
-    const body = card.querySelector(`#tr-body-${tr.name}`);
+    // Fetch by class, not `#tr-body-${tr.name}` — a TR name with a space (e.g.
+    // "TR Box1") makes the space a CSS descendant combinator, the selector matches
+    // nothing, body is null, and body.appendChild throws. One body per card, so
+    // class is unambiguous and name-proof.
+    const body = card.querySelector('.tr-card-body');
 
     // ── Step 1: Demarc Page ───────────────────────────────────────
     const step1 = document.createElement('div');
@@ -1611,7 +1614,7 @@ function renderTRCard(tr, container) {
     body.appendChild(step1);
 
     // Populate dropdown
-    const sel = step1.querySelector(`#demarc-page-sel-${tr.name}`);
+    const sel = step1.querySelector('select');   // one select in step1 — name-proof
     const offOpt = document.createElement('option');
     offOpt.value = ''; offOpt.textContent = '— off sheet —';
     sel.appendChild(offOpt);
