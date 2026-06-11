@@ -1174,7 +1174,10 @@ async function runDemarcScan() {
       });
       const j = await r.json();
       if (r.ok) {
-        pageCache[pageNum] = { passBResult: j, pageId: j.page_id };
+        // Merge, don't overwrite — a bare assignment here drops page_role (and
+        // suggest_skip/reason) that was set before this scan, which then trips the
+        // Step-4 role gate on exactly the page(s) you just scanned.
+        pageCache[pageNum] = { ...pageCache[pageNum], passBResult: j, pageId: j.page_id };
         pageBResults.push({ eval_page_num: pageNum, page_b_result: j });
       }
     } catch(e) { console.warn(`Page ${pageNum} scan failed:`, e.message); }
