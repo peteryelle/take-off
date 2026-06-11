@@ -2631,6 +2631,16 @@ function renderByPage() {
   const sortedPages = [...selectedPages].sort((a,b)=>a-b);
   let html = '';
 
+  // Resolve a device's demarc_id → its TR name (covers both main pins and exit pins),
+  // so multi-pin pages can show which exit each device homed to.
+  const trByDemarc = {};
+  for (const [name, tr] of Object.entries(trMap)) {
+    if (tr.demarc_id != null) trByDemarc[tr.demarc_id] = name;
+    for (const ep of Object.values(tr.extra_pins ?? {})) {
+      if (ep?.demarc_id != null) trByDemarc[ep.demarc_id] = name;
+    }
+  }
+
   for (const pageNum of sortedPages) {
     const res  = batchResults[pageNum];
     const cache = pageCache[pageNum]?.passBResult;
@@ -2638,14 +2648,24 @@ function renderByPage() {
     if (!res) continue;
 
     html += `<div style="margin-bottom:16px; border-bottom:1px solid #1a1a1a; padding-bottom:12px;">`;
-    // Find demarc info for this page
-    let demarcInfo = '';
+    // TRs (with a pin) serving this page. One entry = one exit; 2+ means the device
+    // table needs a per-device TR column to show which exit each device homed to.
+    const servingTRs = [];
     for (const [trName, tr] of Object.entries(trMap)) {
       const servesThis = (tr.pages ?? []).some(p => p.eval_page_num === pageNum);
       if (!servesThis) continue;
       const extraPin = tr.extra_pins?.[pageNum];
-      const backbone = extraPin?.stub_ft ?? tr.stub_ft ?? 0;
-      demarcInfo = `<span style="color:#555; margin-left:12px; font-size:11px;">TR: ${trName}${backbone > 0 ? ' + ' + backbone + 'ft backbone' : ''}</span>`;
+      const hasPin = !!extraPin || (pageNum === tr.demarc_page_num && (tr.pin_x ?? tr.demarc_x) != null);
+      if (!hasPin) continue;
+      servingTRs.push({ name: trName, backbone: extraPin?.stub_ft ?? tr.stub_ft ?? 0 });
+    }
+    const showTR = servingTRs.length >= 2;
+    let demarcInfo = '';
+    if (servingTRs.length === 1) {
+      const t = servingTRs[0];
+      demarcInfo = `<span style="color:#555; margin-left:12px; font-size:11px;">TR: ${t.name}${t.backbone > 0 ? ' + ' + t.backbone + 'ft backbone' : ''}</span>`;
+    } else if (servingTRs.length > 1) {
+      demarcInfo = `<span style="color:#555; margin-left:12px; font-size:11px;">${servingTRs.length} exits: ${servingTRs.map(t => t.name).join(', ')}</span>`;
     }
     html += `<div style="color:#f0c040; font-size:13px; margin-bottom:6px; display:flex; align-items:baseline; flex-wrap:wrap; gap:8px;">
       <strong>pg${pageNum}</strong>
@@ -2672,7 +2692,7 @@ function renderByPage() {
 
     // Device table
     html += `<table class="res-table"><thead><tr>
-      <th>#</th><th>Name</th><th>Labels</th><th style="text-align:right;">X,Y</th><th style="text-align:right;">Dist (ft)</th>
+      <th>#</th><th>Name</th><th>Labels</th>${showTR ? '<th>TR</th>' : ''}<th style="text-align:right;">X,Y</th><th style="text-align:right;">Dist (ft)</th>
     </tr></thead><tbody>`;
 
     (res.devices ?? []).forEach((d, i) => {
@@ -2694,6 +2714,7 @@ function renderByPage() {
         <td style="color:#555;">${i+1}</td>
         <td style="color:#f0c040;">${d.name ?? '—'}${badge}</td>
         <td style="color:#7ac0f0; font-family:monospace;">${(d.raw_labels ?? []).join(' · ')}</td>
+        ${showTR ? `<td style="color:#9aa0d0; font-family:monospace;">${d.demarc_id != null ? (trByDemarc[d.demarc_id] ?? ('#' + d.demarc_id)) : '—'}</td>` : ''}
         <td style="text-align:right; color:#666; font-family:monospace;">${d.x_norm?.toFixed(3)}, ${d.y_norm?.toFixed(3)}</td>
         <td style="text-align:right;">${dist}</td>
       </tr>`;
