@@ -635,8 +635,11 @@ function openAssembly(id) {
   const dt = deviceTypes.find(d => d.id === id);
   if (!dt) return;
   asmDeviceId = id;
-  asmKinds    = asmKindsForDevice(dt);
   const saved = (dt.assembly && typeof dt.assembly === 'object') ? dt.assembly : {};
+  // Kinds = anchor-derived UNION any kind already stored, so no saved key is
+  // ever orphaned (an orphaned key drops on open and is wiped on the next save).
+  const derived = asmKindsForDevice(dt);
+  asmKinds = [...new Set([...derived, ...Object.keys(saved)])];
   asmData = {};
   for (const k of asmKinds) {
     const rows = Array.isArray(saved[k]) ? saved[k].map(r => ({ ...asmBlankRow(), ...r })) : [];

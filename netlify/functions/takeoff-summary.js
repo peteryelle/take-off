@@ -23,7 +23,7 @@ export default async function handler(req) {
 
     // Device types — full fields needed for detection and restore
     supabase.from("device_types")
-      .select("id, legend_id, name, discipline, category, human_description, llm_description, text_anchors, detection_config, example_image_base64")
+      .select("id, legend_id, name, discipline, category, human_description, llm_description, text_anchors, detection_config, example_image_base64, assembly")
       .eq("project_id", project_id)
       .order("legend_id"),
 
