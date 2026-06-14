@@ -12,6 +12,7 @@
 
 import { getSupabase, ok, err, CORS } from "./utils/clients.js";
 import { buildDeviceList } from "../../public/lib/pipeline.js";
+import { parseSchedule } from "../../public/lib/schedule.js";
 
 const ROUTE_FACTOR  = 1.35;
 const TIA_OUTLET_FT = 295;
@@ -137,9 +138,29 @@ export default async function handler(req) {
       }).filter(Boolean);
     }
 
+    // Attach each schedule row's OWN UIN-text coordinate so reconcile can tell a
+    // re-detected schedule label (echo — parks the device on the table, off-plan and
+    // outside the distance boxes) from a real plan stamp. Derived from the same text
+    // layer at run time, so no schema/persist dependency; best-effort and guarded —
+    // absent/empty schedule cfg yields no xy, and reconcile's echo guard is then inert
+    // (pre-fix behavior). Never affects the count, only which xy a device adopts.
+    if (seededScheduleRows.length && page.schedule && page.schedule.present !== false) {
+      try {
+        const xyByUin = new Map();
+        for (const r of parseSchedule(text_items, page.schedule, {})) {
+          if (Number.isFinite(r.x) && Number.isFinite(r.y)) xyByUin.set(String(r.uin).trim().toUpperCase(), [r.x, r.y]);
+        }
+        for (const row of seededScheduleRows) {
+          const xy = xyByUin.get(row.uin);
+          if (xy) { row.x = xy[0]; row.y = xy[1]; }
+        }
+      } catch (e) { console.warn("[schedule echo xy]", e?.message); }
+    }
+
     const { devices: reconciled, typeMap } = buildDeviceList(
       text_items, deviceTypes, page.schedule,
-      { scheduleRows: seededScheduleRows }, symbol_instances || [], leaderOv);
+      { scheduleRows: seededScheduleRows, planRegions: scopedPins.map((p) => p.scope_box).filter(Boolean) },
+      symbol_instances || [], leaderOv);
 
     const instances = reconciled.map((dev) => {
       const dt = typeMap[dev.type] || {};

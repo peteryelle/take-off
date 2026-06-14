@@ -23,6 +23,14 @@
 
 const famOf = (code) => (String(code).match(/^[A-Z]+/) || [String(code)])[0];
 
+function inAnyRegion(regions, x, y) {
+  if (x == null || y == null) return false;
+  for (const r of regions) {
+    if (r && x >= r.x0 && x <= r.x1 && y >= r.y0 && y <= r.y1) return true;
+  }
+  return false;
+}
+
 function quantKey(type, x, y, decimals) {
   const q = (v) => (v == null ? 'na' : Number(v).toFixed(decimals));
   return `coord:${type}@${q(x)},${q(y)}`;
@@ -42,6 +50,11 @@ export function reconcile(catalog = {}, labelInstances = [], symbolInstances = [
   const snapR = opts.snapR ?? 0.02;                 // symbol->device snap radius (same units as xy)
   const coordDecimals = opts.coordKeyDecimals ?? 4; // no-UIN label collapse granularity
   const leaderMatchR2 = (opts.leaderMatchR ?? 0.02) ** 2; // marked-cluster match radius, squared
+  const echoR2 = (opts.echoR ?? 0.01) ** 2;         // schedule-echo match radius, squared
+  // Per-plan boxes the host draws (one per schematic). When supplied, an in-box label
+  // outranks any out-of-box one, so a schedule/legend echo can never overwrite a real
+  // plan stamp — independent of how many plans or schedule tables a page carries.
+  const planRegions = Array.isArray(opts.planRegions) ? opts.planRegions.filter(Boolean) : [];
 
   const scheduleActive = (type) => {
     const c = catalog[type];
@@ -75,6 +88,10 @@ export function reconcile(catalog = {}, labelInstances = [], symbolInstances = [
   // 1. SEED from schedule (authoritative count when present), keyed by UIN.
   for (const row of scheduleRows) {
     const d = rec(row.uin, row.type, { attributes: { ...(row.attributes || {}) } });
+    // The schedule's own UIN-text coordinate, when the host supplies it, lets PLACE
+    // tell a re-detected schedule label (echo) from a real plan stamp. Absent -> the
+    // echo guard is inert and PLACE behaves exactly as before (full back-compat).
+    if (Number.isFinite(row.x) && Number.isFinite(row.y)) d.attributes._sched_xy = [row.x, row.y];
     addSource(d, 'schedule');
     devices.push(d);
     keyIndex.set(row.uin, d);
@@ -85,8 +102,22 @@ export function reconcile(catalog = {}, labelInstances = [], symbolInstances = [
     const u = lab.uin;
     if (u && keyIndex.has(u)) {                       // label joins a scheduled/known device by UIN
       const d = keyIndex.get(u);
+      const sx = d.attributes && d.attributes._sched_xy;
+      // ECHO GUARD (schedule xy): a label on the schedule row's own UIN text is the
+      // schedule re-detected — never a placement. Drop it outright.
+      if (sx && ((lab.x - sx[0]) ** 2 + (lab.y - sx[1]) ** 2) <= echoR2) continue;
+      // REGION PREFERENCE: the per-plan boxes are the strong, table-count-agnostic
+      // discriminator — a real stamp is inside a plan box, a schedule/legend echo is
+      // outside all of them. In-box (tier 2) always beats out-of-box (tier 1), so the
+      // echo can't overwrite a stamp regardless of label order or how many schedule
+      // tables the page has. No regions -> uniform tier -> inert (PLACE as before). An
+      // out-of-box label still places when nothing in-box exists yet (a device on a plan
+      // the user didn't box) — best effort, never stranded.
+      const inRegion = planRegions.length ? inAnyRegion(planRegions, lab.x, lab.y) : true;
+      const tier = inRegion ? 2 : 1;
+      if (tier < (d._placeTier ?? 0)) continue;       // keep the stronger in-box placement
       if (d.type !== lab.type) { d.flags.push('type_conflict'); }
-      d.x = lab.x; d.y = lab.y; d.xy_source = 'label';
+      d.x = lab.x; d.y = lab.y; d.xy_source = 'label'; d._placeTier = tier;
       addSource(d, 'label'); mergeFamilies(d, lab);
     } else if (u) {                                   // labeled, no matching device
       const d = rec(u, lab.type, { x: lab.x, y: lab.y, xy_source: 'label', sources: ['label'] });
@@ -199,6 +230,8 @@ export function reconcile(catalog = {}, labelInstances = [], symbolInstances = [
     }
     // Synthetic ids are internal join handles only; expose uin=null for genuinely unlabeled devices.
     if (typeof d.uin === 'string' && d.uin.startsWith('_')) d.uin = null;
+    if (d.attributes && '_sched_xy' in d.attributes) delete d.attributes._sched_xy;  // internal join hint, never surfaced
+    if ('_placeTier' in d) delete d._placeTier;                                       // transient placement rank
   }
 
   return devices;

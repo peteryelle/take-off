@@ -104,22 +104,23 @@ export function parseSchedule(textItems = [], scheduleCfg = {}, opts = {}) {
   const out = [];
   for (let i = headerIdx + 1; i < rows.length; i++) {
     const acc = {};                                 // x -> joined text, keyed per header instance
-    headerXs.forEach((c, idx) => { acc[idx] = []; });
+    const accPos = {};                              // x -> [[cx,cy], ...] for the same cells
+    headerXs.forEach((c, idx) => { acc[idx] = []; accPos[idx] = []; });
     for (const it of rows[i]) {
       let best = -1, bestD = Infinity;
       headerXs.forEach((c, idx) => {
         const d = Math.abs(it.cx_norm - c.x);
         if (d < bestD) { bestD = d; best = idx; }
       });
-      if (best >= 0) acc[best].push(it.str);
+      if (best >= 0) { acc[best].push(it.str); accPos[best].push([it.cx_norm, it.cy_norm]); }
     }
     const cellOf = (idx) => norm(acc[idx].join(' ')).trim();
 
-    let uin = null, detailSheet = null;
+    let uin = null, detailSheet = null, uinIdx = -1;
     const cableDest = [];
     headerXs.forEach((c, idx) => {
       const v = cellOf(idx);
-      if (c.key === 'uin') uin = v;
+      if (c.key === 'uin') { uin = v; uinIdx = idx; }
       else if (c.key === 'detail_sheet') detailSheet = v || null;
       else if (c.key === 'cable_dest' && v && v !== '-') cableDest.push(v);
     });
@@ -127,8 +128,19 @@ export function parseSchedule(textItems = [], scheduleCfg = {}, opts = {}) {
     // UINs are single code tokens (CAM-EXT-1, SF1, N2). Reject footers/notes
     // like "TOTAL DEVICES: 40" — anything with spaces, colons, or a non-code start.
     if (!uin || !/^[A-Z0-9][A-Z0-9._/-]*$/.test(uin)) continue;
+
+    // UIN-cell centroid: the schedule's OWN text position. reconcile uses it to tell
+    // a re-detected schedule label (echo) from a real plan stamp, so the device lands
+    // on the plan, not parked on the table. null when the cell had no positioned item.
+    let x = null, y = null;
+    const pos = uinIdx >= 0 ? accPos[uinIdx] : [];
+    if (pos.length) {
+      x = pos.reduce((s, p) => s + p[0], 0) / pos.length;
+      y = pos.reduce((s, p) => s + p[1], 0) / pos.length;
+    }
+
     const type = scheduleCfg.type_from === 'uin_prefix' ? leadAlpha(uin) : (scheduleCfg.type || null);
-    out.push({ uin, type, attributes: { cable_dest: cableDest, detail_sheet: detailSheet } });
+    out.push({ uin, type, x, y, attributes: { cable_dest: cableDest, detail_sheet: detailSheet } });
   }
 
   return out;
