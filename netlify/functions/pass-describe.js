@@ -11,6 +11,7 @@
 
 import { getSupabase, getAnthropic, ok, err, CORS } from "./utils/clients.js";
 
+import { requireOrg, assertProjectInOrg, assertPageInOrg } from "./utils/auth.js";
 // ── Deterministic text_anchors extraction ────────────────────────
 // Rules-based — Claude NEVER controls text_anchors.
 // Claude writes the visual description; these rules extract the anchors.
@@ -109,7 +110,11 @@ export default async function handler(req) {
   if (!project_id || !device_type_id)
     return err("project_id and device_type_id required");
 
-  const supabase  = getSupabase();
+  const gate = await requireOrg(req);
+  if (gate.error) return gate.error;
+  const { supabase, orgId } = gate;
+
+  if (!(await assertProjectInOrg(supabase, project_id, orgId))) return err("Project not found in your organization", 404);
   const anthropic = getAnthropic();
 
   // ── Mode: PARSE existing llm_description ─────────────────────────

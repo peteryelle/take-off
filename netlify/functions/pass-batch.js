@@ -11,6 +11,7 @@
 // ─────────────────────────────────────────────────────────────────
 
 import { getSupabase, ok, err, CORS } from "./utils/clients.js";
+import { requireOrg, assertProjectInOrg, assertPageInOrg } from "./utils/auth.js";
 import { buildDeviceList } from "../../public/lib/pipeline.js";
 import { parseSchedule } from "../../public/lib/schedule.js";
 
@@ -40,7 +41,11 @@ export default async function handler(req) {
   if (!project_id || !page_id || !text_items?.length)
     return err("project_id, page_id and text_items required");
 
-  const supabase = getSupabase();
+  const gate = await requireOrg(req);
+  if (gate.error) return gate.error;
+  const { supabase, orgId } = gate;
+
+  if (!(await assertProjectInOrg(supabase, project_id, orgId))) return err("Project not found in your organization", 404);
   await supabase.from("pages").update({ status: "running", status_msg: null }).eq("id", page_id);
 
   // Persist the client-computed sheet_class probe (substep 4 wiring tail). Passive,

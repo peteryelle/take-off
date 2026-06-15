@@ -11,6 +11,7 @@
 // ─────────────────────────────────────────────────────────────────
 
 import { getSupabase, ok, err, CORS } from "./utils/clients.js";
+import { requireOrg, assertProjectInOrg, assertPageInOrg } from "./utils/auth.js";
 import { buildDeviceList } from "../../public/lib/pipeline.js";
 
 const TIA_MAX_PERMANENT_LINK_FT = 295;
@@ -38,7 +39,12 @@ export default async function handler(req) {
           symbol_instances, leader_overrides, sheet_class } = body;
   if (!project_id || !page_id) return err("project_id and page_id required");
 
-  const supabase = getSupabase();
+  const gate = await requireOrg(req);
+  if (gate.error) return gate.error;
+  const { supabase, orgId } = gate;
+
+  if (!(await assertProjectInOrg(supabase, project_id, orgId))) return err("Project not found in your organization", 404);
+  if (!(await assertPageInOrg(supabase, page_id, orgId))) return err("Page not found in your organization", 404);
 
   if (clear_only) {
     await supabase.from("device_instances").delete().eq("page_id", page_id);

@@ -5,6 +5,7 @@
 
 import { getSupabase, getAnthropic, SYSTEM_PROMPT, ok, err, CORS } from "./utils/clients.js";
 
+import { requireOrg, assertProjectInOrg, assertPageInOrg } from "./utils/auth.js";
 export default async function handler(req) {
   if (req.method === "OPTIONS") return new Response("", { headers: CORS });
   if (req.method !== "POST")    return err("POST required", 405);
@@ -16,7 +17,11 @@ export default async function handler(req) {
   if (!project_id || !pdf_page_number || !page_image_base64)
     return err("project_id, pdf_page_number and page_image_base64 required");
 
-  const supabase  = getSupabase();
+  const gate = await requireOrg(req);
+  if (gate.error) return gate.error;
+  const { supabase, orgId } = gate;
+
+  if (!(await assertProjectInOrg(supabase, project_id, orgId))) return err("Project not found in your organization", 404);
   const anthropic = getAnthropic();
 
   // ── Detect image type ─────────────────────────────────────────

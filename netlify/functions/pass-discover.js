@@ -18,6 +18,7 @@
 import Anthropic        from "@anthropic-ai/sdk";
 import { createClient } from "@supabase/supabase-js";
 import { discoverCatalog } from "../../public/lib/discover-config.js";
+import { requireOrg, assertProjectInOrg } from "./utils/auth.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const supabase  = createClient(
@@ -36,6 +37,12 @@ export default async function handler(req) {
   const { action, project_id } = body;
   if (!action)     return respond(400, { error: "action required" });
   if (!project_id) return respond(400, { error: "project_id required" });
+
+  const gate = await requireOrg(req);
+  if (gate.error) return gate.error;
+  const orgId = gate.orgId;
+  if (!(await assertProjectInOrg(supabase, project_id, orgId)))
+    return respond(404, { error: "Project not found in your organization" });
 
   try {
     switch (action) {

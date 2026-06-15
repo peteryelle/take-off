@@ -20,6 +20,7 @@
 // ─────────────────────────────────────────────────────────────────
 
 import { getSupabase, getAnthropic, ok, err, CORS } from "./utils/clients.js";
+import { requireOrg, assertProjectInOrg, assertPageInOrg } from "./utils/auth.js";
 import { makeStrips, toFullCoords } from "./utils/strips.js";
 
 const N_STRIPS = 8;
@@ -36,7 +37,11 @@ export default async function handler(req) {
   if (!page_id || !device_type_id || !page_image_base64)
     return err("page_id, device_type_id, page_image_base64 required");
 
-  const supabase  = getSupabase();
+  const gate = await requireOrg(req);
+  if (gate.error) return gate.error;
+  const { supabase, orgId } = gate;
+
+  if (!(await assertPageInOrg(supabase, page_id, orgId))) return err("Page not found in your organization", 404);
   const anthropic = getAnthropic();
 
   const { data: device, error: devErr } = await supabase

@@ -5,6 +5,7 @@
 
 import { getSupabase, ok, err, CORS } from "./utils/clients.js";
 
+import { requireOrg, assertProjectInOrg, assertPageInOrg } from "./utils/auth.js";
 export default async function handler(req) {
   if (req.method === "OPTIONS") return new Response("", { headers: CORS });
   if (req.method !== "GET")     return err("GET required", 405);
@@ -13,7 +14,11 @@ export default async function handler(req) {
   const project_id = parseInt(url.searchParams.get("project_id"));
   if (!project_id) return err("project_id required");
 
-  const supabase = getSupabase();
+  const gate = await requireOrg(req);
+  if (gate.error) return gate.error;
+  const { supabase, orgId } = gate;
+
+  if (!(await assertProjectInOrg(supabase, project_id, orgId))) return err("Project not found in your organization", 404);
 
   // Run all queries in parallel
   const [

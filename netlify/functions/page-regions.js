@@ -9,9 +9,12 @@
 
 import { getSupabase, ok, err, CORS } from "./utils/clients.js";
 
+import { requireOrg, assertProjectInOrg, assertPageInOrg } from "./utils/auth.js";
 export default async function handler(req) {
   if (req.method === "OPTIONS") return new Response("", { headers: CORS });
-  const supabase = getSupabase();
+  const gate = await requireOrg(req);
+  if (gate.error) return gate.error;
+  const { supabase, orgId } = gate;
 
   // ── GET — list regions for a page ─────────────────────────────
   if (req.method === "GET") {
@@ -49,6 +52,8 @@ export default async function handler(req) {
     const { project_id, page_id, label, polygon, x0, y0, x1, y1 } = body;
     if (!project_id || !page_id || !Array.isArray(polygon) || !polygon.length)
       return err("project_id, page_id and polygon required");
+
+  if (!(await assertPageInOrg(supabase, page_id, orgId))) return err("Page not found in your organization", 404);
 
     const row = {
       project_id, page_id,

@@ -18,9 +18,12 @@
 
 import { getSupabase, ok, err, CORS } from "./utils/clients.js";
 
+import { requireOrg, assertProjectInOrg, assertPageInOrg } from "./utils/auth.js";
 export default async function handler(req) {
   if (req.method === "OPTIONS") return new Response("", { headers: CORS });
-  const supabase = getSupabase();
+  const gate = await requireOrg(req);
+  if (gate.error) return gate.error;
+  const { supabase, orgId } = gate;
 
   // ── GET — list demarcs ────────────────────────────────────────
   if (req.method === "GET") {
@@ -44,6 +47,9 @@ export default async function handler(req) {
 
     const { project_id, page_id, name, source, x_norm, y_norm, stub_ft, region_id, note } = body;
     if (!project_id || !name || !source) return err("project_id, name and source required");
+
+  if (!(await assertProjectInOrg(supabase, project_id, orgId))) return err("Project not found in your organization", 404);
+  if (!(await assertPageInOrg(supabase, page_id, orgId))) return err("Page not found in your organization", 404);
 
     const row = {
       project_id,

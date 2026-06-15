@@ -15,6 +15,7 @@
 
 import { getSupabase, ok, err, CORS } from "./utils/clients.js";
 
+import { requireOrg, assertProjectInOrg, assertPageInOrg } from "./utils/auth.js";
 const ROLES        = new Set(["plan", "schedule", "legend", "detail", "skip"]);
 const NON_COUNTING = new Set(["legend", "schedule", "detail", "skip"]);
 
@@ -29,7 +30,12 @@ export default async function handler(req) {
   const role = (body.page_role === null || body.page_role === "") ? null : String(body.page_role);
   if (role !== null && !ROLES.has(role)) return err(`invalid page_role: ${role}`);
 
-  const supabase = getSupabase();
+  const gate = await requireOrg(req);
+  if (gate.error) return gate.error;
+  const { supabase, orgId } = gate;
+
+  if (!(await assertProjectInOrg(supabase, project_id, orgId))) return err("Project not found in your organization", 404);
+  if (!(await assertPageInOrg(supabase, page_id, orgId))) return err("Page not found in your organization", 404);
 
   // Resolve (or create) the page row.
   if (!page_id) {
