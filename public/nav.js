@@ -37,13 +37,24 @@
     const pid = projectId();
     const q   = pid ? `?project_id=${encodeURIComponent(pid)}` : '';
 
-    mount.innerHTML = ITEMS.map((it) => {
+    const links = ITEMS.map((it) => {
       const active = it.file === cur;
       if (active) {
         return `<span class="to-nav-active">${it.label}</span>`;
       }
       return `<a class="to-nav-link" href="${it.file}${q}">${it.label}</a>`;
     }).join('<span class="to-nav-sep">·</span>');
+
+    mount.innerHTML = links +
+      '<span class="to-nav-spacer"></span>' +
+      '<a class="to-nav-link" id="to-signout" href="#">⎋ Sign out</a>';
+
+    const so = document.getElementById('to-signout');
+    if (so) so.onclick = (e) => {
+      e.preventDefault();
+      if (window.TakeoffAuth) window.TakeoffAuth.signOut();
+      else location.replace('login.html');
+    };
   }
 
   // Minimal styling, injected once, matching the existing dark monospace theme.
@@ -58,6 +69,7 @@
       #to-nav .to-nav-active { color: #7af07a; padding: 3px 10px; border: 1px solid #3a7a3a;
                 border-radius: 3px; background: #14241a; font-weight: bold; }
       #to-nav .to-nav-sep { color: #444; padding: 0 2px; }
+      #to-nav .to-nav-spacer { flex: 1 1 auto; }
     `;
     const el = document.createElement('style');
     el.id = 'to-nav-style';
