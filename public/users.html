@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Users — Take-off</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="auth.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: monospace; background: #0d0d0d; color: #e0e0e0; font-size: 14px; }
+.header { background: #080808; border-bottom: 1px solid #1e1e1e; padding: 14px 24px; display: flex; align-items: center; gap: 16px; }
+.header h1 { color: #f0c040; font-size: 18px; letter-spacing: 2px; text-transform: uppercase; }
+.wrap { padding: 20px 24px; max-width: 860px; }
+.panel { background: #111; border: 1px solid #1e1e1e; border-radius: 6px; padding: 18px; margin-bottom: 18px; }
+.panel h2 { color: #7ac0f0; font-size: 13px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #1a1a1a; }
+th { color: #666; font-weight: normal; font-size: 11px; text-transform: uppercase; }
+select, input { background: #1a1a1a; border: 1px solid #333; color: #e0e0e0; padding: 7px 9px;
+        border-radius: 3px; font-family: monospace; font-size: 13px; }
+input { width: 260px; }
+button { background: #f0c040; color: #111; border: 0; padding: 8px 14px; border-radius: 3px;
+         font-family: monospace; font-weight: bold; font-size: 12px; cursor: pointer; }
+button.ghost { background: #1a1a1a; color: #e06c6c; border: 1px solid #3a2222; }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.you { color: #6ce08a; font-size: 11px; }
+.msg { margin-top: 10px; font-size: 12px; min-height: 16px; }
+.msg.err { color: #e06c6c; } .msg.ok { color: #6ce08a; }
+.gate { color: #e06c6c; padding: 24px; }
+</style>
+</head>
+<body>
+<div class="header"><h1>Take-off</h1></div>
+<div class="wrap">
+  <nav id="to-nav"></nav>
+  <div id="content" style="display:none">
+    <div class="panel">
+      <h2>Invite a user</h2>
+      <div class="row">
+        <input id="inv-email" type="email" placeholder="name@company.com">
+        <select id="inv-role">
+          <option value="member">member</option>
+          <option value="admin">admin</option>
+          <option value="owner">owner</option>
+        </select>
+        <button id="inv-send">Send invite</button>
+      </div>
+      <div class="msg" id="inv-msg"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Organization members</h2>
+      <table>
+        <thead><tr><th>Email</th><th>Role</th><th></th></tr></thead>
+        <tbody id="members"></tbody>
+      </table>
+      <div class="msg" id="list-msg"></div>
+    </div>
+  </div>
+  <div id="gate" class="gate" style="display:none"></div>
+</div>
+<script src="nav.js"></script>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var meId = null;
+
+  async function api(path, opts) {
+    var res = await fetch(path, opts);
+    var json = await res.json().catch(function () { return {}; });
+    if (!res.ok) throw new Error(json.error || ("HTTP " + res.status));
+    return json;
+  }
+
+  function roleSelect(current, uid) {
+    var dis = uid === meId ? " disabled" : "";
+    return '<select data-uid="' + uid + '"' + dis + '>' +
+      ["owner", "admin", "member"].map(function (r) {
+        return '<option value="' + r + '"' + (r === current ? " selected" : "") + '>' + r + '</option>';
+      }).join("") + '</select>';
+  }
+
+  async function load() {
+    try {
+      var data = await api("/api/org-users");
+      meId = data.me;
+      var rows = data.members.map(function (m) {
+        var you = m.user_id === meId ? ' <span class="you">(you)</span>' : '';
+        var rm = m.user_id === meId ? '' :
+          '<button class="ghost" data-remove="' + m.user_id + '">Remove</button>';
+        return '<tr><td>' + m.email + you + '</td><td>' + roleSelect(m.role, m.user_id) +
+               '</td><td>' + rm + '</td></tr>';
+      }).join("");
+      $("members").innerHTML = rows;
+      $("content").style.display = "block";
+
+      // wire role changes
+      $("members").querySelectorAll("select[data-uid]").forEach(function (sel) {
+        sel.onchange = async function () {
+          try {
+            await api("/api/org-users", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ action: "update_role", user_id: sel.dataset.uid, role: sel.value })
+            });
+            setListMsg("Role updated", "ok");
+          } catch (e) { setListMsg(e.message, "err"); load(); }
+        };
+      });
+      // wire removals
+      $("members").querySelectorAll("button[data-remove]").forEach(function (b) {
+        b.onclick = async function () {
+          if (!confirm("Remove this user? They lose access immediately.")) return;
+          try {
+            await api("/api/org-users", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ action: "remove", user_id: b.dataset.remove })
+            });
+            load();
+          } catch (e) { setListMsg(e.message, "err"); }
+        };
+      });
+    } catch (e) {
+      if (/owner or admin/i.test(e.message)) {
+        $("gate").textContent = "You don't have permission to manage users in this organization.";
+        $("gate").style.display = "block";
+      } else {
+        setListMsg(e.message, "err");
+      }
+    }
+  }
+
+  function setListMsg(t, c) { var m = $("list-msg"); m.textContent = t; m.className = "msg " + (c || ""); }
+  function setInvMsg(t, c) { var m = $("inv-msg"); m.textContent = t; m.className = "msg " + (c || ""); }
+
+  $("inv-send").onclick = async function () {
+    var email = $("inv-email").value.trim();
+    if (!email) { setInvMsg("Email required", "err"); return; }
+    $("inv-send").disabled = true; setInvMsg("Sending…");
+    try {
+      var r = await api("/api/org-users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "invite", email: email, role: $("inv-role").value })
+      });
+      setInvMsg("Invite sent to " + r.invited, "ok");
+      $("inv-email").value = "";
+      load();
+    } catch (e) {
+      setInvMsg(e.message, "err");
+    } finally {
+      $("inv-send").disabled = false;
+    }
+  };
+
+  if (document.readyState === "loading")
+    document.addEventListener("DOMContentLoaded", load);
+  else load();
+})();
+</script>
+</body>
+</html>

@@ -15,6 +15,7 @@
     { file: 'discover.html',     label: '🔍 Discover' },
     { file: 'multi-page.html',   label: 'Take-off' },
     { file: 'device-types.html', label: '⚙ Device Types' },
+    { file: 'users.html',        label: '👥 Users' },
   ];
 
   // Current page = last path segment; site root resolves to the Projects page.

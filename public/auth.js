@@ -14,7 +14,7 @@
   var SUPABASE_URL =
     window.SUPABASE_URL || "https://lpjpqmpjxtwsnakcwqvb.supabase.co";
   var SUPABASE_ANON_KEY =
-    window.SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxwanBxbXBqeHR3c25ha2N3cXZiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk0OTQ0NTYsImV4cCI6MjA5NTA3MDQ1Nn0.S5V56gAfQa4EN5KB89ThFohbOKy17sj4-u9lkPP1knQ";
+    window.SUPABASE_ANON_KEY || "REPLACE_WITH_SUPABASE_ANON_KEY";
 
   if (!window.supabase || !window.supabase.createClient) {
     console.error("[auth] supabase-js must load before auth.js");
@@ -26,10 +26,12 @@
   });
 
   var token = null;
-  var onLogin = location.pathname.endsWith("login.html");
+  var publicPage =
+    location.pathname.endsWith("login.html") ||
+    location.pathname.endsWith("set-password.html");
 
   function toLogin() {
-    if (!onLogin) {
+    if (!publicPage) {
       location.replace(
         "login.html?next=" + encodeURIComponent(location.pathname + location.search)
       );
@@ -62,7 +64,7 @@
   });
 
   // ── page gate ───────────────────────────────────────────────────────
-  if (!onLogin) {
+  if (!publicPage) {
     sb.auth.getSession().then(function (s) {
       token = (s.data && s.data.session && s.data.session.access_token) || null;
       if (!token) toLogin();
