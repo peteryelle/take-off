@@ -14,7 +14,7 @@
 
 import { getSupabase, ok, err, CORS } from "./utils/clients.js";
 
-import { requireOrg, assertProjectInOrg, assertPageInOrg } from "./utils/auth.js";
+import { requireOrg, assertProjectInOrg } from "./utils/auth.js";
 // Parse building/floor/area from sheet title
 // e.g. "BLDG 01 - LEVEL 00B - AREA A - TELECOMMUNICATIONS PLAN"
 function parseSheetTitle(title) {
@@ -48,7 +48,6 @@ export default async function handler(req) {
   const { supabase, orgId } = gate;
 
   if (!(await assertProjectInOrg(supabase, project_id, orgId))) return err("Project not found in your organization", 404);
-  if (!(await assertPageInOrg(supabase, page_id, orgId))) return err("Page not found in your organization", 404);
 
   // ── 1. Persist each page (title, scale, building/floor/area) ──────────
   // TR identity is no longer derived from plan labels — it comes from the
