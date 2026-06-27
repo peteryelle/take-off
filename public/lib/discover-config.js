@@ -14,6 +14,11 @@
 const leadAlpha = (s) => (String(s).match(/^[A-Z]+/) || [''])[0];
 const norm = (s) => String(s).trim().toUpperCase().replace(/\s+/g, ' ');
 
+// The live text normalizer strips non-printable-ASCII from each token before the
+// detector matches (e.g. the degree byte in "180°" -> "180"). Anchors must be reduced
+// the same way or they can never equal a runtime token.
+const asciiCore = (s) => String(s).replace(/[^\x20-\x7E]/g, '').trim();
+
 // Map a schedule header row to the contract's column block.
 function mapScheduleColumns(scheduleInput) {
   const headers = (scheduleInput.headerTokens || []).map(norm);
@@ -42,12 +47,19 @@ export function buildCatalog(candidates = [], planTokens = [], scheduleInput = n
   const schedule = schedulePresent ? mapScheduleColumns(scheduleInput) : null;
 
   const types = candidates.map((c) => {
-    const anchor = norm(c.anchor);
+    let anchor = norm(c.anchor);
     let anchor_mode, uin_pattern = null, matcher;
 
     if (c.kind === 'exact') {
+      // Stamp anchor (once-per-device token: N2, WAP, 180). Reduce to its ASCII core so
+      // a degree-bearing anchor ("180°") equals the normalized runtime token ("180"),
+      // and KEEP exact mode. Exact is load-bearing here: a stamp must stay no-UIN so
+      // reconcile counts instances by coordinate. Regex mode would assign the constant
+      // token as a UIN, and reconcile would collapse every identical stamp into ONE
+      // device (the "180 collapse"). Only true prefix types (CAM-EXT-1) are UIN'd.
+      anchor = asciiCore(anchor);
       anchor_mode = 'exact';
-      matcher = (t) => t === anchor;             // exact token; "INSTALL" can't match "N2"
+      matcher = (t) => asciiCore(t) === anchor;
     } else {
       anchor_mode = 'regex';
       // Structured tokens for this prefix: leadAlpha matches AND there's more than
@@ -65,11 +77,15 @@ export function buildCatalog(candidates = [], planTokens = [], scheduleInput = n
 
     const freq = toks.filter(matcher).length;
 
-    // sources: schedule covers UIN'd (prefix) types; label always; symbol if a glyph exists.
+    // sources: schedule covers UIN'd (prefix) types; label always.
+    // 'symbol' is a LIVE source only once Step 7 mints a symbol_template. Emitting it at
+    // discovery (symbol_template still null) lets the symbol locator fabricate phantom
+    // no_uin instances for a type it cannot match — inflating the count (e.g. the camera
+    // 12-phantom cluster). Step 7 adds the template AND the 'symbol' source together.
+    // has_symbol is carried on detection_config so Step 7 knows which types want a glyph.
     const sources = [];
     if (schedulePresent && c.kind === 'prefix') sources.push('schedule');
     sources.push('label');
-    if (c.has_symbol) sources.push('symbol');
 
     // confidence: legend + frequency -> high; frequency only -> medium; nothing -> low (re-derive).
     const anchor_confidence = (c.legend_present && freq > 0) ? 'high' : (freq > 0 ? 'medium' : 'low');
@@ -81,6 +97,7 @@ export function buildCatalog(candidates = [], planTokens = [], scheduleInput = n
       anchor_mode,
       uin_pattern,
       symbol_template: null,                      // Step 7 fills this from the legend glyph
+      has_symbol: !!c.has_symbol,                 // Step 7 reads this to know which types get a glyph track (+ 'symbol' source)
       match_tolerance: 0.05,
       families: c.families || [],
       anchor_confidence,
