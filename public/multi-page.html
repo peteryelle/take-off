@@ -462,10 +462,12 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
   import { classifySheetClass, deriveSheetClassSignals } from './lib/sheet-class.js';
   import { planSymbolDetection, locateVector, blobsToInstances } from './lib/locate.js';
   import { runnerWorkForRole, unassignedPages } from './lib/plan-set.js';
+  import { aggregateBom } from './lib/bom.js';
   window.TakeoffVec = { contentFrame, extractFilledSubpaths, extractCameraBlobs,
                         classifySheetClass, deriveSheetClassSignals,
                         planSymbolDetection, locateVector, blobsToInstances,
-                        runnerWorkForRole, unassignedPages };
+                        runnerWorkForRole, unassignedPages,
+                        aggregateBom };
 </script>
 <script>
 pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -2626,6 +2628,7 @@ function renderResults() {
   renderByPage();
   renderByTR();
   renderProjectTotal();
+  renderBom();
 }
 
 function renderByPage() {
@@ -2781,6 +2784,22 @@ function exportResultsCsv() {
         d.tia_flag ? 'YES' : '',
         (d.flags ?? []).join(' '),
       ]);
+    }
+  }
+
+  // ── Bill of materials (project total) — same data the Results BOM panel shows ──
+  if (lastBom && (lastBom.components.length || lastBom.unmodeled.length)) {
+    rows.push([]);
+    rows.push(['BILL OF MATERIALS — PROJECT TOTAL']);
+    rows.push(['Part','Manufacturer','Model','Qty']);
+    for (const c of lastBom.components) {
+      rows.push([c.part_name || c.device_name || '', c.manufacturer || '', c.model || '', c.qty]);
+    }
+    if (lastBom.unmodeled.length) {
+      rows.push([]);
+      rows.push(['UNMODELED — counted, no assembly defined']);
+      rows.push(['Device Type','Family','Outlets']);
+      for (const u of lastBom.unmodeled) rows.push([u.name, u.family, u.instances]);
     }
   }
 
@@ -3034,6 +3053,87 @@ function renderProjectTotal() {
   }
 
   html += `</tbody></table>`;
+  html += `<div id="bom-content" style="margin-top:24px;"></div>`;
+  el.innerHTML = html;
+}
+
+// ── BOM (Step 9): expand each counted device through its type's assembly ──
+// Assemblies live on device_types (legend_id-keyed) and arrive via takeoff-summary.
+// For the current box-only templates, each outlet expands its modeled family once;
+// families present on the drawing but not yet authored surface as honest flags.
+let _typeCache = null;
+async function getDeviceTypes() {
+  if (_typeCache) return _typeCache;
+  try {
+    const r = await fetch(`${base()}/api/takeoff-summary?project_id=${projectId}`);
+    const j = await r.json();
+    _typeCache = j.device_types ?? [];
+  } catch { _typeCache = []; }
+  return _typeCache;
+}
+
+let lastBom = null;   // cached so CSV export can append the same BOM
+async function renderBom() {
+  const el = document.getElementById('bom-content');
+  if (!el) return;
+  el.innerHTML = '<div style="color:#555; font-size:12px;">Compiling bill of materials…</div>';
+
+  const types = await getDeviceTypes();
+  const typesByKey = {};
+  for (const dt of types) {
+    const entry = { name: dt.name, assembly: dt.assembly };
+    if (dt.legend_id) typesByKey[dt.legend_id] = entry;   // primary key
+    if (dt.name)      typesByKey[dt.name]      = entry;   // fallback alias
+  }
+
+  // Every detected device, across all pages, is a BOM input. Resolve each to a
+  // type key the assembly map knows (legend_id first, then name).
+  const instances = [];
+  for (const res of Object.values(batchResults)) {
+    for (const d of (res.devices ?? [])) {
+      const key = (d.legend_id != null && typesByKey[d.legend_id]) ? d.legend_id : d.name;
+      instances.push({
+        device_type_id:  key,
+        raw_labels:      d.raw_labels ?? [],
+        removed_by_user: d.removed_by_user ?? false,
+      });
+    }
+  }
+
+  const bom = window.TakeoffVec.aggregateBom(instances, typesByKey);
+  lastBom = bom;
+
+  if (!bom.components.length && !bom.unmodeled.length) {
+    el.innerHTML = '<div style="color:#555; font-size:12px;">No assemblies defined yet — nothing to compile.</div>';
+    return;
+  }
+
+  let html = '<div style="font-size:11px; color:#888; letter-spacing:1px; margin-bottom:8px;">BILL OF MATERIALS · PROJECT TOTAL</div>';
+  html += `<table class="res-table"><thead><tr>
+      <th>Part</th><th>Manufacturer</th><th>Model</th><th style="text-align:right;">Qty</th>
+    </tr></thead><tbody>`;
+  for (const c of bom.components) {
+    html += `<tr>
+      <td style="color:#f0c040;">${c.part_name || c.device_name || '—'}</td>
+      <td style="color:#bbb;">${c.manufacturer || ''}</td>
+      <td style="color:#bbb; font-family:monospace;">${c.model || ''}</td>
+      <td style="text-align:right; color:#e0e0e0;">${c.qty}</td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+
+  if (bom.unmodeled.length) {
+    html += '<div style="margin-top:14px; font-size:12px; color:#f0a050;">⚑ Counted but unmodeled — no assembly for these families yet:</div>';
+    html += '<ul style="margin:6px 0 0 0; padding-left:18px; color:#c89060; font-size:12px;">';
+    for (const u of bom.unmodeled) {
+      html += `<li>${u.name} · family <b>${u.family}</b> — ${u.instances} ${u.instances === 1 ? 'outlet' : 'outlets'}</li>`;
+    }
+    html += '</ul>';
+  }
+
+  const cov = bom.coverage;
+  html += `<div style="margin-top:10px; font-size:11px; color:#666;">${cov.expanded_instances} of ${cov.total_instances} devices expanded · ${cov.flagged_instances} carry an unmodeled family</div>`;
+
   el.innerHTML = html;
 }
 
