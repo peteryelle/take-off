@@ -1494,6 +1494,51 @@ function collapseAssignmentTable() {
   btn.textContent = paTableVisible ? '▲ Hide' : '▼ Show';
 }
 
+// Delete a TR entry (redo/duplicate cleanup). A TR card can carry a top-level
+// demarc row (tr.demarc_id) plus per-floor exit pins (tr.extra_pins[pg].demarc_id) —
+// delete every underlying demarc row for this name. The endpoint refuses (409) any
+// row still referenced by device_instances or page_regions, so an in-use pin
+// survives even if the user targets the wrong card; blocked rows are reported,
+// not silently skipped.
+async function deleteTRRoom(trName) {
+  const tr = trMap[trName];
+  if (!tr) return;
+
+  const ids = new Set();
+  if (tr.demarc_id) ids.add(tr.demarc_id);
+  for (const pin of Object.values(tr.extra_pins ?? {})) {
+    if (pin?.demarc_id) ids.add(pin.demarc_id);
+  }
+
+  if (!ids.size) {
+    // Nothing persisted yet (e.g. a bare local skeleton) — just drop it locally.
+    delete trMap[trName];
+    renderTRMap(Object.values(trMap));
+    return;
+  }
+
+  if (!confirm(`Delete TR "${trName}"? This removes ${ids.size} demarc row(s). Cannot be undone.`)) return;
+
+  const blocked = [];
+  for (const id of ids) {
+    try {
+      const r = await fetch(`${base()}/api/pass-demarc?id=${id}`, { method: 'DELETE' });
+      const j = await r.json();
+      if (!r.ok) blocked.push(j.error || `id ${id} could not be deleted`);
+    } catch (e) {
+      blocked.push(`id ${id}: ${e.message}`);
+    }
+  }
+
+  if (blocked.length) {
+    alert(`Some rows under "${trName}" are still in use and were kept:\n\n` + blocked.join('\n'));
+  }
+
+  // Reload state from Supabase so trMap, the page-assignment table and every
+  // rendered card reflect exactly what's left in the demarcs table.
+  if (projectId) await restoreFromSupabase(projectId);
+}
+
 function renderTRMap(trs) {
   const container = document.getElementById('tr-cards');
   container.innerHTML = '';
@@ -1589,6 +1634,9 @@ function renderTRCard(tr, container) {
         <span class="tr-badge">${tr.name}</span>
         <span class="tr-location">${location}</span>
         ${statusBadge}
+        <button class="danger" onclick="deleteTRRoom('${tr.name}')"
+          style="font-size:11px; padding:3px 8px; margin-left:auto;"
+          title="Delete this TR entry (blocked if devices are routed through it)">🗑 Delete</button>
       </div>
       <div class="tr-card-body" id="tr-body-${tr.name}"></div>`;
     container.appendChild(card);
@@ -3287,6 +3335,12 @@ async function restoreFromSupabase(pid) {
       // clean until the user selects pages and scans (the table filters to selection).
       if (selectedPages.size) renderPageAssignmentTable(Object.values(trMap));
       renderTRMap(Object.values(trMap));
+    } else {
+      // Every TR was deleted (or none exist yet) — clear stale cards rather than
+      // leaving the last-rendered set on screen.
+      const container = document.getElementById('tr-cards');
+      if (container) container.innerHTML = '';
+      document.getElementById('tr-map-section').style.display = 'none';
     }
 
     // ── Restore batch results ─────────────────────────────────────

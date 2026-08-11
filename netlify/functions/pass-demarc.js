@@ -75,6 +75,47 @@ export default async function handler(req) {
     return ok(data);
   }
 
+  // ── DELETE — remove a demarc row ──────────────────────────────
+  // Guarded: refuses if any device_instances or page_regions row still points
+  // at this demarc, so a redo/duplicate can be cleared without silently
+  // orphaning a route that's actually in use (mirrors the guarded-delete
+  // pattern used for the legacy TR-pg8 cleanup migration).
+  if (req.method === "DELETE") {
+    const url = new URL(req.url);
+    const id  = url.searchParams.get("id");
+    if (!id) return err("id required");
+
+    const { data: demarc, error: findErr } = await supabase
+      .from("demarcs")
+      .select("id, project_id, name")
+      .eq("id", id)
+      .maybeSingle();
+    if (findErr) return err(findErr.message, 500);
+    if (!demarc) return err("Demarc not found", 404);
+
+    if (!(await assertProjectInOrg(supabase, demarc.project_id, orgId)))
+      return err("Project not found in your organization", 404);
+
+    const [{ count: deviceRefs, error: dErr }, { count: regionRefs, error: rErr }] = await Promise.all([
+      supabase.from("device_instances").select("id", { count: "exact", head: true }).eq("demarc_id", id),
+      supabase.from("page_regions").select("id", { count: "exact", head: true }).eq("demarc_id", id)
+    ]);
+    if (dErr) return err(dErr.message, 500);
+    if (rErr) return err(rErr.message, 500);
+
+    if ((deviceRefs ?? 0) > 0 || (regionRefs ?? 0) > 0) {
+      return err(
+        `Cannot delete "${demarc.name}" — ${deviceRefs ?? 0} device instance(s) and ` +
+        `${regionRefs ?? 0} schematic(s) still reference it. Repoint or clear those first.`,
+        409
+      );
+    }
+
+    const { error: delErr } = await supabase.from("demarcs").delete().eq("id", id);
+    if (delErr) return err(delErr.message, 500);
+    return ok({ deleted: true, id: Number(id) });
+  }
+
   return err("Method not allowed", 405);
 }
 
