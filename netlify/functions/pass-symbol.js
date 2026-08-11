@@ -75,16 +75,20 @@ export default async function handler(req) {
 Find every glyph on the drawing that matches this device symbol:
 ${visualDesc}
 
-This symbol can be small (a few mm at drawing scale) and easy to miss among other
-symbols, room labels, and line work. Scan systematically — room by room, corridor by
-corridor — rather than stopping after the first clear match; a busy strip commonly
-holds more than one instance.
+This symbol can be small (a few mm at drawing scale) and easy to overlook among other
+symbols, room labels, and line work — look carefully at every room and corridor rather
+than stopping at the first clear match. But only report a glyph you can clearly
+identify against the description above — do NOT guess, and do NOT infer extra
+instances near a match just because the area seems busy. If a mark is ambiguous or
+only loosely resembles the description, report it at low confidence rather than
+omitting it or inflating it into a firm match.
 
 Rules:
 - Match the visual description precisely — shape, size, fill, internal marks.
 - Do NOT count symbols in the legend, title block, or detail / blow-up insets.
 - Do NOT count keynote callout bubbles or section / detail reference markers.
 - Report a glyph even if it has no text label next to it — unlabeled glyphs are the point.
+- confidence: high = clearly matches description, medium = likely match, low = possible but uncertain.
 - x_frac and y_frac_in_strip are 0–1 relative to THIS STRIP only.
 
 Return ONLY raw JSON (no markdown fences):
