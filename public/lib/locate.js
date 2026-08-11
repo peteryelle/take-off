@@ -35,11 +35,23 @@ export function chooseLocator(sheetClass, group) {
  * classified against the group's prototypes (or the validated camera rule when none),
  * and the prototype's `type` IS the catalog type string reconcile joins on. A glyph that
  * matches no prototype is surfaced as { type:null, flag:'no_match' } — never coerced.
+ *
+ * group.single_type: for a glyph with NO sub-type variants (e.g. WAP — one fill, one
+ * shape, nothing to disambiguate), skip classifyCameraBlob entirely. That function's
+ * fallback rule exists to split lens COUNT (1/3/4-lens cameras); running a single-type
+ * glyph through it would assign an arbitrary, meaningless lens-class and could tag a
+ * fully deterministic match with a nonsensical 'verify_lens_count' flag. When fill+area
+ * already fully disambiguate the glyph (confirmed per-type before setting this), every
+ * blob that passed extraction's fill/area filter IS that type — full stop.
+ *
  * @param {Array}  blobs  from groupSubpaths/extractCameraBlobs (carry x,y normalized)
- * @param {Object} group  { prototypes?, proto_tol?, aspect_hub_max? }
+ * @param {Object} group  { single_type? | prototypes?, proto_tol?, aspect_hub_max? }
  * @returns {Array} [{ type, x, y, confidence, flag, via:'vector' }]
  */
 export function blobsToInstances(blobs = [], group = {}) {
+  if (group.single_type) {
+    return blobs.map((b) => ({ type: group.single_type, x: b.x, y: b.y, confidence: 'high', flag: null, via: 'vector' }));
+  }
   const opts = { prototypes: group.prototypes || null, protoTol: group.proto_tol ?? 1.4, aspectHubMax: group.aspect_hub_max ?? 2.2, lensTokens: group.lens_tokens || null };
   return blobs.map((b) => {
     const r = classifyCameraBlob(b, opts);
@@ -68,6 +80,7 @@ export function planSymbolDetection(sheetClass, symTypes = []) {
     const tmpl = cfg.symbol_template || null;
     const group = (tmpl && Array.isArray(tmpl.fill_rgb))
       ? { fill_rgb: tmpl.fill_rgb, fill_tol: tmpl.fill_tol ?? 48, body_area: tmpl.body_area ?? 2e-5,
+          single_type: tmpl.single_type || null,
           prototypes: (Array.isArray(tmpl.prototypes) && tmpl.prototypes.length) ? tmpl.prototypes : null,
           proto_tol: tmpl.proto_tol, aspect_hub_max: tmpl.aspect_hub_max, lens_tokens: tmpl.lens_tokens || null }
       : null;

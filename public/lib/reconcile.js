@@ -12,7 +12,13 @@
 // device. So we reconcile three instance sources AGAINST the catalog.
 //
 // Output record (the only thing downstream consumes):
-//   { uin, type, x, y, xy_source, sources, attributes, confidence, flags }
+//   { uin, type, x, y, xy_source, symbol_via, sources, attributes, confidence, flags }
+//
+// symbol_via ('vector'|'llm'|null): only meaningful when xy_source === 'symbol'. Vector-
+// detected glyphs normalize x/y the SAME way the label track does (content-bbox frame);
+// LLM strip-locate normalizes against the full rendered page image — a DIFFERENT frame.
+// A renderer must pick its coordinate transform per-device using this field, not assume
+// every 'symbol'-sourced device shares one frame (see bboxForDevice in multi-page.html).
 //
 // Algorithm: SEED -> PLACE -> SNAP -> FLAG -> SCORE
 //   join keys    : UIN exact (label<->schedule); proximity+type (symbol<->rest);
@@ -66,7 +72,7 @@ export function reconcile(catalog = {}, labelInstances = [], symbolInstances = [
   let synth = 0;
 
   const rec = (uin, type, extra = {}) => Object.assign(
-    { uin, type, x: null, y: null, xy_source: 'none', sources: [], attributes: {}, confidence: 'low', flags: [] },
+    { uin, type, x: null, y: null, xy_source: 'none', symbol_via: null, sources: [], attributes: {}, confidence: 'low', flags: [] },
     extra
   );
   const addSource = (d, s) => { if (!d.sources.includes(s)) d.sources.push(s); };
@@ -158,18 +164,18 @@ export function reconcile(catalog = {}, labelInstances = [], symbolInstances = [
       if (dd <= bestD) { bestD = dd; best = d; }
     }
     if (best) {                                       // T1
-      best.x = s.x; best.y = s.y; best.xy_source = 'symbol';
+      best.x = s.x; best.y = s.y; best.xy_source = 'symbol'; best.symbol_via = s.via || 'llm';
       addSource(best, 'symbol');
     } else {
       const adopt = devices.find(                     // T2
         (d) => d.type === s.type && d.x == null && d.sources.includes('schedule')
       );
       if (adopt) {
-        adopt.x = s.x; adopt.y = s.y; adopt.xy_source = 'symbol';
+        adopt.x = s.x; adopt.y = s.y; adopt.xy_source = 'symbol'; adopt.symbol_via = s.via || 'llm';
         addSource(adopt, 'symbol');
         adopt.flags.push('placement_inferred');
       } else {                                        // T3
-        const d = rec(`_sym${synth++}`, s.type, { x: s.x, y: s.y, xy_source: 'symbol', sources: ['symbol'] });
+        const d = rec(`_sym${synth++}`, s.type, { x: s.x, y: s.y, xy_source: 'symbol', symbol_via: s.via || 'llm', sources: ['symbol'] });
         d.flags.push('no_uin');
         devices.push(d);
       }

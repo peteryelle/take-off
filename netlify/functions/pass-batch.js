@@ -250,6 +250,7 @@ export default async function handler(req) {
           demarc_id: demarcId, run_length_ft: runLengthFt, total_ft: totalFt,
           tia_flag: tiaFlag, tia_reason: tiaReason, confidence: dev.confidence,
           xy_source: dev.xy_source ?? null,
+          symbol_via: dev.symbol_via ?? null,
           flags: mergedFlags.length ? mergedFlags : null
         }
       };
@@ -295,6 +296,7 @@ export default async function handler(req) {
         // A renderer that ignores this and applies one transform to both will
         // misplace symbol-sourced devices. See confRedraw/lcRedraw in multi-page.html.
         xy_source: x.dev.xy_source,
+        symbol_via: x.dev.symbol_via,
         raw_labels: x.row.raw_labels,
         sources: x.dev.sources, confidence: x.dev.confidence, flags: x.row.flags, attributes: x.dev.attributes,
         total_ft: x.row.total_ft, tia_flag: x.row.tia_flag, tia_reason: x.row.tia_reason, demarc_id: x.row.demarc_id

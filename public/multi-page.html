@@ -3186,15 +3186,20 @@ function normToCanvasXY(xNorm, yNorm, bbox, cw, ch) {
     y: ch * (1 - bbox.ymin_frac - (1 - yNorm) * bbox.h_frac)
   };
 }
-// A device's coordinate FRAME depends on which detection track supplied its x/y,
-// not just which page it's on. 'symbol'-sourced devices (pass-symbol.js — e.g.
-// WAP) are normalized against the full rendered page image already; applying the
-// page's text-content bbox transform to them shifts an already-correct position
-// to the wrong spot (confirmed: WAP stars landing off-glyph). 'label'/'leader'
-// devices — and anything missing xy_source, for back-compat with rows persisted
-// before this field existed — use the page's actual content bbox as before.
+// A device's coordinate FRAME depends on which detection track — and which METHOD —
+// supplied its x/y, not just which page it's on. LLM-symbol devices (pass-symbol.js —
+// e.g. WAP before its vector template existed) are normalized against the full
+// rendered page image; applying the page's text-content bbox transform to them shifts
+// an already-correct position to the wrong spot (confirmed: WAP stars landing
+// off-glyph). Vector-symbol devices (extractCameraBlobs/locate.js) normalize through
+// the SAME contentFrame the label track uses, so they take the normal per-page bbox
+// like everything else. Only 'symbol'+'llm' gets the full-page identity transform;
+// 'symbol'+'vector', 'label', 'leader', and anything missing xy_source (back-compat
+// with rows persisted before this field existed) all use the page's content bbox.
 function bboxForDevice(pageNum, device) {
-  if (device?.xy_source === 'symbol') return { xmin_frac: 0, ymin_frac: 0, w_frac: 1, h_frac: 1 };
+  if (device?.xy_source === 'symbol' && device?.symbol_via !== 'vector') {
+    return { xmin_frac: 0, ymin_frac: 0, w_frac: 1, h_frac: 1 };
+  }
   return pageBBoxFor(pageNum);
 }
 
