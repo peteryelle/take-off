@@ -184,7 +184,26 @@ export default async function handler(req) {
       { scheduleRows: seededScheduleRows, planRegions: scopedPins.map((p) => p.scope_box).filter(Boolean) },
       symbol_instances || [], leaderOv);
 
-    const instances = reconciled.map((dev) => {
+    // ── Out-of-scope exclusion (hatched zones, kind:'exclude') ──────────
+    // Separate mechanism from scopedPins/scope-box distance-routing above: a device
+    // inside an exclude region is dropped entirely — never persisted, never counted,
+    // never distance-computed. Server-authoritative (queried fresh here, not trusted
+    // from the client) so a stale client can't bypass it.
+    const { data: excludeRegions, error: exclErr } = await supabase
+      .from("page_regions")
+      .select("x0, y0, x1, y1")
+      .eq("page_id", page_id)
+      .eq("kind", "exclude");
+    if (exclErr) console.warn("[exclude regions]", exclErr.message);
+
+    const inExcludeZone = (x, y) => {
+      if (x == null || y == null || !excludeRegions?.length) return false;
+      return excludeRegions.some((r) => r.x0 != null && x >= r.x0 && x <= r.x1 && y >= r.y0 && y <= r.y1);
+    };
+    const excludedCount = reconciled.filter((dev) => inExcludeZone(dev.x, dev.y)).length;
+    const inScope = reconciled.filter((dev) => !inExcludeZone(dev.x, dev.y));
+
+    const instances = inScope.map((dev) => {
       const dt = typeMap[dev.type] || {};
       const fams = dev.attributes?.families || [];
       const codes = dev.attributes?.codes || [];     // full tokens w/ detail # (DV1/DD3)
@@ -230,6 +249,7 @@ export default async function handler(req) {
           port_count_data: ports.port_count_data, port_count_voice: ports.port_count_voice,
           demarc_id: demarcId, run_length_ft: runLengthFt, total_ft: totalFt,
           tia_flag: tiaFlag, tia_reason: tiaReason, confidence: dev.confidence,
+          xy_source: dev.xy_source ?? null,
           flags: mergedFlags.length ? mergedFlags : null
         }
       };
@@ -261,6 +281,7 @@ export default async function handler(req) {
     return ok({
       pass: "batch_page", page_id, eval_page_num,
       device_count: instances.length, by_type: Object.values(byType),
+      excluded_out_of_scope: excludedCount,   // dropped by an exclude-kind region — audit visibility only, never persisted
       leader_overrides: leaderOv,   // effective marks (body or persisted) so the UI can pre-fill
       tia_violations: instances.filter((x) => x.row.tia_flag).length,
       max_run_ft: Math.max(0, ...instances.map((x) => x.row.total_ft ?? 0)) || null,
@@ -268,6 +289,12 @@ export default async function handler(req) {
         id: inserted?.[j]?.id, device_type_id: x.dt.id ?? null,
         uin: x.dev.uin, type: x.dev.type, legend_id: x.dt.legend_id ?? null, name: x.dt.name ?? x.dev.type,
         x_norm: x.row.x_norm, y_norm: x.row.y_norm, x_ft: x.row.x_ft, y_ft: x.row.y_ft,
+        // xy_source tells the client which coordinate FRAME x_norm/y_norm is in —
+        // 'label'/'leader' are normalized against the page's text-content bbox,
+        // 'symbol' against the full rendered page image (pass-symbol.js's frame).
+        // A renderer that ignores this and applies one transform to both will
+        // misplace symbol-sourced devices. See confRedraw/lcRedraw in multi-page.html.
+        xy_source: x.dev.xy_source,
         raw_labels: x.row.raw_labels,
         sources: x.dev.sources, confidence: x.dev.confidence, flags: x.row.flags, attributes: x.dev.attributes,
         total_ft: x.row.total_ft, tia_flag: x.row.tia_flag, tia_reason: x.row.tia_reason, demarc_id: x.row.demarc_id

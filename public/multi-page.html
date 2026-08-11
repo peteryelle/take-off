@@ -391,6 +391,38 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
   </div>
 </div>
 
+<!-- ── OUT-OF-SCOPE ZONE MODAL — confirm/adjust a Claude-suggested hatched area ──── -->
+<div class="pin-modal" id="excl-modal">
+  <div style="color:#f0c040; font-size:14px; font-weight:bold; margin-bottom:4px;" id="excl-title">
+    Out-of-scope zone
+  </div>
+  <div style="color:#aaa; font-size:13px; margin-bottom:8px;">
+    Suggested box loaded below — adjust by clicking two new opposite corners, or confirm as-is · scroll to zoom · drag to pan
+  </div>
+
+  <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap;">
+    <span id="excl-suggestion-nav" style="color:#888; font-size:12px;"></span>
+    <button onclick="exclZoom(1.5)" style="padding:3px 12px; font-size:13px; margin-left:8px;">＋</button>
+    <button onclick="exclZoom(1/1.5)" style="padding:3px 12px; font-size:13px;">－</button>
+    <button onclick="exclResetZoom()" style="padding:3px 10px; font-size:11px;" class="info">Reset</button>
+    <button onclick="clearExclRect()" style="padding:3px 10px; font-size:11px;" class="info">Clear box</button>
+  </div>
+
+  <div class="pin-canvas-wrap" id="excl-canvas-wrap"
+       style="overflow:hidden; width:88vw; height:58vh; position:relative; cursor:crosshair; border:1px solid #333;">
+    <div id="excl-layer" style="position:absolute; top:0; left:0; transform-origin:0 0;">
+      <canvas id="excl-canvas" style="position:absolute; top:0; left:0; display:block;"></canvas>
+    </div>
+  </div>
+
+  <div class="pin-controls" style="margin-top:8px;">
+    <button onclick="confirmExcludeZone()" style="padding:8px 20px; font-size:14px;">✓ Confirm — exclude this area</button>
+    <button onclick="skipExcludeSuggestion()" class="info" style="padding:8px 16px; font-size:14px;">Skip this one</button>
+    <button class="danger" onclick="closeExcludeModal()" style="padding:8px 16px; font-size:14px;">✗ Close</button>
+    <div class="status" id="excl-status"></div>
+  </div>
+</div>
+
 <!-- ── 1:N LEADER CLUSTER MARKING MODAL (multi-page, per page) ──── -->
 <div id="lc-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.88);
      z-index:300; flex-direction:column; align-items:center; justify-content:center;">
@@ -1401,7 +1433,7 @@ function renderPageAssignmentTable(trs) {
       <td style="padding:7px 10px; color:#aaa; max-width:280px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${raw}">${title}</td>
       <td style="padding:7px 10px;" id="pa-scale-${pgNum}">${scaleCellHtml(pgNum)}</td>
       <td style="padding:7px 10px;">${dropdown}</td>
-      <td style="padding:7px 10px;" id="pa-role-${pgNum}">${roleHtml}${pinBtnsHtml(pgNum)}</td>`;
+      <td style="padding:7px 10px;" id="pa-role-${pgNum}">${roleHtml}${pinBtnsHtml(pgNum)}${exclBtnHtml(pgNum)}</td>`;
     tbody.appendChild(tr);
   }
 
@@ -1481,6 +1513,17 @@ function pinBtnsHtml(pgNum) {
   return `<div style="margin-top:5px; display:flex; gap:5px;">
     <button class="info" style="padding:2px 8px; font-size:11px;" onclick="placeManualTR(${pgNum})">📍 set TR pin</button>
     <button style="padding:2px 8px; font-size:11px;" onclick="placeManualExit(${pgNum})">＋ exit pin</button>
+  </div>`;
+}
+
+// "⬚ N zone(s) — Review" badge for a page with unresolved out-of-scope suggestions
+// (pass-b-page.js's out_of_scope_regions, held in pageCache until confirmed/skipped).
+function exclBtnHtml(pgNum) {
+  const n = pendingExclCount(pgNum);
+  if (!n) return '';
+  return `<div style="margin-top:5px;">
+    <button class="excl-review-btn" style="padding:2px 8px; font-size:11px; background:#3a2a1a; border-color:#7a5a2a; color:#e0a860;"
+      onclick="openExcludeModal(${pgNum})">⬚ ${n} zone${n !== 1 ? 's' : ''} — Review</button>
   </div>`;
 }
 
@@ -2322,6 +2365,210 @@ async function confirmRegion() {
   } catch (e) { setStatus('region-status', 'Error: ' + e.message, 'err'); }
 }
 
+// ── Out-of-scope zone modal ─────────────────────────────────────────
+// Confirm/adjust flow for Claude-suggested hatched areas (pass-b-page.js
+// out_of_scope_regions). Mirrors the schematic box-draw mechanics above, but
+// saves as page_regions.kind='exclude' — a SEPARATE mechanism from schematic
+// scope boxes: devices inside get dropped entirely from count/BOM by
+// pass-batch.js, never touching scopeRegions/distance-routing.
+let exclZoomLevel = 1.0, exclPanX = 0, exclPanY = 0;
+let exclDragStart = null, exclCanvasNativeW = 0, exclCanvasNativeH = 0;
+let exclPageNum = null, exclCorners = [], exclSuggestions = [], exclSuggestionIdx = 0;
+let resolvedExclSuggestions = {};   // pageNum -> Set of suggestion indices confirmed or skipped this session
+
+function pendingExclCount(pageNum) {
+  const all = pageCache[pageNum]?.passBResult?.out_of_scope_regions ?? [];
+  const resolved = resolvedExclSuggestions[pageNum] ?? new Set();
+  return all.filter((_, i) => !resolved.has(i)).length;
+}
+
+function applyExclTransform() {
+  const layer = document.getElementById('excl-layer');
+  layer.style.transform = `translate(${exclPanX}px, ${exclPanY}px) scale(${exclZoomLevel})`;
+  redrawExclRect();
+}
+function exclZoom(factor) {
+  const wrap = document.getElementById('excl-canvas-wrap');
+  const wRect = wrap.getBoundingClientRect();
+  const cx = wRect.width / 2, cy = wRect.height / 2;
+  exclPanX = cx - (cx - exclPanX) * factor;
+  exclPanY = cy - (cy - exclPanY) * factor;
+  exclZoomLevel = Math.min(10, Math.max(0.05, exclZoomLevel * factor));
+  applyExclTransform();
+}
+function exclResetZoom() {
+  const wrap = document.getElementById('excl-canvas-wrap');
+  const cv   = document.getElementById('excl-canvas');
+  const wrapW = wrap.offsetWidth || window.innerWidth * 0.88;
+  const wrapH = wrap.offsetHeight || window.innerHeight * 0.58;
+  exclZoomLevel = (cv.width && cv.height) ? Math.min(wrapW / cv.width, wrapH / cv.height) : 1.0;
+  exclPanX = 0; exclPanY = 0;
+  applyExclTransform();
+}
+function clearExclRect() { exclCorners = []; redrawExclRect(); setStatus('excl-status', 'Box cleared — click two corners', ''); }
+
+function redrawExclRect() {
+  const layer = document.getElementById('excl-layer');
+  layer.querySelectorAll('.excl-box').forEach(el => el.remove());
+  if (exclCorners.length === 2) {
+    const [a, b] = exclCorners;
+    const x0 = Math.min(a.x, b.x), y0 = Math.min(a.y, b.y);
+    const x1 = Math.max(a.x, b.x), y1 = Math.max(a.y, b.y);
+    const box = document.createElement('div');
+    box.className = 'excl-box';
+    box.style.cssText = `position:absolute; left:${x0 * exclCanvasNativeW}px; top:${y0 * exclCanvasNativeH}px;`
+      + `width:${(x1 - x0) * exclCanvasNativeW}px; height:${(y1 - y0) * exclCanvasNativeH}px;`
+      + `border:2px solid #b06a2a; background:repeating-linear-gradient(45deg, rgba(176,106,42,0.18), rgba(176,106,42,0.18) 6px, rgba(176,106,42,0.32) 6px, rgba(176,106,42,0.32) 12px); pointer-events:none;`;
+    layer.appendChild(box);
+  } else if (exclCorners.length === 1) {
+    const a = exclCorners[0];
+    const dot = document.createElement('div');
+    dot.className = 'excl-box';
+    dot.style.cssText = `position:absolute; left:${a.x * exclCanvasNativeW}px; top:${a.y * exclCanvasNativeH}px;`
+      + `width:8px; height:8px; margin:-4px 0 0 -4px; background:#f0c040; border-radius:50%;`
+      + `pointer-events:none; transform:scale(${1 / exclZoomLevel}); transform-origin:center;`;
+    layer.appendChild(dot);
+  }
+}
+
+// Load one suggestion's box into exclCorners and update the nav readout.
+function loadExclSuggestion(idx) {
+  const s = exclSuggestions[idx];
+  if (!s) { exclCorners = []; document.getElementById('excl-suggestion-nav').textContent = 'No suggestion — draw manually'; redrawExclRect(); return; }
+  exclCorners = [{ x: s.x0, y: s.y0 }, { x: s.x1, y: s.y1 }];
+  const conf = s.confidence ? ` (${s.confidence} confidence)` : '';
+  document.getElementById('excl-suggestion-nav').textContent =
+    `Suggestion ${idx + 1} of ${exclSuggestions.length}${conf}${s.note ? ' — ' + s.note : ''}`;
+  redrawExclRect();
+}
+
+async function openExcludeModal(pageNum) {
+  exclPageNum = pageNum;
+  exclSuggestions = pageCache[pageNum]?.passBResult?.out_of_scope_regions ?? [];
+  const resolved = resolvedExclSuggestions[pageNum] ?? (resolvedExclSuggestions[pageNum] = new Set());
+  exclSuggestionIdx = exclSuggestions.findIndex((_, i) => !resolved.has(i));
+  exclZoomLevel = 1.0; exclPanX = 0; exclPanY = 0;
+
+  const cv    = document.getElementById('excl-canvas');
+  const wrap  = document.getElementById('excl-canvas-wrap');
+  document.getElementById('excl-title').textContent = `Out-of-scope zone — pg${pageNum}`;
+
+  const pdfPage = await pdfDoc.getPage(pageNum);
+  const vp      = pdfPage.getViewport({ scale: 2.5 });
+  exclCanvasNativeW = vp.width; exclCanvasNativeH = vp.height;
+  await renderToCanvas(cv, pdfPage, vp);
+
+  const wrapW = wrap.offsetWidth  || window.innerWidth  * 0.88;
+  const wrapH = wrap.offsetHeight || window.innerHeight * 0.58;
+  exclZoomLevel = Math.min(wrapW / vp.width, wrapH / vp.height);
+  exclPanX = 0; exclPanY = 0;
+
+  if (exclSuggestionIdx >= 0) loadExclSuggestion(exclSuggestionIdx);
+  else { exclCorners = []; document.getElementById('excl-suggestion-nav').textContent = 'No suggestions — draw manually'; }
+  applyExclTransform();
+  setStatus('excl-status', '', '');
+
+  // Two-click corner capture (a click that didn't drag) — overwrites the loaded suggestion.
+  let pressX = null, pressY = null;
+  cv.addEventListener('mousedown', (e) => { pressX = e.clientX; pressY = e.clientY; });
+  cv.onclick = (e) => {
+    if (pressX != null && (Math.abs(e.clientX - pressX) + Math.abs(e.clientY - pressY)) > 5) return;
+    const cvRect = cv.getBoundingClientRect();
+    const xN = Math.min(1, Math.max(0, (e.clientX - cvRect.left) / cvRect.width));
+    const yN = Math.min(1, Math.max(0, (e.clientY - cvRect.top)  / cvRect.height));
+    if (exclCorners.length >= 2) exclCorners = [];
+    exclCorners.push({ x: xN, y: yN });
+    redrawExclRect();
+    setStatus('excl-status',
+      exclCorners.length === 1 ? 'Click the opposite corner' : '✓ Box set — Confirm to exclude', 'ok');
+  };
+
+  wrap.onwheel = (e) => {
+    e.preventDefault();
+    const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+    const wRect = wrap.getBoundingClientRect();
+    const mx = e.clientX - wRect.left, my = e.clientY - wRect.top;
+    exclPanX = mx - (mx - exclPanX) * factor;
+    exclPanY = my - (my - exclPanY) * factor;
+    exclZoomLevel = Math.min(10, Math.max(0.05, exclZoomLevel * factor));
+    applyExclTransform();
+  };
+  wrap.onmousedown = (e) => {
+    const layer = document.getElementById('excl-layer');
+    if (e.target === cv || e.target === layer) {
+      exclDragStart = { x: e.clientX, y: e.clientY, panX: exclPanX, panY: exclPanY, moved: false };
+      wrap.style.cursor = 'grabbing';
+    }
+  };
+  wrap.onmousemove = (e) => {
+    if (!exclDragStart || e.buttons !== 1) return;
+    const dx = e.clientX - exclDragStart.x, dy = e.clientY - exclDragStart.y;
+    if (Math.abs(dx) + Math.abs(dy) > 5) exclDragStart.moved = true;
+    if (exclDragStart.moved) { exclPanX = exclDragStart.panX + dx; exclPanY = exclDragStart.panY + dy; applyExclTransform(); }
+  };
+  wrap.onmouseup = () => { exclDragStart = null; wrap.style.cursor = 'crosshair'; };
+
+  document.getElementById('excl-modal').classList.add('open');
+}
+
+function closeExcludeModal() {
+  document.getElementById('excl-modal').classList.remove('open');
+  refreshExclBadge(exclPageNum);
+}
+
+// Advance to the next unresolved suggestion, or close if none remain.
+function advanceExclSuggestion() {
+  const resolved = resolvedExclSuggestions[exclPageNum] ?? new Set();
+  const next = exclSuggestions.findIndex((_, i) => !resolved.has(i));
+  if (next >= 0) { exclSuggestionIdx = next; loadExclSuggestion(next); setStatus('excl-status', '', ''); }
+  else { closeExcludeModal(); }
+}
+
+function skipExcludeSuggestion() {
+  if (exclSuggestionIdx < 0) { closeExcludeModal(); return; }
+  (resolvedExclSuggestions[exclPageNum] ??= new Set()).add(exclSuggestionIdx);
+  advanceExclSuggestion();
+}
+
+async function confirmExcludeZone() {
+  if (exclCorners.length !== 2) { setStatus('excl-status', 'Click two opposite corners first', 'err'); return; }
+  const pageId = pageCache[exclPageNum]?.pageId;
+  if (!pageId) { setStatus('excl-status', 'Page not persisted — run the scan first', 'err'); return; }
+
+  const [a, b] = exclCorners;
+  const x0 = Math.min(a.x, b.x), y0 = Math.min(a.y, b.y);
+  const x1 = Math.max(a.x, b.x), y1 = Math.max(a.y, b.y);
+  const polygon = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+  const suggestion = exclSuggestions[exclSuggestionIdx];
+  const label = suggestion?.note || 'Out of scope';
+
+  try {
+    const r = await fetch(`${base()}/api/page-regions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: projectId, page_id: pageId, label, polygon, x0, y0, x1, y1, kind: 'exclude' })
+    });
+    const region = await r.json();
+    if (!r.ok) { setStatus('excl-status', 'Save error: ' + region.error, 'err'); return; }
+
+    if (exclSuggestionIdx >= 0) (resolvedExclSuggestions[exclPageNum] ??= new Set()).add(exclSuggestionIdx);
+    setStatus('excl-status', '✓ Excluded — devices in this box will be dropped on the next batch run', 'ok');
+    setTimeout(advanceExclSuggestion, 700);
+  } catch (e) { setStatus('excl-status', 'Error: ' + e.message, 'err'); }
+}
+
+// Refresh the "review N zone(s)" badge for one page in the Step-3 assignment table,
+// without a full table re-render (avoids losing scroll position / other row state).
+function refreshExclBadge(pageNum) {
+  const cell = document.getElementById(`pa-role-${pageNum}`);
+  if (!cell) return;
+  const btn = cell.querySelector('.excl-review-btn');
+  const n = pendingExclCount(pageNum);
+  if (btn) {
+    if (n > 0) { btn.textContent = `⬚ ${n} zone${n !== 1 ? 's' : ''} — Review`; btn.style.display = ''; }
+    else btn.style.display = 'none';
+  }
+}
+
 // ── Lock demarcs + start batch ────────────────────────────────────
 async function lockDemarcs() {
   // Save jumper values for off-sheet TRs
@@ -2592,7 +2839,7 @@ async function runBatch() {
         device_count: (j.devices ?? []).length
       };
       const msg = r.ok
-        ? `pg${pageNum}: ${j.device_count} devices${j.tia_violations ? ' ⚠'+j.tia_violations+' TIA' : ''}`
+        ? `pg${pageNum}: ${j.device_count} devices${j.tia_violations ? ' ⚠'+j.tia_violations+' TIA' : ''}${j.excluded_out_of_scope ? ` · ${j.excluded_out_of_scope} excluded (out of scope)` : ''}`
         : `pg${pageNum}: ERROR — ${j.error}`;
       log.innerHTML += `<div style="color:${r.ok ? '#7af07a' : '#f07a7a'}">${msg}</div>`;
       log.scrollTop = log.scrollHeight;
@@ -2769,6 +3016,7 @@ function renderByPage() {
       <span style="color:#e0e0e0;">${sheet}</span>
       <span style="color:#888;">${res.device_count} devices</span>
       ${res.tia_violations ? `<span style="color:#f07a7a;">⚠ ${res.tia_violations} TIA</span>` : ''}
+      ${res.excluded_out_of_scope ? `<span style="color:#b06a2a;" title="dropped entirely — inside a marked out-of-scope zone">⬚ ${res.excluded_out_of_scope} excluded</span>` : ''}
       ${demarcInfo}
       <button onclick="openLeaderModal(${pageNum})" class="info" style="padding:2px 9px; font-size:10px;">⤳ mark leaders</button>
       <button onclick="openConfidenceModal(${pageNum})" class="info" style="padding:2px 9px; font-size:10px;">★ confidence map</button>
@@ -2938,13 +3186,16 @@ function normToCanvasXY(xNorm, yNorm, bbox, cw, ch) {
     y: ch * (1 - bbox.ymin_frac - (1 - yNorm) * bbox.h_frac)
   };
 }
-// Inverse — canvas click (as fractions of the FULL rendered page) back to the
-// content-bbox-normalized space that d.x_norm/d.y_norm live in.
-function canvasXYToNorm(xPageFrac, yPageFrac, bbox) {
-  return {
-    xNorm: (xPageFrac - bbox.xmin_frac) / bbox.w_frac,
-    yNorm: (yPageFrac - (1 - bbox.ymin_frac - bbox.h_frac)) / bbox.h_frac
-  };
+// A device's coordinate FRAME depends on which detection track supplied its x/y,
+// not just which page it's on. 'symbol'-sourced devices (pass-symbol.js — e.g.
+// WAP) are normalized against the full rendered page image already; applying the
+// page's text-content bbox transform to them shifts an already-correct position
+// to the wrong spot (confirmed: WAP stars landing off-glyph). 'label'/'leader'
+// devices — and anything missing xy_source, for back-compat with rows persisted
+// before this field existed — use the page's actual content bbox as before.
+function bboxForDevice(pageNum, device) {
+  if (device?.xy_source === 'symbol') return { xmin_frac: 0, ymin_frac: 0, w_frac: 1, h_frac: 1 };
+  return pageBBoxFor(pageNum);
 }
 
 function lcApplyTransform() {
@@ -2969,7 +3220,6 @@ function lcOverrideFor(d) {
 function lcRedraw() {
   const layer = document.getElementById('lc-layer');
   layer.querySelectorAll('.lc-dot').forEach(e => e.remove());
-  const bbox = pageBBoxFor(lcPageNum);
   const seen = new Set();
   for (const d of lcDevices) {
     if (d.x_norm == null || d.y_norm == null) continue;
@@ -2988,7 +3238,7 @@ function lcRedraw() {
       border:${2/lcZoom}px solid ${color}; background:${ov?'rgba(64,240,160,.3)':'rgba(240,122,122,.18)'};
       transform:translate(-50%,-50%); pointer-events:none; z-index:10;
       ${sel?`box-shadow:0 0 0 ${3/lcZoom}px rgba(240,192,64,.5);`:''}`;
-    const pos = normToCanvasXY(d.x_norm, d.y_norm, bbox, lcCW, lcCH);
+    const pos = normToCanvasXY(d.x_norm, d.y_norm, bboxForDevice(lcPageNum, d), lcCW, lcCH);
     dot.style.left = pos.x + 'px';
     dot.style.top  = pos.y + 'px';
     if (ov) {
@@ -3021,14 +3271,21 @@ async function openLeaderModal(pageNum) {
 
   cv.onclick = (e) => {
     const r = cv.getBoundingClientRect();
-    // Native canvas pixels as a fraction of the FULL page — then map into the
-    // content-bbox-normalized space that lcDevices' x_norm/y_norm live in.
-    const xPageFrac = (e.clientX - r.left) / lcZoom / lcCW;
-    const yPageFrac = (e.clientY - r.top)  / lcZoom / lcCH;
-    const { xNorm: xn, yNorm: yn } = canvasXYToNorm(xPageFrac, yPageFrac, pageBBoxFor(lcPageNum));
-    let best = null, bd = Infinity;
-    for (const d of lcDevices) { const dd = (d.x_norm-xn)**2 + (d.y_norm-yn)**2; if (dd<bd){bd=dd;best=d;} }
-    if (!best || bd > 0.03*0.03) { setStatus('lc-status','No cluster near that click','err'); return; }
+    // Native canvas pixels (dividing by lcZoom undoes the CSS transform's scale).
+    // Compare in PIXEL space, not normalized-fraction space — different devices on
+    // the same page can live in different coordinate FRAMES (label vs symbol
+    // sourced), so there is no single inverse transform that's correct for every
+    // candidate at once. Forward-transforming each device with its own frame and
+    // comparing pixel distances sidesteps that entirely.
+    const clickX = (e.clientX - r.left) / lcZoom;
+    const clickY = (e.clientY - r.top)  / lcZoom;
+    let best = null, bd = (0.03 * lcCW) ** 2;
+    for (const d of lcDevices) {
+      const pos = normToCanvasXY(d.x_norm, d.y_norm, bboxForDevice(lcPageNum, d), lcCW, lcCH);
+      const dd = (pos.x - clickX) ** 2 + (pos.y - clickY) ** 2;
+      if (dd <= bd) { bd = dd; best = d; }
+    }
+    if (!best) { setStatus('lc-status','No cluster near that click','err'); return; }
     lcSel = best;
     const ov = lcOverrideFor(best);
     document.getElementById('lc-qty').value = ov ? ov.quantity : '';
@@ -3088,7 +3345,6 @@ function confReset() { confZoom = 1; confPanX = 0; confPanY = 0; confApplyTransf
 function confRedraw() {
   const layer = document.getElementById('conf-layer');
   layer.querySelectorAll('.conf-star').forEach(e => e.remove());
-  const bbox = pageBBoxFor(confPageNum);
   for (const d of confDevices) {
     if (d.x_norm == null || d.y_norm == null) continue;
     const color = CONF_COLOR[d.confidence] ?? '#888';
@@ -3103,7 +3359,7 @@ function confRedraw() {
       text-shadow:0 0 ${2/confZoom}px rgba(0,0,0,0.9), 0 0 ${1/confZoom}px rgba(0,0,0,0.9);
       cursor:default;`;
     star.textContent = '★';
-    const pos = normToCanvasXY(d.x_norm, d.y_norm, bbox, confCW, confCH);
+    const pos = normToCanvasXY(d.x_norm, d.y_norm, bboxForDevice(confPageNum, d), confCW, confCH);
     star.style.left = pos.x + 'px';
     star.style.top  = pos.y + 'px';
     star.onmouseenter = () => {
