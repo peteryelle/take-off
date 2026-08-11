@@ -155,11 +155,19 @@ export async function resizeToBase64(base64Image, scale = 0.3) {
 }
 
 /**
- * Convert strip-local (x_frac, y_frac_in_strip) to full-image normalized (x, y)
+ * Convert strip-local (x_frac, y_frac_in_strip) to full-image normalized (x, y).
+ * Accounts for x_offset/x_scale when the strip came from a CROPPED source
+ * (makeCroppedStrips, when drawing bounds don't span the full page width) —
+ * without this, a glyph found in an x-inset strip lands at the wrong absolute
+ * x on the page. Plain makeStrips output never sets these fields, so they
+ * default to 0/1 and this is identical to the old full-width-only behavior.
  */
 export function toFullCoords(strip, xFrac, yFracInStrip) {
   const fullY = strip.y_norm_start + yFracInStrip * (strip.y_norm_end - strip.y_norm_start);
-  return { x: Math.round(xFrac * 1000) / 1000, y: Math.round(fullY * 1000) / 1000 };
+  const xOffset = strip.x_offset ?? 0;
+  const xScale  = strip.x_scale  ?? 1;
+  const fullX   = xOffset + xFrac * xScale;
+  return { x: Math.round(fullX * 1000) / 1000, y: Math.round(fullY * 1000) / 1000 };
 }
 
 /**
