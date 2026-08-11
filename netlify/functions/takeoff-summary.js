@@ -55,7 +55,8 @@ export default async function handler(req) {
           building, level, area, tr_name, page_role,
           scale_paper_in, scale_real_ft,
           demarc_label, demarc_x, demarc_y, demarc_is_host,
-          demarc_type, demarc_source
+          demarc_type, demarc_source,
+          content_xmin_frac, content_ymin_frac, content_w_frac, content_h_frac
         )
       `)
       .eq("project_id", project_id)
@@ -109,6 +110,10 @@ export default async function handler(req) {
     demarc_is_host:  pp.pages?.demarc_is_host  ?? null,
     demarc_type:     pp.pages?.demarc_type     ?? null,
     demarc_source:   pp.pages?.demarc_source   ?? null,
+    content_xmin_frac: pp.pages?.content_xmin_frac ?? null,
+    content_ymin_frac: pp.pages?.content_ymin_frac ?? null,
+    content_w_frac:    pp.pages?.content_w_frac    ?? null,
+    content_h_frac:    pp.pages?.content_h_frac    ?? null,
   }));
 
   // Annotate redundant-overall suggestions (advisory; the human confirms in the picker).

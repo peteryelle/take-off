@@ -37,7 +37,7 @@ export default async function handler(req) {
 
   const { project_id, page_id, eval_page_num, text_items,
           page_width_pts, page_height_pts, demarc_pins, symbol_instances, leader_overrides,
-          scale_override, sheet_class } = body;
+          scale_override, sheet_class, content_bbox } = body;
   if (!project_id || !page_id || !text_items?.length)
     return err("project_id, page_id and text_items required");
 
@@ -54,6 +54,23 @@ export default async function handler(req) {
   if (sheet_class && typeof sheet_class === "object") {
     try { await supabase.from("pages").update({ sheet_class }).eq("id", page_id); }
     catch (e) { console.warn("[sheet_class persist]", e?.message); }
+  }
+
+  // Persist the content-bbox frame x_norm/y_norm were normalized against (fractions
+  // of full page width/height). Without this, any later re-render of the page
+  // (confidence map, leader-cluster markup) has no way to reconstruct where
+  // x_norm/y_norm=(0,0)-(1,1) actually sits — it silently assumes content bbox ==
+  // full page, which drifts on any sheet whose content overflows the MediaBox.
+  // Best-effort, same as sheet_class above — a probe write must never fail the count.
+  if (content_bbox && typeof content_bbox === "object") {
+    try {
+      await supabase.from("pages").update({
+        content_xmin_frac: content_bbox.xmin_frac ?? null,
+        content_ymin_frac: content_bbox.ymin_frac ?? null,
+        content_w_frac:    content_bbox.w_frac    ?? null,
+        content_h_frac:    content_bbox.h_frac    ?? null
+      }).eq("id", page_id);
+    } catch (e) { console.warn("[content_bbox persist]", e?.message); }
   }
 
   try {

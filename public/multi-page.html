@@ -507,6 +507,8 @@ let pdfDoc       = null;
 let totalPages   = 0;
 let selectedPages = new Set();   // PDF page numbers
 let pageCache    = {};           // pageNum → { canvas, passBResult, pageId }
+let pageContentBBox = {};        // pageNum → { xmin_frac, ymin_frac, w_frac, h_frac } — the content-bbox
+                                  // frame x_norm/y_norm were normalized against (see extraction loop below)
 let trMap        = {};           // TR name → config
 let pinTarget    = null;         // { trName, pageNum } — current pin placement
 let batchResults = {};           // pageNum → result
@@ -2458,6 +2460,19 @@ async function runBatch() {
       const cW    = Math.max(xMax - xMin, W);
       const cH    = Math.max(yMax - yMin, H);
 
+      // Persist the content-bbox frame (as fractions of the full page) so any later
+      // re-render — confidence map, leader-cluster markup — can reconstruct exactly
+      // where x_norm/y_norm=(0,0)-(1,1) sits on the rendered page. Without this, a
+      // renderer has no choice but to assume content bbox == full page, which drifts
+      // on any sheet whose content overflows the MediaBox (see contentBBox note above).
+      const contentBBox = {
+        xmin_frac: parseFloat((xMin / W).toFixed(4)),
+        ymin_frac: parseFloat((yMin / H).toFixed(4)),
+        w_frac:    parseFloat((cW   / W).toFixed(4)),
+        h_frac:    parseFloat((cH   / H).toFixed(4))
+      };
+      pageContentBBox[pageNum] = contentBBox;   // same-session cache for immediate use
+
       // Filter to anchors, normalize by content bounds
       const textItems = [];
       for (const { s, cx, cy } of allRaw) {
@@ -2558,7 +2573,8 @@ async function runBatch() {
         sheet_class:     sheetClass,
         page_width_pts:  W,
         page_height_pts: H,
-        demarc_pins:    demarcPins
+        demarc_pins:    demarcPins,
+        content_bbox:   contentBBox
       };
       if (scaleOverrides[pageNum]) batchBody.scale_override = scaleOverrides[pageNum];  // persisted by server
       batchPayloads[pageNum] = batchBody;   // reused by the leader-marking re-run
@@ -2901,6 +2917,36 @@ let lcPageNum = null, lcOverrides = [];
 let lcZoom = 1, lcPanX = 0, lcPanY = 0, lcDrag = null, lcCW = 0, lcCH = 0;
 let lcDevices = [], lcSel = null;
 
+// ── Content-bbox coordinate transform ───────────────────────────────
+// x_norm/y_norm are normalized against a page's TEXT CONTENT bounding box, not
+// the full page (see the extraction loop above) — necessary because some sheets'
+// content overflows the MediaBox. Any canvas render of a page must go through
+// these two functions to place/read a point correctly; skipping them silently
+// assumes content bbox == full page, which drifts on any such sheet (confirmed
+// on VA T1.1.W pg2 — see confidence-map bug report).
+//
+// y needs care: cy_norm is top-down within the content bbox (see extraction
+// loop), but the bbox itself was measured in PDF points (y-up). Full derivation
+// lives in the pass-batch content_bbox migration comment.
+function pageBBoxFor(pageNum) {
+  const b = pageContentBBox[pageNum];
+  return b && b.w_frac && b.h_frac ? b : { xmin_frac: 0, ymin_frac: 0, w_frac: 1, h_frac: 1 };
+}
+function normToCanvasXY(xNorm, yNorm, bbox, cw, ch) {
+  return {
+    x: cw * (bbox.xmin_frac + xNorm * bbox.w_frac),
+    y: ch * (1 - bbox.ymin_frac - (1 - yNorm) * bbox.h_frac)
+  };
+}
+// Inverse — canvas click (as fractions of the FULL rendered page) back to the
+// content-bbox-normalized space that d.x_norm/d.y_norm live in.
+function canvasXYToNorm(xPageFrac, yPageFrac, bbox) {
+  return {
+    xNorm: (xPageFrac - bbox.xmin_frac) / bbox.w_frac,
+    yNorm: (yPageFrac - (1 - bbox.ymin_frac - bbox.h_frac)) / bbox.h_frac
+  };
+}
+
 function lcApplyTransform() {
   const layer = document.getElementById('lc-layer');
   layer.style.transform = `translate(${lcPanX}px,${lcPanY}px) scale(${lcZoom})`;
@@ -2923,6 +2969,7 @@ function lcOverrideFor(d) {
 function lcRedraw() {
   const layer = document.getElementById('lc-layer');
   layer.querySelectorAll('.lc-dot').forEach(e => e.remove());
+  const bbox = pageBBoxFor(lcPageNum);
   const seen = new Set();
   for (const d of lcDevices) {
     if (d.x_norm == null || d.y_norm == null) continue;
@@ -2941,8 +2988,9 @@ function lcRedraw() {
       border:${2/lcZoom}px solid ${color}; background:${ov?'rgba(64,240,160,.3)':'rgba(240,122,122,.18)'};
       transform:translate(-50%,-50%); pointer-events:none; z-index:10;
       ${sel?`box-shadow:0 0 0 ${3/lcZoom}px rgba(240,192,64,.5);`:''}`;
-    dot.style.left = (d.x_norm * lcCW) + 'px';
-    dot.style.top  = (d.y_norm * lcCH) + 'px';
+    const pos = normToCanvasXY(d.x_norm, d.y_norm, bbox, lcCW, lcCH);
+    dot.style.left = pos.x + 'px';
+    dot.style.top  = pos.y + 'px';
     if (ov) {
       const badge = document.createElement('div');
       badge.textContent = '×' + ov.quantity;
@@ -2973,7 +3021,11 @@ async function openLeaderModal(pageNum) {
 
   cv.onclick = (e) => {
     const r = cv.getBoundingClientRect();
-    const xn = (e.clientX - r.left)/lcZoom/lcCW, yn = (e.clientY - r.top)/lcZoom/lcCH;
+    // Native canvas pixels as a fraction of the FULL page — then map into the
+    // content-bbox-normalized space that lcDevices' x_norm/y_norm live in.
+    const xPageFrac = (e.clientX - r.left) / lcZoom / lcCW;
+    const yPageFrac = (e.clientY - r.top)  / lcZoom / lcCH;
+    const { xNorm: xn, yNorm: yn } = canvasXYToNorm(xPageFrac, yPageFrac, pageBBoxFor(lcPageNum));
     let best = null, bd = Infinity;
     for (const d of lcDevices) { const dd = (d.x_norm-xn)**2 + (d.y_norm-yn)**2; if (dd<bd){bd=dd;best=d;} }
     if (!best || bd > 0.03*0.03) { setStatus('lc-status','No cluster near that click','err'); return; }
@@ -3036,6 +3088,7 @@ function confReset() { confZoom = 1; confPanX = 0; confPanY = 0; confApplyTransf
 function confRedraw() {
   const layer = document.getElementById('conf-layer');
   layer.querySelectorAll('.conf-star').forEach(e => e.remove());
+  const bbox = pageBBoxFor(confPageNum);
   for (const d of confDevices) {
     if (d.x_norm == null || d.y_norm == null) continue;
     const color = CONF_COLOR[d.confidence] ?? '#888';
@@ -3050,8 +3103,9 @@ function confRedraw() {
       text-shadow:0 0 ${2/confZoom}px rgba(0,0,0,0.9), 0 0 ${1/confZoom}px rgba(0,0,0,0.9);
       cursor:default;`;
     star.textContent = '★';
-    star.style.left = (d.x_norm * confCW) + 'px';
-    star.style.top  = (d.y_norm * confCH) + 'px';
+    const pos = normToCanvasXY(d.x_norm, d.y_norm, bbox, confCW, confCH);
+    star.style.left = pos.x + 'px';
+    star.style.top  = pos.y + 'px';
     star.onmouseenter = () => {
       document.getElementById('conf-hover-info').textContent =
         `${d.name ?? d.type ?? '—'}  ·  ${(d.raw_labels ?? []).join(' · ')}  ·  confidence: ${d.confidence ?? '—'}`;
@@ -3388,6 +3442,16 @@ async function restoreFromSupabase(pid) {
               : { found: false }
           }
         };
+        // Restore the content-bbox frame so confidence-map / leader markup position
+        // markers correctly after a reload, not just within the scanning session.
+        if (pg.content_xmin_frac != null) {
+          pageContentBBox[pg.eval_page_num] = {
+            xmin_frac: pg.content_xmin_frac,
+            ymin_frac: pg.content_ymin_frac,
+            w_frac:    pg.content_w_frac,
+            h_frac:    pg.content_h_frac
+          };
+        }
       }
       const restoredCount = projPages.map(p => p.eval_page_num).filter(Boolean).length;
       setStatus('selection-status',
