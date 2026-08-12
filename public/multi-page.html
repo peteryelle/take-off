@@ -3813,7 +3813,7 @@ function renderByTR() {
   el.innerHTML = html || '<div style="color:#555;">No results yet</div>';
 }
 
-function renderProjectTotal() {
+async function renderProjectTotal() {
   const el = document.getElementById('project-total-content');
   let totalDevices = 0, totalTIA = 0, maxFt = 0;
   const typeRollup = {};
@@ -3827,6 +3827,20 @@ function renderProjectTotal() {
       typeRollup[k] = typeRollup[k] ?? { name: d.name, count: 0 };
       typeRollup[k].count++;
     }
+  }
+
+  // Zero-count backstop: a device_type configured but never found on any scanned page.
+  // Only meaningful once a batch has actually run (batchResults populated) — otherwise
+  // "zero found" just means "not counted yet", not a real signal. Catches the case a
+  // text-anchor device was set up on a symbol with no real printed label (the WAP
+  // failure mode), independent of whether the crop-time check in Discover caught it.
+  let zeroCountTypes = [];
+  if (Object.keys(batchResults).length) {
+    try {
+      const r = await fetch(`${base()}/api/takeoff-summary?project_id=${projectId}`);
+      const j = await r.json();
+      zeroCountTypes = (j.device_types ?? []).filter(dt => !typeRollup[dt.legend_id]);
+    } catch (e) { console.warn('[project total] device_types fetch failed', e.message); }
   }
 
   let html = `
@@ -3852,6 +3866,20 @@ function renderProjectTotal() {
   }
 
   html += `</tbody></table>`;
+
+  if (zeroCountTypes.length) {
+    html += `<div style="margin-top:18px; padding:10px 12px; background:#2a1a0a; border:1px solid #6a4a1a; border-radius:4px;">
+      <div style="color:#f0a050; font-weight:bold; font-size:12px;">⚠ Not found on any scanned page:</div>`;
+    for (const dt of zeroCountTypes) {
+      html += `<div style="margin-top:6px; font-size:12px; color:#ccc;">
+        <b style="color:#f0c040;">${dt.name}</b> — 0 instances across ${Object.keys(batchResults).length} page${Object.keys(batchResults).length!==1?'s':''}.
+        If this device has no printed text label of its own, it needs to be re-captured in
+        <b>Discover</b> by marking 3+ real instances so it can be found by shape instead of text.
+      </div>`;
+    }
+    html += `</div>`;
+  }
+
   html += `<div id="bom-content" style="margin-top:24px;"></div>`;
   el.innerHTML = html;
 }

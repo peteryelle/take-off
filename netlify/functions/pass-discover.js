@@ -50,6 +50,7 @@ export default async function handler(req) {
       case "read_legend":     return await actionReadLegend(body);
       case "scan_for_symbol": return await actionScanForSymbol(body);
       case "build_device":    return await actionBuildDevice(body);
+      case "build_symbol_device": return await actionBuildSymbolDevice(body);
       case "scan_strip":      return await actionScanStrip(body);
       case "detect_bounds":   return await actionDetectBounds(body);
       case "reconcile":       return await actionReconcile(body);
@@ -799,6 +800,88 @@ Return ONLY valid JSON — no markdown, no preamble:
 // a calibrated llm_description from real drawing appearances,
 // and stores to device_types.
 // ═════════════════════════════════════════════════════════════════
+// ── Symbol-only device (no printed label). The client has already: (1) confirmed
+// no text sits near the crop, (2) collected 3+ real plan instances, (3) derived a
+// candidate fill/area signature from their actual vector geometry, and (4) run that
+// signature across every floor-plan page and shown the user every match before this
+// call — this endpoint only PERSISTS what's already been validated, it does no
+// derivation itself.
+async function actionBuildSymbolDevice(body) {
+  const { project_id, name, description, drawing_crop_base64, symbol_template, match_count } = body;
+
+  if (!project_id)       return respond(400, { error: "project_id required" });
+  if (!name)             return respond(400, { error: "name required" });
+  if (!symbol_template || !Array.isArray(symbol_template.fill_rgb))
+    return respond(400, { error: "symbol_template with fill_rgb required" });
+
+  const descPrompt = `Write a visual detection description for an AI system that will find this device symbol on engineering drawings.
+
+Device: ${name}
+${description ? `Notes: ${description}` : ""}
+
+This symbol has NO printed text label anywhere near it on the drawing — it is identified purely by its shape and fill, not by any code or abbreviation. Do not include a "TEXT NEARBY" line, or state explicitly that none exists.
+
+Write in this exact format — be precise and calibrated to production drawing scale:
+
+SHAPE: [geometric shape]
+SIZE: [approximate size as drawn on floor plan]
+FILL: [solid/outline/hatched/etc]
+BORDER: [line weight and style]
+INTERNAL MARKS: [internal detail or none]
+TEXT NEARBY: none — identified by shape only
+LOCATION: [where it typically appears — walls, ceiling, corridors, etc]
+LOOK-ALIKES: [similar symbols and how to distinguish]
+
+Return only the structured description — no preamble, no explanation.`;
+
+  let llm_description = "";
+  try { llm_description = (await claudeText(descPrompt, 800)).trim(); }
+  catch (e) { llm_description = "SHAPE: bare symbol, no printed label — identified by shape and fill only."; }
+
+  const legend_id = `SYM_${name.replace(/[^A-Z0-9]/gi, "_").toUpperCase().slice(0, 30)}_${Date.now()}`;
+
+  const detection_config = {
+    type:                   name,        // explicit, decoupled from the mutable display name
+    anchor:                 null,        // no text — nothing for the label track to match, kept for the
+                                          // rare case a human later confirms one really does exist somewhere
+    anchor_mode:            'exact',
+    anchor_confidence:      'low',
+    sources:                ['label', 'symbol'],
+    has_symbol:             true,
+    symbol_template,                     // { fill_rgb, fill_tol, body_area, single_type }
+    families:               [],
+    cluster_pt:             25,
+    uin_pattern:            null,
+    leader_from_anchor:     false,
+    name_source:            'symbol_crop',
+    source:                 'discovery_symbol_vector',
+    validated_match_count:  match_count ?? null   // audit trail: how many hits the collision scan found at save time
+  };
+
+  const { data: dt, error: dtErr } = await supabase
+    .from("device_types")
+    .upsert({
+      project_id,
+      legend_id,
+      name,
+      human_description:    description || "",
+      llm_description,
+      text_anchors:          [],
+      detection_config,
+      example_image_base64:  drawing_crop_base64 || null,
+      updated_at:            new Date()
+    }, { onConflict: "project_id,legend_id" })
+    .select("id")
+    .single();
+
+  if (dtErr) return respond(500, { error: "device_types upsert failed: " + dtErr.message });
+
+  return respond(200, {
+    device_type_id: dt.id,
+    legend_id, name, llm_description, detection_config
+  });
+}
+
 async function actionBuildDevice(body) {
   const {
     project_id, legend_entry, all_instances,

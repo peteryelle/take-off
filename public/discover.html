@@ -9,6 +9,14 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>pdfjsLib.GlobalWorkerOptions.workerSrc =
   'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
+<script type="module">
+  // Vector-geometry primitives for symbol-only device derivation (no printed label
+  // to anchor on). Same pure module the live batch pipeline uses for detection —
+  // reused here, not reimplemented, so a device built in Discover behaves identically
+  // to one built by hand (see the WAP build for the manual version of this exact flow).
+  import { contentFrame, extractFilledSubpaths, filterByFill, groupSubpaths, polyArea } from './lib/geometry.js';
+  window.TakeoffGeom = { contentFrame, extractFilledSubpaths, filterByFill, groupSubpaths, polyArea };
+</script>
 <style>
 * { box-sizing:border-box; margin:0; padding:0; }
 body { font-family:monospace; background:#0d0d0d; color:#e0e0e0; font-size:13px; }
@@ -252,6 +260,54 @@ button.lg { padding:8px 20px; font-size:13px; }
         </div>
       </div>
 
+      <!-- symbol mode: no label detected — collecting 3+ real instances -->
+      <div id="symbol-state" style="display:none">
+        <div class="analysis-box">
+          <img id="symbol-crop-preview" class="crop-preview" src="" alt="" onclick="openLB(this.src)">
+          <div class="analysis-body">
+            <div class="proposed-label" style="color:#f0c040;">No label detected near this symbol</div>
+            <div class="proposed-name" id="symbol-proposed-name">—</div>
+            <div class="proposed-meta" style="color:#888;">
+              This looks like a bare glyph with no printed code or text of its own. Take-off can still find it —
+              by its shape and fill — but needs to see it in more than one place first.
+            </div>
+            <input type="text" class="name-input" id="symbol-name-override" placeholder="Edit name if needed">
+            <div style="margin:10px 0; padding:8px; background:#0a0a0a; border:1px solid #2a2a2a; border-radius:3px;">
+              <div id="symbol-progress" style="color:#f0c040; font-weight:bold;">1 of 3 marked</div>
+              <div style="color:#666; font-size:11px; margin-top:3px;">
+                Click 2 more real instances of this same symbol — anywhere on this page or any other floor plan page.
+              </div>
+            </div>
+            <div id="symbol-thumbs" style="display:flex; gap:6px; margin-bottom:10px;"></div>
+            <div class="confirm-row">
+              <button class="lg" id="symbol-derive-btn" onclick="deriveAndValidate()" disabled>✓ Derive &amp; Validate</button>
+              <button class="danger" onclick="cancelSymbolMode()">✗ Cancel</button>
+            </div>
+            <div class="status" id="symbol-status" style="margin-top:6px;"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- symbol validation: collision-scan results before saving -->
+      <div id="symbol-validate-state" style="display:none">
+        <div class="analysis-box">
+          <div class="analysis-body">
+            <div class="proposed-label" style="color:#7af07a;">Signature derived — review before saving</div>
+            <div id="symbol-validate-summary" style="margin:8px 0; line-height:1.6;">—</div>
+            <div style="color:#666; font-size:11px; margin-bottom:10px;">
+              This is every location on your selected floor-plan pages that matches this symbol's shape and fill.
+              If the count looks obviously wrong (far more or fewer than you'd expect), cancel and re-mark with
+              cleaner instances rather than saving.
+            </div>
+            <div class="confirm-row">
+              <button class="lg" onclick="confirmSymbolDevice()">✓ Save Device</button>
+              <button class="danger" onclick="cancelSymbolMode()">✗ Cancel</button>
+            </div>
+            <div class="status" id="symbol-validate-status" style="margin-top:6px;"></div>
+          </div>
+        </div>
+      </div>
+
       <!-- device list -->
       <div id="device-list" style="margin-top:12px;"></div>
 
@@ -313,8 +369,12 @@ const S = {
   sel: { active:false, x0:0, y0:0, x1:0, y1:0 },
   analyzing: false,
   lastCropB64: null,
-  lastAnalysis: null
+  lastAnalysis: null,
+  curViewport: null,      // current page's render viewport (for convertToPdfPoint)
+  symbolCandidate: null   // { name, description, crop, samples:[{page,pdfX,pdfY}] } while mid-collection
 };
+
+const SYMBOL_MIN_SAMPLES = 3;
 
 // ── Init ──────────────────────────────────────────────────────────
 (function(){
@@ -413,6 +473,7 @@ async function loadViewerPage(idx) {
 
   const page=await S.pdf.getPage(pageNum);
   const vp=page.getViewport({scale:VIEW_SCALE});
+  S.curViewport = vp;   // needed to convert a crop's canvas point to PDF user-space for symbol derivation
   const fc=document.getElementById('floor-canvas');
   const oc=document.getElementById('overlay-canvas');
   fc.width=oc.width=vp.width;
@@ -451,6 +512,10 @@ function selEnd(e) {
   const w=Math.abs(S.sel.x1-S.sel.x0), h=Math.abs(S.sel.y1-S.sel.y0);
   clearOverlay();
   if (w<15||h<15) return; // too small
+  // Mid-collection for a symbol-only candidate: this crop is another real instance of
+  // the SAME device, not a new one — skip the vision call entirely (no name/description
+  // to re-derive) and just record where it is.
+  if (S.symbolCandidate) { addSymbolSample(); return; }
   extractAndAnalyze();
 }
 
@@ -516,17 +581,28 @@ async function extractAndAnalyze() {
 
 // ── Analysis result display ───────────────────────────────────────
 function showResultState(state) {
-  ['hint-state','analyzing-state','result-state','error-state'].forEach(id=>{
+  ['hint-state','analyzing-state','result-state','error-state','symbol-state','symbol-validate-state'].forEach(id=>{
     document.getElementById(id).style.display='none';
   });
   document.getElementById(state+'-state').style.display='block';
 }
 
 function showAnalysisResult(data) {
+  const name = data.legend_name || data.device_guess || 'Unknown Device';
+
+  // No text found near this glyph — this is a bare-symbol candidate. Route into
+  // 3-instance collection instead of the normal single-crop save; there is no
+  // override, because a false "no text" verdict just costs 2 extra clicks, while a
+  // false "text found" verdict silently ships an anchor that never matches anything
+  // (exactly the WAP failure this whole flow exists to prevent).
+  if (!data.nearby_text || !data.nearby_text.length) {
+    enterSymbolMode(data, name);
+    return;
+  }
+
   showResultState('result');
   document.getElementById('crop-preview').src='data:image/jpeg;base64,'+S.lastCropB64;
 
-  const name = data.legend_name || data.device_guess || 'Unknown Device';
   const conf = data.match_confidence;
   const confLabel = conf==='high'?'✓ High confidence match':conf==='medium'?'⚠ Medium confidence — verify':' Low confidence — edit name';
 
@@ -535,6 +611,164 @@ function showAnalysisResult(data) {
     (data.match_reason||'') + (data.nearby_text?.length ? `  ·  Labels: ${data.nearby_text.join(', ')}` : '');
   document.getElementById('name-override').value = name;
   setStatus('confirm-status', confLabel, conf==='high'?'ok':conf==='medium'?'run':'err');
+}
+
+// ── Symbol-only device: collect 3+ samples, derive a signature, validate, save ─────
+
+function cropCenterToPdfPoint() {
+  // S.sel holds the just-completed crop box in floor-canvas pixel space (VIEW_SCALE).
+  const x = (S.sel.x0 + S.sel.x1) / 2, y = (S.sel.y0 + S.sel.y1) / 2;
+  const [pdfX, pdfY] = S.curViewport.convertToPdfPoint(x, y);
+  return { pdfX, pdfY };
+}
+
+function enterSymbolMode(data, name) {
+  const { pdfX, pdfY } = cropCenterToPdfPoint();
+  S.symbolCandidate = {
+    name,
+    description: data.legend_description || data.visual_description || data.match_reason || '',
+    crop: S.lastCropB64,
+    samples: [{ page: S.fpNums[S.curPageIdx], pdfX, pdfY }]
+  };
+  showResultState('symbol');
+  document.getElementById('symbol-crop-preview').src = 'data:image/jpeg;base64,'+S.lastCropB64;
+  document.getElementById('symbol-proposed-name').textContent = name;
+  document.getElementById('symbol-name-override').value = name;
+  setStatus('symbol-status', '', '');
+  renderSymbolProgress();
+}
+
+function addSymbolSample() {
+  const { pdfX, pdfY } = cropCenterToPdfPoint();
+  S.symbolCandidate.samples.push({ page: S.fpNums[S.curPageIdx], pdfX, pdfY });
+  renderSymbolProgress();
+}
+
+function renderSymbolProgress() {
+  const n = S.symbolCandidate.samples.length;
+  const need = Math.max(0, SYMBOL_MIN_SAMPLES - n);
+  document.getElementById('symbol-progress').textContent =
+    n >= SYMBOL_MIN_SAMPLES ? `${n} of ${SYMBOL_MIN_SAMPLES} marked — ready` : `${n} of ${SYMBOL_MIN_SAMPLES} marked`;
+  document.querySelector('#symbol-state .proposed-meta').textContent = need > 0
+    ? `Click ${need} more real instance${need!==1?'s':''} of this same symbol — anywhere on this page or any other floor plan page.`
+    : `Enough instances marked. Click Derive & Validate, or keep marking more for a stronger signature.`;
+  document.getElementById('symbol-derive-btn').disabled = n < SYMBOL_MIN_SAMPLES;
+
+  const thumbs = document.getElementById('symbol-thumbs');
+  thumbs.innerHTML = S.symbolCandidate.samples.map((s,i) =>
+    `<div style="width:36px;height:36px;background:#0a0a0a;border:1px solid #3a7a3a;border-radius:3px;
+      display:flex;align-items:center;justify-content:center;color:#7af07a;font-size:10px;"
+      title="pg${s.page}">${i+1}</div>`).join('');
+}
+
+function cancelSymbolMode() {
+  S.symbolCandidate = null;
+  resetToHint();
+}
+
+// Pull filled-subpath geometry for ONE page, once, so multiple samples on the same
+// page don't re-extract it (pages are usually revisited across the 3 instances).
+const _geomCache = new Map();
+async function pageGeometry(pageNum) {
+  if (_geomCache.has(pageNum)) return _geomCache.get(pageNum);
+  const G = window.TakeoffGeom;
+  const page = await S.pdf.getPage(pageNum);
+  const vp1 = page.getViewport({ scale: 1 });   // scale-1 dims are the frame's reference, matching
+                                                  // every other normalization in this app (page_width_pts)
+  const textContent = await page.getTextContent();
+  const textCenters = textContent.items.map(it => ({
+    cx: it.transform[4] + (it.width||0)/2, cy: it.transform[5] + (it.height||0)/2
+  }));
+  const frame = G.contentFrame(textCenters, vp1.width, vp1.height);
+  const raw = await G.extractFilledSubpaths(page, pdfjsLib.OPS);
+  const normed = raw.map(s => ({ ...s, points: s.points.map(([x,y]) => frame.norm(x,y)) }));
+  const result = { frame, normed };
+  _geomCache.set(pageNum, result);
+  return result;
+}
+
+async function deriveAndValidate() {
+  const nameInput = document.getElementById('symbol-name-override').value.trim();
+  if (nameInput) S.symbolCandidate.name = nameInput;
+  setStatus('symbol-status', 'Reading vector geometry…', 'run');
+  document.getElementById('symbol-derive-btn').disabled = true;
+
+  const G = window.TakeoffGeom;
+  try {
+    // ── Derive: for each marked sample, find the filled shape nearest that click,
+    // using a near-zero body-area floor so every real subpath is its own candidate
+    // (we don't know the device's true area yet — that's what we're deriving).
+    const found = [];
+    for (const s of S.symbolCandidate.samples) {
+      const { frame, normed } = await pageGeometry(s.page);
+      const blobs = G.groupSubpaths(normed, { bodyArea: 1e-7 });
+      if (!blobs.length) continue;
+      const [nx, ny] = frame.norm(s.pdfX, s.pdfY);
+      let best = null, bd = Infinity;
+      for (const b of blobs) { const d = Math.hypot(b.x-nx, b.y-ny); if (d < bd) { bd = d; best = b; } }
+      if (best) found.push({ fill_rgb: best.fill_rgb, area: G.polyArea(best.paths[0].points) });
+    }
+
+    if (found.length < 2) {
+      setStatus('symbol-status', 'Could not find consistent vector shapes at the marked points — try marking cleaner instances (closer to the glyph\u2019s solid fill).', 'err');
+      document.getElementById('symbol-derive-btn').disabled = false;
+      return;
+    }
+
+    const avgFill = [0,1,2].map(i => Math.round(found.reduce((a,f)=>a+(f.fill_rgb?.[i]??0),0)/found.length));
+    const areas = found.map(f => f.area);
+    const bodyArea = Math.min(...areas) * 0.7;   // safe margin under the smallest real sample
+    const fillTol = 20;
+
+    // ── Validate: scan EVERY selected floor-plan page with the derived signature —
+    // not just the pages sampled — and show every hit before this gets trusted. This
+    // is the step that would have caught WAP's fill-color collision with the 4D
+    // outlet's diode fill before it ever ran live.
+    setStatus('symbol-status', 'Scanning all floor-plan pages for matches…', 'run');
+    const perPage = [];
+    let total = 0;
+    for (const pageNum of S.fpNums) {
+      const { normed } = await pageGeometry(pageNum);
+      const kept = G.filterByFill(normed, avgFill, fillTol);
+      const blobs = G.groupSubpaths(kept, { bodyArea });
+      if (blobs.length) { perPage.push({ page: pageNum, count: blobs.length }); total += blobs.length; }
+    }
+
+    S.symbolCandidate.symbol_template = { fill_rgb: avgFill, fill_tol: fillTol, body_area: bodyArea, single_type: S.symbolCandidate.name };
+    S.symbolCandidate.match_count = total;
+
+    showResultState('symbol-validate');
+    document.getElementById('symbol-validate-summary').innerHTML =
+      `<b>${S.symbolCandidate.name}</b><br>` +
+      `Signature: fill ~rgb(${avgFill.join(',')}), area ≥ ${bodyArea.toExponential(2)} (normalized)<br>` +
+      `Matches <b>${total}</b> location${total!==1?'s':''} across ${perPage.length} page${perPage.length!==1?'s':''}: ` +
+      perPage.map(p => `pg${p.page}: ${p.count}`).join(', ');
+    setStatus('symbol-validate-status', '', '');
+  } catch (e) {
+    setStatus('symbol-status', 'Error: ' + e.message, 'err');
+    document.getElementById('symbol-derive-btn').disabled = false;
+  }
+}
+
+async function confirmSymbolDevice() {
+  setStatus('symbol-validate-status', 'Saving…', 'run');
+  try {
+    const result = await api({
+      action:               'build_symbol_device',
+      project_id:            S.projectId,
+      name:                  S.symbolCandidate.name,
+      description:           S.symbolCandidate.description,
+      drawing_crop_base64:   S.symbolCandidate.crop,
+      symbol_template:       S.symbolCandidate.symbol_template,
+      match_count:           S.symbolCandidate.match_count
+    });
+    S.devices.push({ name: S.symbolCandidate.name, crop: S.symbolCandidate.crop, device_type_id: result.device_type_id });
+    renderDeviceList();
+    S.symbolCandidate = null;
+    resetToHint();
+  } catch (e) {
+    setStatus('symbol-validate-status', 'Error: ' + e.message, 'err');
+  }
 }
 
 function resetToHint() { showResultState('hint'); S.lastCropB64=null; S.lastAnalysis=null; }
