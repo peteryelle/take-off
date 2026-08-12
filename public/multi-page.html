@@ -3244,7 +3244,18 @@ function applyDistanceScope() {
     const regions = (pageId != null ? scopeRegions[pageId] : null) ?? [];
     if (!regions.length) continue;                 // no box on this page → page-wide
     for (const d of (res.devices ?? [])) {
-      if (inAnyRegion(regions, d.x_norm, d.y_norm)) continue;
+      // Region boxes are captured in full-page (identity) fractions — same frame as
+      // demarc pins and waypoints. Device x_norm/y_norm are NOT always in that frame
+      // (label/vector-sourced devices normalize against the page's text content bbox;
+      // see bboxForDevice). Compare in the same frame the box was drawn in, or every
+      // content-bbox device fails the inside-box test by coincidence, not by geometry.
+      const bbox = bboxForDevice(Number(pageNum), d);
+      const xIdentity = (d.x_norm == null) ? null : bbox.xmin_frac + d.x_norm * bbox.w_frac;
+      // y mirrors normToCanvasXY's flip (content bbox is y-up; y_norm is top-down
+      // within it) rather than linear scaling — same transform already proven
+      // correct by the star-placement fix, just without the *ch pixel scale.
+      const yIdentity = (d.y_norm == null) ? null : 1 - bbox.ymin_frac - (1 - d.y_norm) * bbox.h_frac;
+      if (inAnyRegion(regions, xIdentity, yIdentity)) continue;
       d.total_ft  = null;
       d.demarc_id = null;
       const fl = new Set(d.flags ?? []); fl.add('out_of_scope'); d.flags = [...fl];
