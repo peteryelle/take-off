@@ -427,7 +427,7 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
     Out-of-scope zone
   </div>
   <div style="color:#aaa; font-size:13px; margin-bottom:8px;">
-    Suggested box loaded below — adjust by clicking two new opposite corners, or confirm as-is · scroll to zoom · drag to pan
+    Click two opposite corners to draw a box \u2014 or adjust the suggested box below if one loaded \u00b7 scroll to zoom \u00b7 drag to pan
   </div>
 
   <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap;">
@@ -447,7 +447,7 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
 
   <div class="pin-controls" style="margin-top:8px;">
     <button onclick="confirmExcludeZone()" style="padding:8px 20px; font-size:14px;">✓ Confirm — exclude this area</button>
-    <button onclick="skipExcludeSuggestion()" class="info" style="padding:8px 16px; font-size:14px;">Skip this one</button>
+    <button id="excl-skip-btn" onclick="skipExcludeSuggestion()" class="info" style="padding:8px 16px; font-size:14px;">Skip this one</button>
     <button class="danger" onclick="closeExcludeModal()" style="padding:8px 16px; font-size:14px;">✗ Close</button>
     <div class="status" id="excl-status"></div>
   </div>
@@ -1474,7 +1474,7 @@ function renderPageAssignmentTable(trs) {
       <td style="padding:7px 10px; color:#aaa; max-width:280px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${raw}">${title}</td>
       <td style="padding:7px 10px;" id="pa-scale-${pgNum}">${scaleCellHtml(pgNum)}</td>
       <td style="padding:7px 10px;">${dropdown}</td>
-      <td style="padding:7px 10px;" id="pa-role-${pgNum}">${roleHtml}${pinBtnsHtml(pgNum)}${exclBtnHtml(pgNum)}${wpBtnHtml(pgNum)}</td>`;
+      <td style="padding:7px 10px;" id="pa-role-${pgNum}">${roleHtml}${pinBtnsHtml(pgNum)}${exclBtnHtml(pgNum)}${exclManualBtnHtml(pgNum)}${wpBtnHtml(pgNum)}</td>`;
     tbody.appendChild(tr);
   }
 
@@ -1565,6 +1565,19 @@ function exclBtnHtml(pgNum) {
   return `<div style="margin-top:5px;">
     <button class="excl-review-btn" style="padding:2px 8px; font-size:11px; background:#3a2a1a; border-color:#7a5a2a; color:#e0a860;"
       onclick="openExcludeModal(${pgNum})">⬚ ${n} zone${n !== 1 ? 's' : ''} — Review</button>
+  </div>`;
+}
+
+// Always-available manual entry point — the auto-suggestion (diagonal-hatch detection)
+// is a best-effort read of the page image and can miss a real out-of-scope area (the
+// hatch pattern isn't always this obvious to read automatically). openExcludeModal
+// already handles an empty suggestion list gracefully (falls to "draw manually"), so
+// this reuses it as-is rather than needing a separate code path.
+function exclManualBtnHtml(pgNum) {
+  return `<div style="margin-top:5px;">
+    <button class="info" style="padding:2px 8px; font-size:11px;"
+      onclick="openExcludeModal(${pgNum})" title="Draw an out-of-scope box yourself, whether or not one was suggested">
+      \u2b1a + mark exclude zone</button>
   </div>`;
 }
 
@@ -2634,7 +2647,15 @@ function redrawExclRect() {
 // Load one suggestion's box into exclCorners and update the nav readout.
 function loadExclSuggestion(idx) {
   const s = exclSuggestions[idx];
-  if (!s) { exclCorners = []; document.getElementById('excl-suggestion-nav').textContent = 'No suggestion — draw manually'; redrawExclRect(); return; }
+  const skipBtn = document.getElementById('excl-skip-btn');
+  if (!s) {
+    exclCorners = [];
+    document.getElementById('excl-suggestion-nav').textContent = 'No suggestion — draw your own box below';
+    if (skipBtn) skipBtn.textContent = 'Close';
+    redrawExclRect();
+    return;
+  }
+  if (skipBtn) skipBtn.textContent = 'Skip this one';
   exclCorners = [{ x: s.x0, y: s.y0 }, { x: s.x1, y: s.y1 }];
   const conf = s.confidence ? ` (${s.confidence} confidence)` : '';
   document.getElementById('excl-suggestion-nav').textContent =
@@ -2664,7 +2685,7 @@ async function openExcludeModal(pageNum) {
   exclPanX = 0; exclPanY = 0;
 
   if (exclSuggestionIdx >= 0) loadExclSuggestion(exclSuggestionIdx);
-  else { exclCorners = []; document.getElementById('excl-suggestion-nav').textContent = 'No suggestions — draw manually'; }
+  else loadExclSuggestion(-1);   // reuses the same "no suggestion" text + Skip->Close button sync
   applyExclTransform();
   setStatus('excl-status', '', '');
 
