@@ -396,6 +396,27 @@ async function api(body) {
   const d=await r.json(); if(!r.ok) throw new Error(d.error||r.status); return d;
 }
 
+// Discover's "Added to library" list was session-memory only — it never showed what
+// was already saved for this project, so returning to Discover after closing the tab
+// (or a fresh deploy resetting sessionStorage) looked exactly like the devices had
+// vanished, even though they were safely persisted the whole time. Pull the real list
+// before any new cropping starts, so what's on screen always matches the database.
+async function loadExistingDevices() {
+  try {
+    const r = await fetch(`${S.baseUrl}/api/takeoff-summary?project_id=${S.projectId}`);
+    if (!r.ok) return;
+    const j = await r.json();
+    S.devices = (j.device_types ?? []).map(dt => ({
+      name: dt.name,
+      crop: dt.example_image_base64 || null,
+      device_type_id: dt.id
+    }));
+    renderDeviceList();
+  } catch (e) {
+    console.warn('[discover] could not load existing devices:', e.message);
+  }
+}
+
 // ── PDF upload ────────────────────────────────────────────────────
 async function handleUpload(input) {
   const file=input.files[0]; if(!file) return;
@@ -447,6 +468,8 @@ async function goCrop() {
   if (!S.projectId) { setStatus('go-status','Enter Project ID','err'); return; }
   S.baseUrl=base();
   setStatus('go-status','Rendering pages…','run');
+
+  await loadExistingDevices();
 
   S.fpNums=[...S.fpPages].sort((a,b)=>a-b);
   const legNum=[...S.legPages].sort((a,b)=>a-b)[0];
@@ -826,16 +849,16 @@ async function confirmDevice() {
 function renderDeviceList() {
   const list=document.getElementById('device-list');
   const label=document.getElementById('device-count-label');
-  label.textContent=`${S.devices.length} device type${S.devices.length!==1?'s':''} added`;
+  label.textContent=`${S.devices.length} device type${S.devices.length!==1?'s':''} in this project`;
   document.getElementById('done-btn').disabled=S.devices.length===0;
 
   if (!S.devices.length) { list.innerHTML=''; return; }
-  list.innerHTML=`<div style="color:#555;font-size:10px;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">Added to library</div>`;
+  list.innerHTML=`<div style="color:#555;font-size:10px;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">Device library</div>`;
   const dl=document.createElement('div'); dl.className='device-list';
   S.devices.forEach((d,i)=>{
     const row=document.createElement('div'); row.className='device-item';
     row.innerHTML=`
-      <img src="data:image/jpeg;base64,${d.crop}" onclick="openLB(this.src)">
+      <img src="data:image/jpeg;base64,${d.crop||''}" onclick="openLB(this.src)" onerror="this.style.visibility='hidden'">
       <div class="di-name">${esc(d.name)}</div>
       <div class="di-remove" onclick="removeDevice(${i})" title="Remove">×</div>`;
     dl.appendChild(row);
@@ -843,9 +866,29 @@ function renderDeviceList() {
   list.appendChild(dl);
 }
 
-function removeDevice(i) {
-  S.devices.splice(i,1);
-  renderDeviceList();
+// Every device in S.devices is already persisted the moment it appears here (both
+// confirmDevice and confirmSymbolDevice only push after their save call succeeds) —
+// including ones loaded from prior sessions via loadExistingDevices. A local-only
+// splice would silently lie about that: the item disappears from view but the row
+// stays in the database and keeps detecting on the next batch run. Delete for real,
+// with confirmation, so what's on screen always matches what Take-off will use.
+async function removeDevice(i) {
+  const d = S.devices[i];
+  if (!d) return;
+  if (!confirm(`Delete "${d.name}"?\nThis removes it from the project entirely — it will stop being detected on any future batch run. Cannot be undone.`)) return;
+
+  try {
+    const r = await fetch(`${S.baseUrl}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'delete_device_type', project_id: S.projectId, id: d.device_type_id })
+    });
+    if (!r.ok) { const j = await r.json().catch(()=>({})); alert('Delete failed: ' + (j.error || r.status)); return; }
+    S.devices.splice(i,1);
+    renderDeviceList();
+  } catch (e) {
+    alert('Delete failed: ' + e.message);
+  }
 }
 
 // ── Finish crop → build library ───────────────────────────────────
