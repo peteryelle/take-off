@@ -355,6 +355,36 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
   </div>
 </div>
 
+<!-- ── CABLE-ROUTING WAYPOINTS — Tier 1 point waypoints (see waypoint-path.js) ──── -->
+<div class="pin-modal" id="wp-modal">
+  <div style="color:#f0c040; font-size:14px; font-weight:bold; margin-bottom:4px;" id="wp-modal-title">
+    Cable routing waypoints
+  </div>
+  <div style="color:#aaa; font-size:13px; margin-bottom:8px;">
+    Click empty space to add a waypoint (tray entry, wall passthrough) · click an existing dot to remove it · scroll to zoom · drag to pan
+  </div>
+
+  <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+    <button onclick="wpZoom(1.5)" style="padding:3px 12px; font-size:13px;">＋ Zoom In</button>
+    <button onclick="wpZoom(1/1.5)" style="padding:3px 12px; font-size:13px;">－ Zoom Out</button>
+    <button onclick="wpResetZoom()" style="padding:3px 10px; font-size:11px;" class="info">Reset</button>
+    <span id="wp-zoom-level" style="color:#888; font-size:12px;">100%</span>
+    <span id="wp-count" style="color:#40c0f0; font-size:12px; margin-left:12px;"></span>
+  </div>
+
+  <div class="pin-canvas-wrap" id="wp-canvas-wrap"
+       style="overflow:hidden; width:88vw; height:62vh; position:relative; cursor:crosshair; border:1px solid #333;">
+    <div id="wp-layer" style="position:absolute; top:0; left:0; transform-origin:0 0;">
+      <canvas id="wp-canvas" style="position:absolute; top:0; left:0; display:block;"></canvas>
+    </div>
+  </div>
+
+  <div class="pin-controls">
+    <button class="danger" onclick="closeWaypointModal()" style="padding:8px 16px; font-size:14px;">✗ Done</button>
+    <div class="status" id="wp-status"></div>
+  </div>
+</div>
+
 <!-- ── SCHEMATIC (page region) DRAW MODAL ─────────────────────────── -->
 <div class="pin-modal" id="region-modal">
   <div style="color:#f0c040; font-size:14px; font-weight:bold; margin-bottom:4px;">
@@ -473,14 +503,24 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
     <span style="color:#7af07a; font-size:11px;">● high</span>
     <span style="color:#f0c040; font-size:11px;">● medium</span>
     <span style="color:#f07a7a; font-size:11px;">● low</span>
+    <button id="conf-paths-toggle" onclick="toggleConfPaths()" class="info"
+      style="padding:3px 10px; font-size:11px; margin-left:12px;">🔀 show path confidence</button>
   </div>
   <div id="conf-wrap" style="overflow:hidden; width:88vw; height:60vh; position:relative;
        cursor:grab; border:1px solid #333;">
     <div id="conf-layer" style="position:absolute; top:0; left:0; transform-origin:0 0;">
       <canvas id="conf-canvas" style="position:absolute; top:0; left:0; display:block;"></canvas>
+      <svg id="conf-path-svg" style="position:absolute; top:0; left:0; pointer-events:none; overflow:visible;"></svg>
     </div>
   </div>
   <div id="conf-hover-info" style="min-height:18px; margin-top:8px; color:#ccc; font-size:12px; font-family:monospace;"></div>
+  <div style="color:#40c0f0; font-size:11px; margin-top:2px;">● waypoint · hover a device star to highlight its routed path</div>
+  <div id="conf-path-legend" style="font-size:11px; margin-top:2px; display:none;">
+    <span style="color:#888;">path confidence (waypoint coverage):</span>
+    <span style="color:#40f0a0;"> ── high (2+ waypoints)</span>
+    <span style="color:#f0c040;"> ── medium (1 waypoint)</span>
+    <span style="color:#f07a7a;"> ── low (straight line only)</span>
+  </div>
   <div style="margin-top:10px; display:flex; gap:12px; align-items:center;">
     <button class="danger" onclick="closeConfidenceModal()" style="padding:8px 16px; font-size:14px;">✗ Close</button>
   </div>
@@ -523,11 +563,12 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
   import { planSymbolDetection, locateVector, blobsToInstances } from './lib/locate.js';
   import { runnerWorkForRole, unassignedPages } from './lib/plan-set.js';
   import { aggregateBom } from './lib/bom.js';
+  import { buildGreedyPath } from './lib/waypoint-path.js';
   window.TakeoffVec = { contentFrame, extractFilledSubpaths, extractCameraBlobs,
                         classifySheetClass, deriveSheetClassSignals,
                         planSymbolDetection, locateVector, blobsToInstances,
                         runnerWorkForRole, unassignedPages,
-                        aggregateBom };
+                        aggregateBom, buildGreedyPath };
 </script>
 <script>
 pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -1433,7 +1474,7 @@ function renderPageAssignmentTable(trs) {
       <td style="padding:7px 10px; color:#aaa; max-width:280px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${raw}">${title}</td>
       <td style="padding:7px 10px;" id="pa-scale-${pgNum}">${scaleCellHtml(pgNum)}</td>
       <td style="padding:7px 10px;">${dropdown}</td>
-      <td style="padding:7px 10px;" id="pa-role-${pgNum}">${roleHtml}${pinBtnsHtml(pgNum)}${exclBtnHtml(pgNum)}</td>`;
+      <td style="padding:7px 10px;" id="pa-role-${pgNum}">${roleHtml}${pinBtnsHtml(pgNum)}${exclBtnHtml(pgNum)}${wpBtnHtml(pgNum)}</td>`;
     tbody.appendChild(tr);
   }
 
@@ -1524,6 +1565,15 @@ function exclBtnHtml(pgNum) {
   return `<div style="margin-top:5px;">
     <button class="excl-review-btn" style="padding:2px 8px; font-size:11px; background:#3a2a1a; border-color:#7a5a2a; color:#e0a860;"
       onclick="openExcludeModal(${pgNum})">⬚ ${n} zone${n !== 1 ? 's' : ''} — Review</button>
+  </div>`;
+}
+
+// Cable-routing waypoints (Tier 1 — see waypoint-path.js). Always available, independent
+// of whether a TR/demarc pin exists yet on this page.
+function wpBtnHtml(pgNum) {
+  return `<div style="margin-top:5px;">
+    <button class="info" style="padding:2px 8px; font-size:11px; background:#0a3a4a; border-color:#1a5a6a; color:#60d0f0;"
+      onclick="openWaypointModal(${pgNum})">📍 waypoints</button>
   </div>`;
 }
 
@@ -2176,6 +2226,156 @@ async function confirmPin() {
 
 function closePinModal() {
   document.getElementById('pin-modal').classList.remove('open');
+}
+
+// ── Cable-routing waypoints ──────────────────────────────────────────
+// Tier 1 point waypoints (public/lib/waypoint-path.js): a shared pool per page that
+// pass-batch.js's greedy walk routes devices through instead of a straight line.
+// Reuses the pin modal's canvas/zoom/pan mechanics. Unlike the demarc pin (one target,
+// confirm-to-save), this lets several points be placed in one session — click empty
+// space to add (POSTs immediately), click an existing dot to remove it. No "confirm"
+// step: each click is its own committed action, so closing the modal never loses work.
+let wpZoomLevel = 1.0, wpPanX = 0, wpPanY = 0, wpDragStart = null;
+let wpCanvasNativeW = 0, wpCanvasNativeH = 0, wpPageNum = null, wpPageId = null, wpPoints = [];
+
+function applyWpTransform() {
+  const layer = document.getElementById('wp-layer');
+  layer.style.transform = `translate(${wpPanX}px, ${wpPanY}px) scale(${wpZoomLevel})`;
+  document.getElementById('wp-zoom-level').textContent = Math.round(wpZoomLevel * 100) + '%';
+  redrawWpDots();
+}
+function wpZoom(factor) {
+  const wrap = document.getElementById('wp-canvas-wrap');
+  const wRect = wrap.getBoundingClientRect();
+  const cx = wRect.width / 2, cy = wRect.height / 2;
+  wpPanX = cx - (cx - wpPanX) * factor;
+  wpPanY = cy - (cy - wpPanY) * factor;
+  wpZoomLevel = Math.min(10, Math.max(0.05, wpZoomLevel * factor));
+  applyWpTransform();
+}
+function wpResetZoom() {
+  const wrap = document.getElementById('wp-canvas-wrap');
+  const wrapW = wrap.offsetWidth || window.innerWidth * 0.88;
+  const wrapH = wrap.offsetHeight || window.innerHeight * 0.62;
+  wpZoomLevel = wpCanvasNativeW ? Math.min(wrapW / wpCanvasNativeW, wrapH / wpCanvasNativeH) : 1.0;
+  wpPanX = 0; wpPanY = 0;
+  applyWpTransform();
+}
+
+function redrawWpDots() {
+  const layer = document.getElementById('wp-layer');
+  layer.querySelectorAll('.wp-dot').forEach(el => el.remove());
+  const r = 9 / wpZoomLevel;
+  for (const p of wpPoints) {
+    const dot = document.createElement('div');
+    dot.className = 'wp-dot';
+    dot.dataset.id = p.id;
+    dot.style.cssText = `position:absolute; width:${r*2}px; height:${r*2}px; border-radius:50%;
+      background:#40c0f0; border:${2/wpZoomLevel}px solid #0a3a4a;
+      transform:translate(-50%,-50%); pointer-events:none; z-index:10;
+      left:${p.x_norm * wpCanvasNativeW}px; top:${p.y_norm * wpCanvasNativeH}px;`;
+    layer.appendChild(dot);
+  }
+  document.getElementById('wp-count').textContent = `${wpPoints.length} waypoint${wpPoints.length !== 1 ? 's' : ''} on this page`;
+}
+
+async function openWaypointModal(pageNum) {
+  wpPageNum = pageNum;
+  wpPageId = pageCache[pageNum]?.pageId;
+  if (!wpPageId) { alert('Run the demarc scan for this page first'); return; }
+  wpZoomLevel = 1.0; wpPanX = 0; wpPanY = 0;
+
+  document.getElementById('wp-modal-title').textContent = `Cable routing waypoints — pg${pageNum}`;
+  const cv   = document.getElementById('wp-canvas');
+  const wrap = document.getElementById('wp-canvas-wrap');
+
+  const pdfPage = await pdfDoc.getPage(pageNum);
+  const vp = pdfPage.getViewport({ scale: 2.5 });
+  wpCanvasNativeW = vp.width; wpCanvasNativeH = vp.height;
+  await renderToCanvas(cv, pdfPage, vp);
+
+  const wrapW = wrap.offsetWidth  || window.innerWidth  * 0.88;
+  const wrapH = wrap.offsetHeight || window.innerHeight * 0.62;
+  wpZoomLevel = Math.min(wrapW / vp.width, wrapH / vp.height);
+  wpPanX = 0; wpPanY = 0;
+
+  try {
+    const r = await fetch(`${base()}/api/pass-waypoint?page_id=${wpPageId}`);
+    wpPoints = r.ok ? await r.json() : [];
+  } catch { wpPoints = []; }
+  applyWpTransform();
+  setStatus('wp-status', '', '');
+
+  let pressX = null, pressY = null;
+  cv.addEventListener('mousedown', (e) => { pressX = e.clientX; pressY = e.clientY; });
+  cv.onclick = async (e) => {
+    if (pressX != null && (Math.abs(e.clientX - pressX) + Math.abs(e.clientY - pressY)) > 5) return;
+    const cvRect = cv.getBoundingClientRect();
+    const xNorm = Math.min(1, Math.max(0, (e.clientX - cvRect.left) / cvRect.width));
+    const yNorm = Math.min(1, Math.max(0, (e.clientY - cvRect.top)  / cvRect.height));
+
+    // Hit-test existing dots in NATIVE canvas pixels (frame-agnostic here — waypoints
+    // are their own coordinate space, not one of the label/symbol frames).
+    const clickPx = xNorm * wpCanvasNativeW, clickPy = yNorm * wpCanvasNativeH;
+    const hitR = 14 / wpZoomLevel;
+    const hit = wpPoints.find(p =>
+      Math.hypot(p.x_norm * wpCanvasNativeW - clickPx, p.y_norm * wpCanvasNativeH - clickPy) <= hitR);
+
+    if (hit) {
+      try {
+        const r = await fetch(`${base()}/api/pass-waypoint?id=${hit.id}`, { method: 'DELETE' });
+        if (r.ok) { wpPoints = wpPoints.filter(p => p.id !== hit.id); redrawWpDots(); setStatus('wp-status', '✓ Waypoint removed', 'ok'); }
+        else setStatus('wp-status', 'Could not remove', 'err');
+      } catch (e2) { setStatus('wp-status', 'Error: ' + e2.message, 'err'); }
+      return;
+    }
+
+    try {
+      const r = await fetch(`${base()}/api/pass-waypoint`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: projectId, page_id: wpPageId, x_norm: xNorm, y_norm: yNorm })
+      });
+      const created = await r.json();
+      if (!r.ok) { setStatus('wp-status', 'Save error: ' + created.error, 'err'); return; }
+      wpPoints.push(created);
+      redrawWpDots();
+      setStatus('wp-status', '✓ Waypoint added', 'ok');
+    } catch (e2) { setStatus('wp-status', 'Error: ' + e2.message, 'err'); }
+  };
+
+  wrap.onwheel = (e) => {
+    e.preventDefault();
+    const factor = e.deltaY < 0 ? 1.15 : 1/1.15;
+    const wRect = wrap.getBoundingClientRect();
+    const mx = e.clientX - wRect.left, my = e.clientY - wRect.top;
+    wpPanX = mx - (mx - wpPanX) * factor;
+    wpPanY = my - (my - wpPanY) * factor;
+    wpZoomLevel = Math.min(10, Math.max(0.05, wpZoomLevel * factor));
+    applyWpTransform();
+  };
+  wrap.onmousedown = (e) => {
+    const layer = document.getElementById('wp-layer');
+    if (e.target === cv || e.target === layer) {
+      wpDragStart = { x: e.clientX, y: e.clientY, panX: wpPanX, panY: wpPanY, moved: false };
+      wrap.style.cursor = 'grabbing';
+    }
+  };
+  wrap.onmousemove = (e) => {
+    if (!wpDragStart || e.buttons !== 1) return;
+    const dx = e.clientX - wpDragStart.x, dy = e.clientY - wpDragStart.y;
+    if (Math.abs(dx) + Math.abs(dy) > 5) wpDragStart.moved = true;
+    if (wpDragStart.moved) { wpPanX = wpDragStart.panX + dx; wpPanY = wpDragStart.panY + dy; applyWpTransform(); }
+  };
+  wrap.onmouseup = (e) => {
+    if (wpDragStart?.moved) e.stopPropagation();
+    wpDragStart = null; wrap.style.cursor = 'crosshair';
+  };
+
+  document.getElementById('wp-modal').classList.add('open');
+}
+
+function closeWaypointModal() {
+  document.getElementById('wp-modal').classList.remove('open');
 }
 
 // ── Schematic (page region) draw modal ───────────────────────────
@@ -3328,6 +3528,8 @@ async function openLeaderModal(pageNum) {
 // the getBoundingClientRect/CSS-clamp drift that plain overlay positioning is
 // prone to (see click-coordinate bug notes elsewhere in this file).
 let confPageNum = null, confDevices = [];
+let confWaypoints = [], confDemarcs = {};   // for routed-path visualization on hover
+let confShowAllPaths = false;               // path-confidence layer toggle
 let confZoom = 1, confPanX = 0, confPanY = 0, confDrag = null, confCW = 0, confCH = 0;
 
 const CONF_COLOR = { high: '#7af07a', medium: '#f0c040', low: '#f07a7a' };
@@ -3337,6 +3539,7 @@ function confApplyTransform() {
   layer.style.transform = `translate(${confPanX}px,${confPanY}px) scale(${confZoom})`;
   document.getElementById('conf-zoom-label').textContent = Math.round(confZoom * 100) + '%';
   confRedraw();
+  renderAllConfPaths();   // keep the background layer's stroke-width scaling correct across zoom
 }
 function confZoomBtn(f) {
   const wrap = document.getElementById('conf-wrap');
@@ -3349,7 +3552,25 @@ function confReset() { confZoom = 1; confPanX = 0; confPanY = 0; confApplyTransf
 
 function confRedraw() {
   const layer = document.getElementById('conf-layer');
-  layer.querySelectorAll('.conf-star').forEach(e => e.remove());
+  layer.querySelectorAll('.conf-star, .conf-wp').forEach(e => e.remove());
+
+  // Waypoints are placed via the same full-page-fraction click mechanic as demarc
+  // pins, so they use the identity bbox — same reasoning as bboxForDevice's llm-symbol
+  // case, just always identity rather than conditional.
+  const identityBbox = { xmin_frac: 0, ymin_frac: 0, w_frac: 1, h_frac: 1 };
+  for (const w of confWaypoints) {
+    const dot = document.createElement('div');
+    dot.className = 'conf-wp';
+    const r = 6 / confZoom;
+    dot.style.cssText = `position:absolute; width:${r*2}px; height:${r*2}px; border-radius:50%;
+      background:#40c0f0; border:${2/confZoom}px solid #0a3a4a;
+      transform:translate(-50%,-50%); pointer-events:none; z-index:9;`;
+    const pos = normToCanvasXY(w.x_norm, w.y_norm, identityBbox, confCW, confCH);
+    dot.style.left = pos.x + 'px';
+    dot.style.top  = pos.y + 'px';
+    layer.appendChild(dot);
+  }
+
   for (const d of confDevices) {
     if (d.x_norm == null || d.y_norm == null) continue;
     const color = CONF_COLOR[d.confidence] ?? '#888';
@@ -3368,13 +3589,88 @@ function confRedraw() {
     star.style.left = pos.x + 'px';
     star.style.top  = pos.y + 'px';
     star.onmouseenter = () => {
+      const routeNote = d.routed_via_waypoints?.length ? `  ·  via ${d.routed_via_waypoints.length} waypoint(s)` : '';
       document.getElementById('conf-hover-info').textContent =
-        `${d.name ?? d.type ?? '—'}  ·  ${(d.raw_labels ?? []).join(' · ')}  ·  confidence: ${d.confidence ?? '—'}`;
+        `${d.name ?? d.type ?? '—'}  ·  ${(d.raw_labels ?? []).join(' · ')}  ·  confidence: ${d.confidence ?? '—'}${routeNote}`;
+      drawConfPath(d);
     };
-    star.onmouseleave = () => { document.getElementById('conf-hover-info').textContent = ''; };
+    star.onmouseleave = () => { document.getElementById('conf-hover-info').textContent = ''; clearConfPath(); };
     layer.appendChild(star);
   }
 }
+
+// Draw the device's routed path (device -> waypoints -> demarc) as an SVG polyline,
+// recomputed live via the SAME pure buildGreedyPath the server uses — nothing here is
+// persisted; it's fully derivable from data already on hand (device xy, waypoint pool,
+// demarc xy), consistent with why routed_via_waypoints isn't persisted server-side either.
+function computeDevicePath(d) {
+  const V = window.TakeoffVec;
+  if (!V?.buildGreedyPath || !d.demarc_id) return null;
+  const demarc = confDemarcs[d.demarc_id];
+  if (!demarc || demarc.x_norm == null || demarc.y_norm == null) return null;
+
+  const identityBbox = { xmin_frac: 0, ymin_frac: 0, w_frac: 1, h_frac: 1 };
+  const devPos    = normToCanvasXY(d.x_norm, d.y_norm, bboxForDevice(confPageNum, d), confCW, confCH);
+  const demarcPos = normToCanvasXY(demarc.x_norm, demarc.y_norm, identityBbox, confCW, confCH);
+  const wpPos     = confWaypoints.map(w => {
+    const p = normToCanvasXY(w.x_norm, w.y_norm, identityBbox, confCW, confCH);
+    return { id: w.id, x: p.x, y: p.y };
+  });
+
+  const path = V.buildGreedyPath([devPos.x, devPos.y], wpPos, [demarcPos.x, demarcPos.y]);
+  if (!path.points.length) return null;
+  const nUsed = path.waypoint_ids_used.filter((id) => id != null).length;
+  const tier = nUsed >= 2 ? 'high' : nUsed === 1 ? 'medium' : 'low';
+  return { points: path.points, tier };
+}
+
+const PATH_TIER_COLOR = { high: '#40f0a0', medium: '#f0c040', low: '#f07a7a' };
+function svgPolyline(svg, points, color, width, opacity, dashed) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const poly = document.createElementNS(ns, 'polyline');
+  poly.setAttribute('points', points.map((p) => p.join(',')).join(' '));
+  poly.setAttribute('fill', 'none');
+  poly.setAttribute('stroke', color);
+  poly.setAttribute('stroke-width', width);
+  poly.setAttribute('stroke-opacity', opacity);
+  if (dashed) poly.setAttribute('stroke-dasharray', dashed);
+  svg.appendChild(poly);
+}
+
+// Background layer: every device's path at once, colored by confidence tier (how much
+// of the route is verified waypoint structure vs. assumed straight line). Toggled, not
+// on by default — full-page overdraw is cluttered on a dense sheet until asked for.
+function renderAllConfPaths() {
+  const svg = document.getElementById('conf-path-svg');
+  svg.innerHTML = '';
+  svg.setAttribute('width', confCW);
+  svg.setAttribute('height', confCH);
+  svg.setAttribute('viewBox', `0 0 ${confCW} ${confCH}`);
+  if (!confShowAllPaths) return;
+  for (const d of confDevices) {
+    const p = computeDevicePath(d);
+    if (!p) continue;
+    svgPolyline(svg, p.points, PATH_TIER_COLOR[p.tier], Math.max(0.75, 1.5 / confZoom), 0.6);
+  }
+}
+function toggleConfPaths() {
+  confShowAllPaths = !confShowAllPaths;
+  const btn = document.getElementById('conf-paths-toggle');
+  btn.textContent = confShowAllPaths ? '🔀 hide path confidence' : '🔀 show path confidence';
+  document.getElementById('conf-path-legend').style.display = confShowAllPaths ? 'block' : 'none';
+  renderAllConfPaths();
+}
+
+// Hover highlight: redraw the background layer (if on), then overlay this ONE device's
+// path in bright white so it reads clearly against the dimmer confidence-colored layer.
+function drawConfPath(d) {
+  renderAllConfPaths();
+  const p = computeDevicePath(d);
+  if (!p) return;
+  const svg = document.getElementById('conf-path-svg');
+  svgPolyline(svg, p.points, '#ffffff', Math.max(1.5, 3 / confZoom), 0.95, `${6/confZoom},${4/confZoom}`);
+}
+function clearConfPath() { renderAllConfPaths(); }
 
 async function openConfidenceModal(pageNum) {
   const res = batchResults[pageNum];
@@ -3391,6 +3687,23 @@ async function openConfidenceModal(pageNum) {
   confCW = vp.width; confCH = vp.height;
   await renderToCanvas(cv, pdfPage, vp);
   confZoom = Math.min((wrap.offsetWidth || window.innerWidth * 0.88) / vp.width, 1.0);
+
+  // Waypoints + demarcs, for the routed-path-on-hover overlay. Best-effort: a fetch
+  // failure just means no path line draws, never blocks opening the map.
+  const pageId = pageCache[pageNum]?.pageId;
+  confWaypoints = []; confDemarcs = {};
+  if (pageId) {
+    try {
+      const [wpR, dmR] = await Promise.all([
+        fetch(`${base()}/api/pass-waypoint?page_id=${pageId}`),
+        fetch(`${base()}/api/pass-demarc?page_id=${pageId}`)
+      ]);
+      confWaypoints = wpR.ok ? await wpR.json() : [];
+      const demarcRows = dmR.ok ? await dmR.json() : [];
+      confDemarcs = Object.fromEntries(demarcRows.map(dm => [dm.id, dm]));
+    } catch (e) { console.warn('[confidence map] waypoint/demarc fetch failed', e.message); }
+  }
+
   confApplyTransform();
 
   wrap.onwheel = (e) => { e.preventDefault();
@@ -3406,6 +3719,8 @@ async function openConfidenceModal(pageNum) {
   wrap.onmouseup = () => { confDrag = null; wrap.style.cursor = 'grab'; };
 
   document.getElementById('conf-hover-info').textContent = '';
+  document.getElementById('conf-paths-toggle').textContent = confShowAllPaths ? '🔀 hide path confidence' : '🔀 show path confidence';
+  document.getElementById('conf-path-legend').style.display = confShowAllPaths ? 'block' : 'none';
   document.getElementById('conf-modal').style.display = 'flex';
   confRedraw();
 }

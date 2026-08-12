@@ -14,6 +14,7 @@ import { getSupabase, ok, err, CORS } from "./utils/clients.js";
 import { requireOrg, assertProjectInOrg, assertPageInOrg } from "./utils/auth.js";
 import { buildDeviceList } from "../../public/lib/pipeline.js";
 import { parseSchedule } from "../../public/lib/schedule.js";
+import { buildGreedyPath } from "../../public/lib/waypoint-path.js";
 
 const ROUTE_FACTOR  = 1.35;
 const TIA_OUTLET_FT = 295;
@@ -104,10 +105,29 @@ export default async function handler(req) {
     const scopedPins   = pins.filter((p) => p && p.scope_box);
     const unscopedPins = pins.filter((p) => p && !p.scope_box);
 
+    // Tier 1 cable-routing waypoints (public/lib/waypoint-path.js) — a shared pool for
+    // the whole page; the greedy walk below decides per-device whether any are on the
+    // way. A page with zero waypoints falls straight back to the exact pre-waypoint
+    // straight-line distance (empty pool -> buildGreedyPath returns [device, demarc]).
+    const { data: pageWaypoints, error: wpErr } = await supabase
+      .from("waypoints").select("id, x_norm, y_norm").eq("page_id", page_id);
+    if (wpErr) console.warn("[waypoints fetch]", wpErr.message);
+    const waypointsPts = (pageWaypoints ?? [])
+      .filter((w) => Number.isFinite(w.x_norm) && Number.isFinite(w.y_norm))
+      .map((w) => ({ id: w.id, x: w.x_norm * (page_width_pts ?? 1), y: w.y_norm * (page_height_pts ?? 1) }));
+
     function euclidPts(cx, cy, pin) {
       const dx = (cx - pin.x_norm) * (page_width_pts  ?? 1);
       const dy = (cy - pin.y_norm) * (page_height_pts ?? 1);
       return Math.sqrt(dx * dx + dy * dy);
+    }
+    // Routed distance in points: greedy-walks the shared waypoint pool, falling back to
+    // the exact euclidPts straight line whenever no waypoint is on the way (or none
+    // exist on the page at all) — see buildGreedyPath's header for the algorithm.
+    function routedPts(cx, cy, pin) {
+      const deviceXY = [cx * (page_width_pts ?? 1), cy * (page_height_pts ?? 1)];
+      const demarcXY = [pin.x_norm * (page_width_pts ?? 1), pin.y_norm * (page_height_pts ?? 1)];
+      return buildGreedyPath(deviceXY, waypointsPts, demarcXY);
     }
     function inBox(b, x, y) { return x >= b.x0 && x <= b.x1 && y >= b.y0 && y <= b.y1; }
     function nearestOf(pool, cx, cy) {
@@ -222,12 +242,15 @@ export default async function handler(req) {
       const yFt = hasXY && ptsPerFt && page_height_pts ? parseFloat((cy * page_height_pts / ptsPerFt).toFixed(1)) : null;
 
       let demarcId = null, runLengthFt = null, totalFt = null, tiaFlag = false, tiaReason = null, outOfScope = false;
+      let routedViaWaypoints = null;
       if (hasXY) {
         const pin = assignPin(cx, cy);
         demarcId  = pin?.demarc_id ?? null;
         outOfScope = scopedPins.length > 0 && !pin;   // scoped page, device inside no box
         if (pin && ptsPerFt) {
-          const distPts = euclidPts(cx, cy, pin);
+          const routed  = routedPts(cx, cy, pin);
+          const distPts = routed.total_dist ?? euclidPts(cx, cy, pin);   // defensive: never lose a distance to a malformed route
+          if (routed.waypoint_ids_used?.length) routedViaWaypoints = routed.waypoint_ids_used;
           runLengthFt = parseFloat((distPts * ROUTE_FACTOR / ptsPerFt).toFixed(1));
           totalFt     = parseFloat((runLengthFt + (pin.stub_ft ?? 0)).toFixed(1));
           const limit = /WAP/i.test(dt.name || "") ? TIA_WAP_FT : TIA_OUTLET_FT;
@@ -237,7 +260,7 @@ export default async function handler(req) {
       const mergedFlags = outOfScope ? [ ...(dev.flags || []), "out_of_scope" ] : (dev.flags || []);
 
       return {
-        dev, dt,
+        dev, dt, routed_via_waypoints: routedViaWaypoints,
         row: {
           page_id, device_type_id: dt.id ?? null, detection_method: "reconciled",
           uin: dev.uin ?? null,
@@ -297,6 +320,11 @@ export default async function handler(req) {
         // misplace symbol-sourced devices. See confRedraw/lcRedraw in multi-page.html.
         xy_source: x.dev.xy_source,
         symbol_via: x.dev.symbol_via,
+        // Ephemeral, not persisted — the path is fully recomputable from persisted
+        // device x/y + the page's waypoint pool + the assigned demarc, so a reloaded
+        // session recomputes it client-side via buildGreedyPath rather than storing
+        // redundant derived state.
+        routed_via_waypoints: x.routed_via_waypoints,
         raw_labels: x.row.raw_labels,
         sources: x.dev.sources, confidence: x.dev.confidence, flags: x.row.flags, attributes: x.dev.attributes,
         total_ft: x.row.total_ft, tia_flag: x.row.tia_flag, tia_reason: x.row.tia_reason, demarc_id: x.row.demarc_id
