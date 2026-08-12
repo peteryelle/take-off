@@ -71,6 +71,24 @@ export default async function handler(req) {
     return ok(data);
   }
 
+  // ── DELETE — remove a region (used for exclude-zone cleanup) ──
+  if (req.method === "DELETE") {
+    const url = new URL(req.url);
+    const id  = url.searchParams.get("id");
+    if (!id) return err("id required");
+
+    const { data: region, error: findErr } = await supabase
+      .from("page_regions").select("id, project_id").eq("id", id).maybeSingle();
+    if (findErr) return err(findErr.message, 500);
+    if (!region) return err("Region not found", 404);
+    if (!(await assertProjectInOrg(supabase, region.project_id, orgId)))
+      return err("Project not found in your organization", 404);
+
+    const { error: delErr } = await supabase.from("page_regions").delete().eq("id", id);
+    if (delErr) return err(delErr.message, 500);
+    return ok({ deleted: true, id: Number(id) });
+  }
+
   return err("Method not allowed", 405);
 }
 

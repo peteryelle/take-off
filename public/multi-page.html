@@ -2591,6 +2591,7 @@ let resolvedExclSuggestions = {};   // pageNum -> Set of suggestion indices conf
 let exclConfirmedZones = [];        // already-confirmed kind:'exclude' page_regions for the open page — drawn as
                                      // a fixed reference layer so a second/third box can be aimed accurately
                                      // instead of guessing where the first one already landed.
+let exclArmedForDelete = null;      // id of a confirmed zone clicked once, awaiting a second click to delete
 
 function pendingExclCount(pageNum) {
   const all = pageCache[pageNum]?.passBResult?.out_of_scope_regions ?? [];
@@ -2629,19 +2630,24 @@ function redrawExclRect() {
 
   // Already-confirmed zones — a fixed reference layer, visually distinct (solid green
   // outline, no hatch fill) from the box currently being drawn/adjusted, so it reads
-  // clearly as "already locked in" rather than "still editable."
+  // clearly as "already locked in" rather than "still editable." Click once to arm
+  // for delete (label flips to "click again"), click again to remove — no native
+  // confirm(), same reasoning as the delete-flow fix on Device Types.
   for (const z of exclConfirmedZones) {
+    const armed = z.id === exclArmedForDelete;
     const box = document.createElement('div');
     box.className = 'excl-confirmed-box';
     box.style.cssText = `position:absolute; left:${z.x0 * exclCanvasNativeW}px; top:${z.y0 * exclCanvasNativeH}px;`
       + `width:${(z.x1 - z.x0) * exclCanvasNativeW}px; height:${(z.y1 - z.y0) * exclCanvasNativeH}px;`
-      + `border:${2/exclZoomLevel}px solid #40c060; background:rgba(64,192,96,0.08); pointer-events:none;`;
+      + `border:${2/exclZoomLevel}px solid ${armed ? '#f07a7a' : '#40c060'}; `
+      + `background:${armed ? 'rgba(240,122,122,0.18)' : 'rgba(64,192,96,0.08)'}; cursor:pointer; pointer-events:auto;`;
     const label = document.createElement('div');
-    label.textContent = z.label || 'excluded';
-    label.style.cssText = `position:absolute; top:${2/exclZoomLevel}px; left:${2/exclZoomLevel}px; color:#40c060;`
-      + `font-size:${11/exclZoomLevel}px; background:rgba(0,0,0,0.6); padding:${1/exclZoomLevel}px ${4/exclZoomLevel}px;`
-      + `border-radius:2px; white-space:nowrap;`;
+    label.textContent = armed ? 'click again to delete' : (z.label || 'excluded');
+    label.style.cssText = `position:absolute; top:${2/exclZoomLevel}px; left:${2/exclZoomLevel}px; color:${armed ? '#f07a7a' : '#40c060'};`
+      + `font-size:${11/exclZoomLevel}px; background:rgba(0,0,0,0.7); padding:${1/exclZoomLevel}px ${4/exclZoomLevel}px;`
+      + `border-radius:2px; white-space:nowrap; pointer-events:none;`;
     box.appendChild(label);
+    box.onclick = (e) => { e.stopPropagation(); armOrDeleteExclZone(z.id); };
     layer.appendChild(box);
   }
 
@@ -2695,12 +2701,34 @@ async function loadExclConfirmedZones(pageNum) {
   } catch (e) { exclConfirmedZones = []; }
 }
 
+// Click a confirmed zone once to arm it (red highlight, "click again to delete"),
+// click it again to actually remove it. No native confirm() — same fragility this
+// whole delete pattern already got fixed for on Device Types.
+async function armOrDeleteExclZone(id) {
+  if (exclArmedForDelete !== id) {
+    exclArmedForDelete = id;
+    redrawExclRect();
+    setTimeout(() => { if (exclArmedForDelete === id) { exclArmedForDelete = null; redrawExclRect(); } }, 5000);
+    return;
+  }
+  exclArmedForDelete = null;
+  setStatus('excl-status', 'Deleting…', 'run');
+  try {
+    const r = await fetch(`${base()}/api/page-regions?id=${id}`, { method: 'DELETE' });
+    if (!r.ok) { const j = await r.json().catch(()=>({})); setStatus('excl-status', 'Delete failed: ' + (j.error || r.status), 'err'); return; }
+    await loadExclConfirmedZones(exclPageNum);
+    redrawExclRect();
+    setStatus('excl-status', '✓ Zone removed', 'ok');
+  } catch (e) { setStatus('excl-status', 'Error: ' + e.message, 'err'); }
+}
+
 async function openExcludeModal(pageNum) {
   exclPageNum = pageNum;
   exclSuggestions = pageCache[pageNum]?.passBResult?.out_of_scope_regions ?? [];
   const resolved = resolvedExclSuggestions[pageNum] ?? (resolvedExclSuggestions[pageNum] = new Set());
   exclSuggestionIdx = exclSuggestions.findIndex((_, i) => !resolved.has(i));
   exclZoomLevel = 1.0; exclPanX = 0; exclPanY = 0;
+  exclArmedForDelete = null;
   await loadExclConfirmedZones(pageNum);
 
   const cv    = document.getElementById('excl-canvas');
