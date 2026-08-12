@@ -90,12 +90,90 @@ export default async function handler(req) {
       return ok(result, id ? 200 : 201);
     }
 
+    // ── Action: instance counts per device type (for the merge picker) ──
+    if (action === "device_instance_counts") {
+      const { project_id } = body;
+      if (!project_id) return err("project_id required");
+      if (!(await assertProjectInOrg(supabase, project_id, orgId)))
+        return err("Project not found in your organization", 404);
+
+      const { data: types, error: typesErr } = await supabase
+        .from("device_types").select("id").eq("project_id", project_id);
+      if (typesErr) return err(typesErr.message, 500);
+
+      const counts = {};
+      await Promise.all((types ?? []).map(async (t) => {
+        const { count } = await supabase
+          .from("device_instances").select("id", { count: "exact", head: true }).eq("device_type_id", t.id);
+        counts[t.id] = count ?? 0;
+      }));
+      return ok({ counts });
+    }
+
+    // ── Action: merge one device type's instances into another ──────
+    // Re-points device_instances.device_type_id from source to target — keeping the
+    // already-correct detected positions/labels/confidence instead of discarding them
+    // via delete + re-batch. The source type is then removed (guaranteed 0 instances
+    // afterward, so the normal delete path is safe). Same-type guard prevents a
+    // no-op that would still look like it "worked."
+    if (action === "merge_device_type") {
+      const { project_id, source_id, target_id } = body;
+      if (!project_id || !source_id || !target_id) return err("project_id, source_id and target_id required");
+      if (source_id === target_id) return err("Source and target must be different device types");
+      if (!(await assertProjectInOrg(supabase, project_id, orgId)))
+        return err("Project not found in your organization", 404);
+
+      const { data: rows, error: fetchErr } = await supabase
+        .from("device_types").select("id").eq("project_id", project_id).in("id", [source_id, target_id]);
+      if (fetchErr) return err(fetchErr.message, 500);
+      if ((rows ?? []).length !== 2) return err("Both device types must belong to this project", 404);
+
+      const { count: moved, error: countErr } = await supabase
+        .from("device_instances").select("id", { count: "exact", head: true }).eq("device_type_id", source_id);
+      if (countErr) return err(countErr.message, 500);
+
+      const { error: updErr } = await supabase
+        .from("device_instances")
+        .update({ device_type_id: target_id })
+        .eq("device_type_id", source_id);
+      if (updErr) return err(updErr.message, 500);
+
+      const { error: delErr } = await supabase.from("device_types").delete().eq("id", source_id);
+      if (delErr) return err(delErr.message, 500);
+
+      return ok({ merged: true, instances_moved: moved ?? 0, source_id, target_id });
+    }
+
     // ── Action: delete device type ─────────────────────────────
+    // device_instances.device_type_id is NO ACTION on delete — Postgres refuses to
+    // delete a type that still has counted instances, to prevent silently orphaning
+    // them. Check first and tell the client exactly how many would be affected,
+    // rather than letting the FK error surface as an opaque failure. Only cascade
+    // (delete the instances too) when the client explicitly confirms it.
     if (action === "delete_device_type") {
-      const { project_id, id } = body;
+      const { project_id, id, cascade } = body;
       if (!project_id || !id) return err("project_id and id required");
       if (!(await assertProjectInOrg(supabase, project_id, orgId)))
         return err("Project not found in your organization", 404);
+
+      const { count: instanceCount, error: countErr } = await supabase
+        .from("device_instances")
+        .select("id", { count: "exact", head: true })
+        .eq("device_type_id", id);
+      if (countErr) return err(countErr.message, 500);
+
+      if ((instanceCount ?? 0) > 0 && !cascade) {
+        return err(
+          `This device has ${instanceCount} counted instance${instanceCount !== 1 ? "s" : ""} across your project. ` +
+          `Deleting it will permanently remove those counts too. Confirm to delete anyway.`,
+          409
+        );
+      }
+
+      if ((instanceCount ?? 0) > 0) {
+        const { error: instErr } = await supabase.from("device_instances").delete().eq("device_type_id", id);
+        if (instErr) return err(instErr.message, 500);
+      }
 
       const { error } = await supabase
         .from("device_types")
@@ -104,7 +182,7 @@ export default async function handler(req) {
         .eq("project_id", project_id);
 
       if (error) return err(error.message, 500);
-      return ok({ deleted: true, id });
+      return ok({ deleted: true, id, instances_deleted: instanceCount ?? 0 });
     }
 
     // ── Action: copy device types between projects ──────────────

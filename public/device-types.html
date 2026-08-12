@@ -367,6 +367,44 @@ button.kit:hover { background: #163138; }
   </div>
 </div>
 
+<!-- ── Merge device types modal ── -->
+<!-- Re-points a device's counted instances onto another device type instead of
+     discarding them via delete. Common case: a duplicate crop from re-running
+     Discover left the SAME real device split across two device_type rows — this
+     keeps the already-correct counted positions instead of needing a batch re-run. -->
+<div class="modal-overlay" id="merge-modal">
+  <div class="modal">
+    <h2>⇄ Merge Device Type</h2>
+    <div style="display:flex; align-items:center; gap:12px; margin:10px 0; padding:10px; background:#0a0a0a; border:1px solid #2a2a2a; border-radius:4px;">
+      <img id="merge-source-img" src="" style="width:56px; height:56px; object-fit:contain; background:#fff; border-radius:3px;">
+      <div>
+        <div id="merge-source-name" style="color:#f0c040; font-weight:bold;">—</div>
+        <div id="merge-source-count" style="color:#888; font-size:11px;">—</div>
+      </div>
+    </div>
+    <div style="text-align:center; color:#666; font-size:16px; margin:4px 0;">↓ merges into ↓</div>
+    <label style="color:#888; font-size:11px;">Target device type</label>
+    <select id="merge-target-select" style="width:100%; margin-top:4px; padding:6px; background:#111; border:1px solid #2a2a2a; color:#e0e0e0; border-radius:3px;" onchange="updateMergePreview()"></select>
+    <div id="merge-target-preview" style="display:none; align-items:center; gap:12px; margin:10px 0; padding:10px; background:#0a0a0a; border:1px solid #2a2a2a; border-radius:4px;">
+      <img id="merge-target-img" src="" style="width:56px; height:56px; object-fit:contain; background:#fff; border-radius:3px;">
+      <div>
+        <div id="merge-target-name" style="color:#7af07a; font-weight:bold;">—</div>
+        <div id="merge-target-count" style="color:#888; font-size:11px;">—</div>
+      </div>
+    </div>
+    <div style="font-size:10px; color:#666; margin-top:8px;">
+      Every counted instance currently under the source device will be re-assigned to the target
+      device — positions, labels, and confidence are kept, not re-detected. The source device type
+      is then deleted. Compare the images above before confirming; this cannot be undone.
+    </div>
+    <div class="status" id="merge-status" style="margin-top:8px;">—</div>
+    <div class="actions">
+      <button class="danger" onclick="closeMergeModal()">Cancel</button>
+      <button onclick="confirmMergeDevice()">⇄ Merge</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── Assembly editor modal ── -->
 <div class="modal-overlay" id="asm-modal">
   <div class="modal asm">
@@ -578,6 +616,7 @@ function renderGrid(types) {
         <button class="info" onclick="editDevice(${dt.id})">Edit</button>
         <button class="amber" onclick="regenDevice(${dt.id})">✦ Re-gen</button>
         <button class="kit" onclick="openAssembly(${dt.id})">⊞ Assembly${asmBadge}</button>
+        <button class="info" onclick="openMergeModal(${dt.id})">⇄ Merge</button>
         <button class="danger" onclick="deleteDevice(${dt.id})">Delete</button>
       </div>`;
 
@@ -965,10 +1004,10 @@ function showOutput(obj) {
 }
 
 // ── Delete device ──────────────────────────────────────────────────
-async function deleteDevice(id) {
+async function deleteDevice(id, cascade = false) {
   const dt = deviceTypes.find(d => d.id === id);
   if (!dt) return;
-  if (!confirm(`Delete "${dt.name}"?\nThis cannot be undone.`)) return;
+  if (!cascade && !confirm(`Delete "${dt.name}"?\nThis cannot be undone.`)) return;
 
   try {
     const r = await fetch(`${base()}/api/projects`, {
@@ -977,13 +1016,101 @@ async function deleteDevice(id) {
       body: JSON.stringify({
         action: 'delete_device_type',
         project_id: parseInt(projId()),
-        id
+        id,
+        cascade
       })
     });
-    setStatus('toolbar-status', r.ok ? `✓ Deleted ${dt.name}` : 'Delete failed', r.ok ? 'ok' : 'err');
+    const j = await r.json().catch(() => ({}));
+
+    // 409: this type still has counted instances. The message already spells out
+    // how many — surface it verbatim in a second, more specific confirmation rather
+    // than a generic "delete failed" that hides a real, correct database safeguard.
+    if (r.status === 409) {
+      if (confirm(j.error + '\n\nDelete anyway?')) await deleteDevice(id, true);
+      return;
+    }
+
+    setStatus('toolbar-status', r.ok ? `✓ Deleted ${dt.name}` : ('Delete failed: ' + (j.error || r.status)), r.ok ? 'ok' : 'err');
     if (r.ok) await loadDeviceTypes();
   } catch(e) {
     setStatus('toolbar-status', 'Error: ' + e.message, 'err');
+  }
+}
+
+// ── Merge device type ─────────────────────────────────────────────
+// Re-points a device's counted instances onto another device type instead of
+// discarding them via delete — keeps already-correct positions/labels/confidence.
+let mergeSourceId = null, mergeCounts = {};
+
+async function openMergeModal(id) {
+  const src = deviceTypes.find(d => d.id === id);
+  if (!src) return;
+  if (deviceTypes.length < 2) { alert('No other device type in this project to merge into.'); return; }
+
+  mergeSourceId = id;
+  setStatus('merge-status', 'Loading instance counts…', 'run');
+  document.getElementById('merge-modal').classList.add('open');
+
+  document.getElementById('merge-source-img').src = src.example_image_base64 ? `data:image/jpeg;base64,${src.example_image_base64}` : '';
+  document.getElementById('merge-source-name').textContent = src.name;
+  document.getElementById('merge-source-count').textContent = '—';
+
+  const sel = document.getElementById('merge-target-select');
+  sel.innerHTML = deviceTypes.filter(d => d.id !== id).map(d => `<option value="${d.id}">${escHtml(d.name)}</option>`).join('');
+  document.getElementById('merge-target-preview').style.display = 'none';
+
+  try {
+    const r = await fetch(`${base()}/api/projects`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'device_instance_counts', project_id: parseInt(projId()) })
+    });
+    const j = await r.json();
+    mergeCounts = r.ok ? (j.counts ?? {}) : {};
+  } catch (e) { mergeCounts = {}; }
+
+  document.getElementById('merge-source-count').textContent =
+    `${mergeCounts[id] ?? '?'} counted instance${mergeCounts[id] === 1 ? '' : 's'}`;
+  setStatus('merge-status', '', '');
+  updateMergePreview();
+}
+
+function updateMergePreview() {
+  const targetId = parseInt(document.getElementById('merge-target-select').value);
+  const tgt = deviceTypes.find(d => d.id === targetId);
+  const preview = document.getElementById('merge-target-preview');
+  if (!tgt) { preview.style.display = 'none'; return; }
+  preview.style.display = 'flex';
+  document.getElementById('merge-target-img').src = tgt.example_image_base64 ? `data:image/jpeg;base64,${tgt.example_image_base64}` : '';
+  document.getElementById('merge-target-name').textContent = tgt.name;
+  document.getElementById('merge-target-count').textContent =
+    `${mergeCounts[targetId] ?? '?'} counted instance${mergeCounts[targetId] === 1 ? '' : 's'} currently`;
+}
+
+function closeMergeModal() {
+  document.getElementById('merge-modal').classList.remove('open');
+  mergeSourceId = null;
+}
+
+async function confirmMergeDevice() {
+  const targetId = parseInt(document.getElementById('merge-target-select').value);
+  if (!targetId) { setStatus('merge-status', 'Choose a target device', 'err'); return; }
+  const src = deviceTypes.find(d => d.id === mergeSourceId);
+  const tgt = deviceTypes.find(d => d.id === targetId);
+  if (!confirm(`Merge "${src?.name}" into "${tgt?.name}"?\n\nAll ${mergeCounts[mergeSourceId] ?? 0} counted instance(s) move to "${tgt?.name}". "${src?.name}" is then deleted. Cannot be undone.`)) return;
+
+  setStatus('merge-status', 'Merging…', 'run');
+  try {
+    const r = await fetch(`${base()}/api/projects`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'merge_device_type', project_id: parseInt(projId()), source_id: mergeSourceId, target_id: targetId })
+    });
+    const j = await r.json();
+    if (!r.ok) { setStatus('merge-status', 'Merge failed: ' + (j.error || r.status), 'err'); return; }
+    closeMergeModal();
+    setStatus('toolbar-status', `✓ Merged — ${j.instances_moved} instance(s) moved to "${tgt?.name}"`, 'ok');
+    await loadDeviceTypes();
+  } catch (e) {
+    setStatus('merge-status', 'Error: ' + e.message, 'err');
   }
 }
 
