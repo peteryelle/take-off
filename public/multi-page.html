@@ -2588,6 +2588,9 @@ let exclZoomLevel = 1.0, exclPanX = 0, exclPanY = 0;
 let exclDragStart = null, exclCanvasNativeW = 0, exclCanvasNativeH = 0;
 let exclPageNum = null, exclCorners = [], exclSuggestions = [], exclSuggestionIdx = 0;
 let resolvedExclSuggestions = {};   // pageNum -> Set of suggestion indices confirmed or skipped this session
+let exclConfirmedZones = [];        // already-confirmed kind:'exclude' page_regions for the open page — drawn as
+                                     // a fixed reference layer so a second/third box can be aimed accurately
+                                     // instead of guessing where the first one already landed.
 
 function pendingExclCount(pageNum) {
   const all = pageCache[pageNum]?.passBResult?.out_of_scope_regions ?? [];
@@ -2622,7 +2625,26 @@ function clearExclRect() { exclCorners = []; redrawExclRect(); setStatus('excl-s
 
 function redrawExclRect() {
   const layer = document.getElementById('excl-layer');
-  layer.querySelectorAll('.excl-box').forEach(el => el.remove());
+  layer.querySelectorAll('.excl-box, .excl-confirmed-box').forEach(el => el.remove());
+
+  // Already-confirmed zones — a fixed reference layer, visually distinct (solid green
+  // outline, no hatch fill) from the box currently being drawn/adjusted, so it reads
+  // clearly as "already locked in" rather than "still editable."
+  for (const z of exclConfirmedZones) {
+    const box = document.createElement('div');
+    box.className = 'excl-confirmed-box';
+    box.style.cssText = `position:absolute; left:${z.x0 * exclCanvasNativeW}px; top:${z.y0 * exclCanvasNativeH}px;`
+      + `width:${(z.x1 - z.x0) * exclCanvasNativeW}px; height:${(z.y1 - z.y0) * exclCanvasNativeH}px;`
+      + `border:${2/exclZoomLevel}px solid #40c060; background:rgba(64,192,96,0.08); pointer-events:none;`;
+    const label = document.createElement('div');
+    label.textContent = z.label || 'excluded';
+    label.style.cssText = `position:absolute; top:${2/exclZoomLevel}px; left:${2/exclZoomLevel}px; color:#40c060;`
+      + `font-size:${11/exclZoomLevel}px; background:rgba(0,0,0,0.6); padding:${1/exclZoomLevel}px ${4/exclZoomLevel}px;`
+      + `border-radius:2px; white-space:nowrap;`;
+    box.appendChild(label);
+    layer.appendChild(box);
+  }
+
   if (exclCorners.length === 2) {
     const [a, b] = exclCorners;
     const x0 = Math.min(a.x, b.x), y0 = Math.min(a.y, b.y);
@@ -2663,12 +2685,23 @@ function loadExclSuggestion(idx) {
   redrawExclRect();
 }
 
+async function loadExclConfirmedZones(pageNum) {
+  const pageId = pageCache[pageNum]?.pageId;
+  if (!pageId) { exclConfirmedZones = []; return; }
+  try {
+    const r = await fetch(`${base()}/api/page-regions?page_id=${pageId}`);
+    const rows = r.ok ? await r.json() : [];
+    exclConfirmedZones = (rows ?? []).filter(z => z.kind === 'exclude' && z.x0 != null);
+  } catch (e) { exclConfirmedZones = []; }
+}
+
 async function openExcludeModal(pageNum) {
   exclPageNum = pageNum;
   exclSuggestions = pageCache[pageNum]?.passBResult?.out_of_scope_regions ?? [];
   const resolved = resolvedExclSuggestions[pageNum] ?? (resolvedExclSuggestions[pageNum] = new Set());
   exclSuggestionIdx = exclSuggestions.findIndex((_, i) => !resolved.has(i));
   exclZoomLevel = 1.0; exclPanX = 0; exclPanY = 0;
+  await loadExclConfirmedZones(pageNum);
 
   const cv    = document.getElementById('excl-canvas');
   const wrap  = document.getElementById('excl-canvas-wrap');
@@ -2773,7 +2806,14 @@ async function confirmExcludeZone() {
 
     if (exclSuggestionIdx >= 0) (resolvedExclSuggestions[exclPageNum] ??= new Set()).add(exclSuggestionIdx);
     setStatus('excl-status', '✓ Excluded — devices in this box will be dropped on the next batch run', 'ok');
-    setTimeout(advanceExclSuggestion, 700);
+    exclCorners = [];
+    await loadExclConfirmedZones(exclPageNum);   // show the just-confirmed box as a reference layer immediately
+
+    // Only auto-advance/close when there was an actual suggestion queue to work
+    // through. A manually-drawn box has nothing to advance to — stay open so a
+    // second, third, etc. box can be drawn in the same session without reopening.
+    if (exclSuggestions.length) setTimeout(advanceExclSuggestion, 700);
+    else redrawExclRect();
   } catch (e) { setStatus('excl-status', 'Error: ' + e.message, 'err'); }
 }
 
