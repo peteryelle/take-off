@@ -310,6 +310,7 @@ button.lg { padding:8px 20px; font-size:13px; }
 
       <!-- device list -->
       <div id="device-list" style="margin-top:12px;"></div>
+      <div class="status" id="device-list-status" style="margin-top:6px;"></div>
 
     </div>
 
@@ -860,7 +861,8 @@ function renderDeviceList() {
     row.innerHTML=`
       <img src="data:image/jpeg;base64,${d.crop||''}" onclick="openLB(this.src)" onerror="this.style.visibility='hidden'">
       <div class="di-name">${esc(d.name)}</div>
-      <div class="di-remove" onclick="removeDevice(${i})" title="Remove">×</div>`;
+      <div class="di-remove" onclick="removeDevice(${i})" title="${i===pendingRemoveIndex?'Click again to confirm':'Remove'}"
+        style="${i===pendingRemoveIndex?'color:#f07a7a;font-weight:bold;font-size:10px;padding:2px 6px;border:1px solid #7a3a3a;border-radius:3px;':''}">${i===pendingRemoveIndex?'confirm?':'×'}</div>`;
     dl.appendChild(row);
   });
   list.appendChild(dl);
@@ -870,24 +872,53 @@ function renderDeviceList() {
 // confirmDevice and confirmSymbolDevice only push after their save call succeeds) —
 // including ones loaded from prior sessions via loadExistingDevices. A local-only
 // splice would silently lie about that: the item disappears from view but the row
-// stays in the database and keeps detecting on the next batch run. Delete for real,
-// with confirmation, so what's on screen always matches what Take-off will use.
-async function removeDevice(i) {
+// stays in the database and keeps detecting on the next batch run. Delete for real.
+//
+// No native confirm()/alert() here — browsers silently suppress those after several
+// fire in a row on one page (easy to trip while testing several actions back to
+// back), which makes a delete flow that depends on them look completely dead with
+// no error and no visible reaction. Click-to-arm, click-again-to-confirm instead.
+let pendingRemoveIndex = null, pendingRemoveCascade = false;
+
+function removeDevice(i) {
   const d = S.devices[i];
   if (!d) return;
-  if (!confirm(`Delete "${d.name}"?\nThis removes it from the project entirely — it will stop being detected on any future batch run. Cannot be undone.`)) return;
+  if (pendingRemoveIndex === i) { doRemoveDevice(i); return; }
+  pendingRemoveIndex = i; pendingRemoveCascade = false;
+  renderDeviceList();
+  setTimeout(() => { if (pendingRemoveIndex === i) { pendingRemoveIndex = null; renderDeviceList(); } }, 5000);
+}
+
+async function doRemoveDevice(i) {
+  const d = S.devices[i];
+  if (!d) return;
+  setStatus('device-list-status', 'Deleting…', 'run');
 
   try {
     const r = await fetch(`${S.baseUrl}/api/projects`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'delete_device_type', project_id: S.projectId, id: d.device_type_id })
+      body: JSON.stringify({ action: 'delete_device_type', project_id: S.projectId, id: d.device_type_id, cascade: pendingRemoveCascade })
     });
-    if (!r.ok) { const j = await r.json().catch(()=>({})); alert('Delete failed: ' + (j.error || r.status)); return; }
+    const j = await r.json().catch(()=>({}));
+
+    // 409: this type still has counted instances. Arm a THIRD click, now carrying
+    // cascade, and show the exact count inline rather than a generic failure.
+    if (r.status === 409) {
+      pendingRemoveCascade = true;
+      setStatus('device-list-status', j.error + ' Click Remove once more to confirm.', 'err');
+      renderDeviceList();
+      return;
+    }
+    if (!r.ok) { setStatus('device-list-status', 'Delete failed: ' + (j.error || r.status), 'err'); pendingRemoveIndex = null; return; }
+
+    pendingRemoveIndex = null; pendingRemoveCascade = false;
+    setStatus('device-list-status', `✓ Deleted ${d.name}`, 'ok');
     S.devices.splice(i,1);
     renderDeviceList();
   } catch (e) {
-    alert('Delete failed: ' + e.message);
+    setStatus('device-list-status', 'Error: ' + e.message, 'err');
+    pendingRemoveIndex = null;
   }
 }
 

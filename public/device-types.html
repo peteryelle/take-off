@@ -405,6 +405,23 @@ button.kit:hover { background: #163138; }
   </div>
 </div>
 
+<!-- ── Delete confirmation modal ── -->
+<!-- Custom modal instead of native confirm()/alert() — browsers silently suppress
+     those after several fire in a row on the same page (an easy trap while testing
+     several actions back to back), which makes the delete flow look completely dead
+     with zero feedback. A modal can't be suppressed that way. -->
+<div class="modal-overlay" id="del-modal">
+  <div class="modal">
+    <h2 id="del-title">Delete Device Type</h2>
+    <div id="del-body" style="color:#ccc; font-size:13px; line-height:1.6; white-space:pre-line;">—</div>
+    <div class="status" id="del-status" style="margin-top:8px;">—</div>
+    <div class="actions">
+      <button class="danger" onclick="closeDeleteModal()" id="del-cancel-btn">Cancel</button>
+      <button onclick="deleteDeviceConfirmed()" id="del-confirm-btn">Delete</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── Assembly editor modal ── -->
 <div class="modal-overlay" id="asm-modal">
   <div class="modal asm">
@@ -1004,11 +1021,33 @@ function showOutput(obj) {
 }
 
 // ── Delete device ──────────────────────────────────────────────────
-async function deleteDevice(id, cascade = false) {
+// Custom modal, not native confirm() — see the modal's own comment for why: browsers
+// silently suppress repeated confirm()/alert() calls on one page, which made this
+// flow look completely dead with no error and no visible reaction.
+let delTargetId = null, delCascade = false;
+
+function deleteDevice(id) {
   const dt = deviceTypes.find(d => d.id === id);
   if (!dt) return;
-  if (!cascade && !confirm(`Delete "${dt.name}"?\nThis cannot be undone.`)) return;
+  delTargetId = id; delCascade = false;
+  document.getElementById('del-title').textContent = `Delete "${dt.name}"?`;
+  document.getElementById('del-body').textContent = 'This cannot be undone.';
+  document.getElementById('del-confirm-btn').textContent = 'Delete';
+  setStatus('del-status', '', '');
+  document.getElementById('del-modal').classList.add('open');
+}
 
+function closeDeleteModal() {
+  document.getElementById('del-modal').classList.remove('open');
+  delTargetId = null; delCascade = false;
+}
+
+async function deleteDeviceConfirmed() {
+  const id = delTargetId;
+  const dt = deviceTypes.find(d => d.id === id);
+  if (!dt) { closeDeleteModal(); return; }
+
+  setStatus('del-status', 'Deleting…', 'run');
   try {
     const r = await fetch(`${base()}/api/projects`, {
       method: 'POST',
@@ -1017,23 +1056,30 @@ async function deleteDevice(id, cascade = false) {
         action: 'delete_device_type',
         project_id: parseInt(projId()),
         id,
-        cascade
+        cascade: delCascade
       })
     });
     const j = await r.json().catch(() => ({}));
 
-    // 409: this type still has counted instances. The message already spells out
-    // how many — surface it verbatim in a second, more specific confirmation rather
-    // than a generic "delete failed" that hides a real, correct database safeguard.
+    // 409: this type still has counted instances. The message already spells out how
+    // many — show it and switch the modal into an explicit cascade-confirm state
+    // rather than a generic failure that hides a real, correct database safeguard.
     if (r.status === 409) {
-      if (confirm(j.error + '\n\nDelete anyway?')) await deleteDevice(id, true);
+      delCascade = true;
+      document.getElementById('del-title').textContent = `Delete "${dt.name}"?`;
+      document.getElementById('del-body').textContent = j.error;
+      document.getElementById('del-confirm-btn').textContent = 'Delete Anyway';
+      setStatus('del-status', '', '');
       return;
     }
 
-    setStatus('toolbar-status', r.ok ? `✓ Deleted ${dt.name}` : ('Delete failed: ' + (j.error || r.status)), r.ok ? 'ok' : 'err');
-    if (r.ok) await loadDeviceTypes();
+    if (!r.ok) { setStatus('del-status', 'Delete failed: ' + (j.error || r.status), 'err'); return; }
+
+    closeDeleteModal();
+    setStatus('toolbar-status', `✓ Deleted ${dt.name}`, 'ok');
+    await loadDeviceTypes();
   } catch(e) {
-    setStatus('toolbar-status', 'Error: ' + e.message, 'err');
+    setStatus('del-status', 'Error: ' + e.message, 'err');
   }
 }
 
@@ -1096,7 +1142,9 @@ async function confirmMergeDevice() {
   if (!targetId) { setStatus('merge-status', 'Choose a target device', 'err'); return; }
   const src = deviceTypes.find(d => d.id === mergeSourceId);
   const tgt = deviceTypes.find(d => d.id === targetId);
-  if (!confirm(`Merge "${src?.name}" into "${tgt?.name}"?\n\nAll ${mergeCounts[mergeSourceId] ?? 0} counted instance(s) move to "${tgt?.name}". "${src?.name}" is then deleted. Cannot be undone.`)) return;
+  // The modal itself (image/name/count comparison already on screen) IS the
+  // confirmation step — no extra native confirm() layered on top of it, since that's
+  // the exact fragile pattern that made Delete look inert after repeated dialogs.
 
   setStatus('merge-status', 'Merging…', 'run');
   try {
