@@ -204,11 +204,41 @@ export default async function handler(req) {
       { scheduleRows: seededScheduleRows, planRegions: scopedPins.map((p) => p.scope_box).filter(Boolean) },
       symbol_instances || [], leaderOv);
 
+    // ── Manually-added devices (confidence-map "add missed device") ─────
+    // manual_devices is the durable source — re-injected as synthetic reconcile
+    // candidates on EVERY run, so a manual add survives device_instances' delete-
+    // then-insert wipe below without needing any protective flag on that table.
+    // Tagged _manual (internal only — stripped before persisting, see the row
+    // build below) so it can bypass the exclude-zone filter (an explicit human
+    // placement overrides a general zone rule) and anchor the dedup pass after it.
+    const { data: manualRows, error: manualErr } = await supabase
+      .from("manual_devices")
+      .select("id, device_type_id, x_norm, y_norm, uin")
+      .eq("page_id", page_id);
+    if (manualErr) console.warn("[manual_devices fetch]", manualErr.message);
+
+    function resolveTypeKey(dt) {
+      const cfg = dt.detection_config || {};
+      if (cfg.anchor) return cfg.type || dt.name;
+      return cfg.symbol_token || cfg.symbol_template?.symbol_token || cfg.type || dt.name;
+    }
+    for (const m of (manualRows ?? [])) {
+      const dt = deviceTypes.find((x) => x.id === m.device_type_id);
+      if (!dt) continue;   // type deleted/renamed since the manual add — skip rather than crash the run
+      reconciled.push({
+        uin: m.uin || `_manual${m.id}`, type: resolveTypeKey(dt),
+        x: m.x_norm, y: m.y_norm, xy_source: 'manual', symbol_via: null,
+        sources: ['manual'], attributes: { families: [], codes: [] },
+        confidence: 'high', flags: ['manual_added'], _manual: true
+      });
+    }
+
     // ── Out-of-scope exclusion (hatched zones, kind:'exclude') ──────────
     // Separate mechanism from scopedPins/scope-box distance-routing above: a device
     // inside an exclude region is dropped entirely — never persisted, never counted,
     // never distance-computed. Server-authoritative (queried fresh here, not trusted
-    // from the client) so a stale client can't bypass it.
+    // from the client) so a stale client can't bypass it. Manual adds bypass this —
+    // see the block above.
     const { data: excludeRegions, error: exclErr } = await supabase
       .from("page_regions")
       .select("x0, y0, x1, y1")
@@ -220,8 +250,22 @@ export default async function handler(req) {
       if (x == null || y == null || !excludeRegions?.length) return false;
       return excludeRegions.some((r) => r.x0 != null && x >= r.x0 && x <= r.x1 && y >= r.y0 && y <= r.y1);
     };
-    const excludedCount = reconciled.filter((dev) => inExcludeZone(dev.x, dev.y)).length;
-    const inScope = reconciled.filter((dev) => !inExcludeZone(dev.x, dev.y));
+    const excludedCount = reconciled.filter((dev) => !dev._manual && inExcludeZone(dev.x, dev.y)).length;
+    let inScope = reconciled.filter((dev) => dev._manual || !inExcludeZone(dev.x, dev.y));
+
+    // Dedup: if detection later genuinely finds the same physical device a manual
+    // add already covers (better symbol matching, a schedule row lands, etc.), drop
+    // the freshly-detected duplicate rather than double-counting — the manual entry
+    // was a confirmed human decision and wins.
+    const MANUAL_DEDUP_RADIUS_FRAC = 0.015;
+    const manualPoints = inScope.filter((d) => d._manual);
+    if (manualPoints.length) {
+      inScope = inScope.filter((dev) => {
+        if (dev._manual || dev.x == null || dev.y == null) return true;
+        return !manualPoints.some((m) =>
+          m.type === dev.type && Math.hypot(dev.x - m.x, dev.y - m.y) <= MANUAL_DEDUP_RADIUS_FRAC);
+      });
+    }
 
     const instances = inScope.map((dev) => {
       const dt = typeMap[dev.type] || {};
@@ -262,7 +306,7 @@ export default async function handler(req) {
       return {
         dev, dt, routed_via_waypoints: routedViaWaypoints,
         row: {
-          page_id, device_type_id: dt.id ?? null, detection_method: "reconciled",
+          page_id, device_type_id: dt.id ?? null, detection_method: dev._manual ? "manual" : "reconciled",
           uin: dev.uin ?? null,
           x_norm: hasXY ? parseFloat(cx.toFixed(4)) : null,
           y_norm: hasXY ? parseFloat(cy.toFixed(4)) : null,

@@ -493,7 +493,7 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
      z-index:300; flex-direction:column; align-items:center; justify-content:center;">
   <div style="color:#f0c040; font-size:15px; font-weight:bold; margin-bottom:4px;" id="conf-title">Confidence Map</div>
   <div style="color:#aaa; font-size:13px; margin-bottom:8px;">
-    Each star is a counted device · color = confidence · number = row in device table · ✕ = excluded · hover for detail · scroll to zoom · drag to pan
+    Each star is a counted device · color = confidence · number = row in device table · ✕ = excluded · click empty space to add a missed device · hover for detail · scroll to zoom · drag to pan
   </div>
   <div style="display:flex; gap:8px; margin-bottom:8px; align-items:center;">
     <button onclick="confZoomBtn(1.5)" style="padding:3px 12px;">＋</button>
@@ -535,6 +535,15 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
         <button onclick="submitCullOther()" style="padding:4px 10px; font-size:11px;">Use</button>
         <button onclick="cancelCull()" class="info" style="padding:4px 10px; font-size:11px;">Cancel</button>
       </div>
+    </div>
+  </div>
+  <div id="conf-add-panel" style="display:none; margin-top:8px; padding:10px 14px; background:#1a1a1a;
+       border:1px solid #444; border-radius:6px; max-width:420px; text-align:center;">
+    <div style="color:#f0c040; font-size:12px; margin-bottom:8px;">Add a missed device here — which type?</div>
+    <div style="display:flex; gap:6px; justify-content:center; align-items:center;">
+      <select id="conf-add-type" style="padding:4px 8px; font-size:12px; min-width:180px;"></select>
+      <button onclick="submitManualAdd()" style="padding:5px 14px; font-size:12px;">Add</button>
+      <button onclick="cancelManualAdd()" class="info" style="padding:5px 14px; font-size:12px;">Cancel</button>
     </div>
   </div>
   <div style="color:#40c0f0; font-size:11px; margin-top:2px;">● waypoint · hover a device star to highlight its routed path</div>
@@ -3585,6 +3594,12 @@ function bboxForDevice(pageNum, device) {
   if (device?.xy_source === 'symbol' && device?.symbol_via !== 'vector') {
     return { xmin_frac: 0, ymin_frac: 0, w_frac: 1, h_frac: 1 };
   }
+  if (device?.xy_source === 'manual') {
+    // Manually-added devices are captured directly in the identity (full-page)
+    // frame — same conversion the cull box-drawing uses — so they render/persist
+    // consistently regardless of this page's content-bbox cropping.
+    return { xmin_frac: 0, ymin_frac: 0, w_frac: 1, h_frac: 1 };
+  }
   return pageBBoxFor(pageNum);
 }
 
@@ -3719,6 +3734,8 @@ let confArmedForCull = null;   // _num of a device clicked once, awaiting a seco
 // dense sheet, generous enough that a re-run's slightly different symbol center
 // still lands inside it. Same units as page_regions' x0/y0/x1/y1.
 const CULL_PAD_FRAC = 0.012;
+let confClickStart = null;   // {x,y} client coords at mousedown, to distinguish a click from a pan drag
+let confPendingAddXY = null; // {x,y} identity-frame coords awaiting a type choice in the add panel
 let confWaypoints = [], confDemarcs = {};   // for routed-path visualization on hover
 let confShowAllPaths = false;               // path-confidence layer toggle
 let confZoom = 1, confPanX = 0, confPanY = 0, confDrag = null, confCW = 0, confCH = 0;
@@ -3956,6 +3973,112 @@ async function submitCull(category, reason) {
   renderResults();
 }
 
+// Empty-space click on the confidence map: convert the click position to the
+// identity (full-page) frame — same frame manual_devices.x_norm/y_norm are
+// stored in — and open the type picker. Local (canvas-pixel) coords come from
+// undoing #conf-layer's `translate(pan) scale(zoom)` transform (transform-origin
+// 0,0, so screen = zoom*local + pan — see confApplyTransform).
+async function openAddDevicePanel(e) {
+  const wr = document.getElementById('conf-wrap').getBoundingClientRect();
+  const localX = (e.clientX - wr.left - confPanX) / confZoom;
+  const localY = (e.clientY - wr.top  - confPanY) / confZoom;
+  const x = Math.min(1, Math.max(0, localX / confCW));
+  const y = Math.min(1, Math.max(0, localY / confCH));
+  confPendingAddXY = { x, y };
+
+  const sel = document.getElementById('conf-add-type');
+  sel.innerHTML = '<option value="">Loading types…</option>';
+  document.getElementById('conf-add-panel').style.display = 'block';
+
+  const types = await getDeviceTypes();
+  sel.innerHTML = types.length
+    ? types.map(t => `<option value="${t.id}">${t.name ?? t.legend_id}</option>`).join('')
+    : '<option value="">No device types configured</option>';
+}
+
+function cancelManualAdd() {
+  confPendingAddXY = null;
+  document.getElementById('conf-add-panel').style.display = 'none';
+}
+
+// Persist via /api/manual-device (the durable source pass-batch.js re-injects
+// every run), splice an optimistic entry into the live results for instant
+// feedback, then re-run — per design, a manual add bypasses exclude zones but
+// still needs the real pipeline for distance/TIA, so this scopes the existing
+// bulk runner to just this page rather than leaving the optimistic entry (no
+// distance yet) as the permanent record.
+async function submitManualAdd() {
+  const xy = confPendingAddXY;
+  const deviceTypeId = document.getElementById('conf-add-type').value;
+  document.getElementById('conf-add-panel').style.display = 'none';
+  if (!xy || !deviceTypeId) { confPendingAddXY = null; return; }
+
+  const pageId = pageCache[confPageNum]?.pageId;
+  if (!pageId) { document.getElementById('conf-hover-info').textContent = 'Page not persisted — run the scan first'; confPendingAddXY = null; return; }
+
+  document.getElementById('conf-hover-info').textContent = 'Adding…';
+  let added;
+  try {
+    const r = await fetch(`${base()}/api/manual-device`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: projectId, page_id: pageId, device_type_id: Number(deviceTypeId), x_norm: xy.x, y_norm: xy.y })
+    });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); document.getElementById('conf-hover-info').textContent = 'Add failed: ' + (j.error || r.status); confPendingAddXY = null; return; }
+    added = await r.json();
+  } catch (e) { document.getElementById('conf-hover-info').textContent = 'Error: ' + e.message; confPendingAddXY = null; return; }
+  confPendingAddXY = null;
+
+  const types = await getDeviceTypes();
+  const dt = types.find(t => t.id === added.device_type_id);
+  const res = batchResults[confPageNum];
+  if (res) {
+    res.devices = res.devices ?? [];
+    res.devices.push({
+      name: dt?.name ?? 'device', raw_labels: [], x_norm: added.x_norm, y_norm: added.y_norm,
+      xy_source: 'manual', symbol_via: null, confidence: 'high', flags: ['manual_added'],
+      total_ft: null, demarc_id: null
+    });
+    res.device_count = (res.device_count ?? 0) + 1;
+    const bt = (res.by_type ?? []).find(t => t.name === (dt?.name ?? 'device'));
+    if (bt) bt.count = (bt.count ?? 0) + 1;
+    else (res.by_type ?? (res.by_type = [])).push({ legend_id: dt?.legend_id ?? null, name: dt?.name ?? 'device', count: 1, tia: 0 });
+  }
+  document.getElementById('conf-hover-info').textContent = 'Added — re-running this page for distance…';
+  confDevices = (res?.devices || [])
+    .map((d, i) => ({ ...d, _num: i + 1 }))
+    .filter(d => d.x_norm != null && d.y_norm != null);
+  confRedraw();
+  renderResults();
+
+  await rerunPageAfterManualAdd(confPageNum);
+
+  // runBatch() replaced batchResults[confPageNum] wholesale with the server's
+  // authoritative pass — re-sync the map from it (the optimistic entry above is
+  // now superseded, distance included).
+  const fresh = batchResults[confPageNum];
+  confDevices = (fresh?.devices || [])
+    .map((d, i) => ({ ...d, _num: i + 1 }))
+    .filter(d => d.x_norm != null && d.y_norm != null);
+  document.getElementById('conf-hover-info').textContent = '';
+  confRedraw();
+}
+
+// Scopes the existing bulk batch-runner to a single page (temporarily narrowing
+// selectedPages), then restores the prior selection. Reuses the real pipeline
+// call as-is (role gate, symbol detection, content_bbox, everything) rather than
+// hand-rolling a parallel single-page runner that could drift from it.
+async function rerunPageAfterManualAdd(pageNum) {
+  const prevSelected = new Set(selectedPages);
+  selectedPages.clear();
+  selectedPages.add(pageNum);
+  try {
+    await runBatch();
+  } finally {
+    selectedPages.clear();
+    for (const p of prevSelected) selectedPages.add(p);
+  }
+}
+
 // Draw the device's routed path (device -> waypoints -> demarc) as an SVG polyline,
 // recomputed live via the SAME pure buildGreedyPath the server uses — nothing here is
 // persisted; it's fully derivable from data already on hand (device xy, waypoint pool,
@@ -4073,12 +4196,27 @@ async function openConfidenceModal(pageNum) {
     confPanX = (e.clientX - wr.left) - ((e.clientX - wr.left) - confPanX) * f;
     confPanY = (e.clientY - wr.top)  - ((e.clientY - wr.top)  - confPanY) * f;
     confZoom = Math.min(10, Math.max(0.3, confZoom * f)); confApplyTransform(); };
-  wrap.onmousedown = (e) => { confDrag = { x: e.clientX, y: e.clientY, px: confPanX, py: confPanY }; wrap.style.cursor = 'grabbing'; };
+  wrap.onmousedown = (e) => {
+    confDrag = { x: e.clientX, y: e.clientY, px: confPanX, py: confPanY };
+    confClickStart = { x: e.clientX, y: e.clientY };   // for click-vs-drag distinction below
+    wrap.style.cursor = 'grabbing';
+  };
   wrap.onmousemove = (e) => { if (!confDrag || e.buttons !== 1) return;
     confPanX = confDrag.px + (e.clientX - confDrag.x);
     confPanY = confDrag.py + (e.clientY - confDrag.y);
     confApplyTransform(); };
   wrap.onmouseup = () => { confDrag = null; wrap.style.cursor = 'grab'; };
+  // Empty-space click = add a missed device here. Stars/badges stopPropagation()
+  // on their own onclick, so this only fires for clicks that didn't land on one.
+  // Distinguished from the end of a pan drag by movement distance, not target,
+  // since dragging can end anywhere including back over open canvas.
+  wrap.onclick = (e) => {
+    if (!confClickStart) return;
+    const moved = Math.hypot(e.clientX - confClickStart.x, e.clientY - confClickStart.y);
+    confClickStart = null;
+    if (moved > 5) return;   // was a pan drag, not a click
+    openAddDevicePanel(e);
+  };
 
   document.getElementById('conf-hover-info').textContent = '';
   document.getElementById('conf-paths-toggle').textContent = confShowAllPaths ? '🔀 hide path confidence' : '🔀 show path confidence';
