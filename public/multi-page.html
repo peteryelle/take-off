@@ -493,7 +493,7 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
      z-index:300; flex-direction:column; align-items:center; justify-content:center;">
   <div style="color:#f0c040; font-size:15px; font-weight:bold; margin-bottom:4px;" id="conf-title">Confidence Map</div>
   <div style="color:#aaa; font-size:13px; margin-bottom:8px;">
-    Each star is a counted device · color = confidence · number = row in device table · ✕ = excluded · click empty space to add a missed device · hover for detail · scroll to zoom · drag to pan
+    Each star is a counted device · color = confidence · click a star to exclude it · click its number to isolate its path · ✕ = excluded · click empty space to add a missed device · hover for detail · scroll to zoom · drag to pan
   </div>
   <div style="display:flex; gap:8px; margin-bottom:8px; align-items:center;">
     <button onclick="confZoomBtn(1.5)" style="padding:3px 12px;">＋</button>
@@ -3830,6 +3830,7 @@ async function openLeaderModal(pageNum) {
 // the getBoundingClientRect/CSS-clamp drift that plain overlay positioning is
 // prone to (see click-coordinate bug notes elsewhere in this file).
 let confPageNum = null, confDevices = [];
+let confPinnedPath = null;   // device whose path is click-isolated (badge click), independent of hover and the arm-for-cull state
 let confArmedForCull = null;   // _num of a device clicked once, awaiting a second click to exclude
 // Default padding (identity-frame fraction) around a culled device's point when
 // auto-building its exclude box. Small enough not to swallow a close neighbor on a
@@ -3922,14 +3923,12 @@ function confRedraw() {
 
     // Numbered badge, tied to the device's row (#) in the by-page device table —
     // lets you cross-reference a plotted point back to its table row, and click it
-    // (while not yet culled) to exclude a device that shouldn't have been counted
-    // (e.g. inside a hatched out-of-scope area the zone tool didn't catch). Same
-    // arm-then-confirm pattern as the exclude-zone delete flow — click once to arm
-    // (red, 5s to confirm), click again to actually exclude. Kept as a separate
-    // element next to the star rather than replacing it, so the star's color still
-    // reads as confidence at a glance (it only turns red while armed).
+    // to isolate just this device's routed path (independent of the star, which
+    // handles exclude — kept on separate elements so the two actions never fight
+    // over one click). Click again (or click a different badge) to clear/switch.
     if (d._num != null) {
       const numSize = 12 / confZoom;
+      const pinned = confPinnedPath === d;
       const badge = document.createElement('div');
       badge.className = 'conf-star'; // reuse hit-test/cleanup grouping in confRedraw's clear step
       badge.style.cssText = `position:absolute; min-width:${numSize*1.6}px; height:${numSize*1.4}px;
@@ -3938,15 +3937,25 @@ function confRedraw() {
         display:flex; align-items:center; justify-content:center;
         font-size:${numSize}px; line-height:1; font-family:monospace; font-weight:bold;
         color:#0a0a0a; background:${color}; border-radius:${3/confZoom}px;
-        padding:0 ${2/confZoom}px;`;
+        padding:0 ${2/confZoom}px;
+        ${pinned ? `box-shadow:0 0 0 ${2/confZoom}px #fff;` : ''}`;
       badge.textContent = d._num;
-      badge.title = culled ? 'Excluded' : (armed ? 'Click again to exclude' : 'Click to exclude this device');
+      badge.title = culled ? 'Excluded' : (pinned ? 'Click to hide this path' : 'Click to show this device\'s path');
       badge.style.left = (pos.x + size * 0.55) + 'px';
       badge.style.top  = (pos.y - size * 0.55) + 'px';
-      if (!culled) badge.onclick = (e) => { e.stopPropagation(); armOrCullDevice(d); };
+      if (!culled) badge.onclick = (e) => { e.stopPropagation(); togglePinnedPath(d); };
       layer.appendChild(badge);
     }
   }
+}
+
+// Click a device's number badge to isolate just its path — bright white, drawn on
+// top of whatever the background toggle is showing (or on its own if that's off).
+// Click the same badge again to clear it; click a different one to switch. Kept
+// separate from the star's arm-then-cull click so the two never collide.
+function togglePinnedPath(d) {
+  confPinnedPath = (confPinnedPath === d) ? null : d;
+  confRedraw();
 }
 
 // Click a device's star or number badge once to arm it (red, "click again to
@@ -4228,11 +4237,20 @@ function renderAllConfPaths() {
   svg.setAttribute('width', confCW);
   svg.setAttribute('height', confCH);
   svg.setAttribute('viewBox', `0 0 ${confCW} ${confCH}`);
-  if (!confShowAllPaths) return;
-  for (const d of confDevices) {
-    const p = computeDevicePath(d);
-    if (!p) continue;
-    svgPolyline(svg, p.points, PATH_TIER_COLOR[p.tier], Math.max(0.75, 1.5 / confZoom), 0.6);
+  if (confShowAllPaths) {
+    for (const d of confDevices) {
+      const p = computeDevicePath(d);
+      if (!p) continue;
+      svgPolyline(svg, p.points, PATH_TIER_COLOR[p.tier], Math.max(0.75, 1.5 / confZoom), 0.6);
+    }
+  }
+  // Pinned path (badge click) draws on top regardless of the background toggle —
+  // solid cyan, distinct from both the tier colors and the transient white-dashed
+  // hover overlay, so a pinned path stays visible and unambiguous while panning,
+  // zooming, or hovering a different device.
+  if (confPinnedPath) {
+    const p = computeDevicePath(confPinnedPath);
+    if (p) svgPolyline(svg, p.points, '#40c0f0', Math.max(1.25, 2.5 / confZoom), 0.9);
   }
 }
 function toggleConfPaths() {
@@ -4260,6 +4278,7 @@ async function openConfidenceModal(pageNum) {
   confPageNum = pageNum;
   confArmedForCull = null;
   confCullTarget = null;
+  confPinnedPath = null;
   document.getElementById('conf-cull-panel').style.display = 'none';
   confDevices = (res.devices || [])
     .map((d, i) => ({ ...d, _num: i + 1 }))   // matches the # column in the by-page device table
@@ -4331,6 +4350,7 @@ function closeConfidenceModal() {
   document.getElementById('conf-modal').style.display = 'none';
   confArmedForCull = null;
   confCullTarget = null;
+  confPinnedPath = null;
   document.getElementById('conf-cull-panel').style.display = 'none';
 }
 
