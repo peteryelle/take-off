@@ -1056,6 +1056,28 @@ async function setPageRole(n, role) {
   } catch (e) { console.warn('set-page-role:', e.message); }
 }
 
+// Persist a page's TR assignment(s) — which TR this page hosts/is served by
+// (tr_name) and/or a second TR its drawing also references (tr_name_secondary).
+// Mirrors setPageRole's resolve-or-create-by-(project,pdf_page) pattern, but only
+// sends the field(s) actually being changed — the endpoint updates just those
+// columns, so a tr_name write here can never clobber page_role or the sibling
+// TR field, and vice versa. fields: { tr_name?, tr_name_secondary? } — pass null
+// to clear a field, omit it to leave it untouched.
+async function setPageTR(n, fields) {
+  if (!pageCache[n]) pageCache[n] = {};
+  if ('tr_name' in fields)           pageCache[n].tr_name = fields.tr_name;
+  if ('tr_name_secondary' in fields) pageCache[n].tr_name_secondary = fields.tr_name_secondary;
+  if (!projectId) return; // nothing to persist to yet — in-memory state still updated above
+  try {
+    const r = await fetch(`${base()}/api/set-page-role`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: projectId, pdf_page_number: n, ...fields })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (j?.page_id) pageCache[n].pageId = j.page_id;
+  } catch (e) { console.warn('setPageTR:', e.message); }
+}
+
 // Bulk-assign one role to every currently SELECTED page (the 39-page ergonomics:
 // stamp the common role, then override the handful of exceptions in 🔍 view).
 // Still 100% human — this just turns N picks into one. '' clears the role.
@@ -1336,14 +1358,30 @@ function buildPageAssignments(trs) {
     }
   }
 
-  // Detect split pages: Pass B description may contain a second TR name
+  // Detect split pages: Pass B description may contain a second TR name. Only
+  // available in the same session as the scan — description isn't persisted/
+  // restored, so on a reload this re-derivation naturally comes up empty and we
+  // fall back to whatever secondary TR was already persisted for this page.
   for (const pgNum of [...selectedPages]) {
     const d = pageCache[pgNum]?.passBResult?.demarcation;
     const desc = (d?.description ?? '') + ' ' + (d?.label ?? '');
     const trPattern = /([A-Z]{1,4}\d{2,4}[A-Z]?)/g;
     const found = [...new Set([...desc.matchAll(trPattern)].map(m => m[1]))].filter(n => trNames.includes(n));
-    if (found.length > 1 && pageAssignments[pgNum]) {
-      pageAssignments[pgNum].secondaryTR = found.find(n => n !== pageAssignments[pgNum].trName) ?? null;
+    if (!pageAssignments[pgNum]) continue;
+
+    if (found.length > 1) {
+      const secondary = found.find(n => n !== pageAssignments[pgNum].trName) ?? null;
+      pageAssignments[pgNum].secondaryTR = secondary;
+      // Persist only on change — this runs on every render, don't refire needlessly.
+      if (secondary && pageCache[pgNum]?.tr_name_secondary !== secondary) {
+        setPageTR(pgNum, { tr_name_secondary: secondary }); // fire-and-forget
+      }
+    } else {
+      // Nothing freshly derivable this render (typically post-restore) — use the
+      // persisted value instead of silently losing the badge.
+      const persisted = pageCache[pgNum]?.tr_name_secondary ?? null;
+      pageAssignments[pgNum].secondaryTR = persisted;
+      pageAssignments[pgNum].secondaryTRMissing = !!persisted && !trNames.includes(persisted);
     }
   }
 }
@@ -1448,6 +1486,9 @@ function renderPageAssignmentTable(trs) {
     let roleHtml;
     if (isHost) {
       roleHtml = `<span class="pa-role-host">✓ host</span>`;
+    } else if (split && assign.secondaryTRMissing) {
+      roleHtml = `<span class="pa-role-split">⚠ needs reset</span>`;
+      splitNotes.push(`pg${pgNum} was also assigned to <strong>${split}</strong>, which no longer exists — reassign or clear it`);
     } else if (split) {
       roleHtml = `<span class="pa-role-split">⚠ split</span>`;
       splitNotes.push(`pg${pgNum} references both <strong>${trName}</strong> and <strong>${split}</strong>`);
@@ -1483,7 +1524,7 @@ function renderPageAssignmentTable(trs) {
   }
 }
 
-function reassignPage(pgNum, newTR) {
+async function reassignPage(pgNum, newTR) {
   // Move page from its current TR to newTR in trMap
   const oldAssign = pageAssignments[pgNum];
   const oldTR     = oldAssign?.trName;
@@ -1519,6 +1560,11 @@ function reassignPage(pgNum, newTR) {
   renderTRMap(Object.values(trMap));
   // Update role badge for this row
   updatePageRoleBadge(pgNum);
+
+  // Persist — this is the write that was missing: previously only the pin
+  // coordinates (via /api/pass-demarc) were saved, never which pages a TR
+  // serves, so this assignment was lost on every reload.
+  await setPageTR(pgNum, { tr_name: newTR || null });
 }
 
 function updatePageRoleBadge(pgNum) {
@@ -1590,12 +1636,15 @@ function wpBtnHtml(pgNum) {
   </div>`;
 }
 
-function ensureServedPage(name, pgNum) {
+async function ensureServedPage(name, pgNum) {
   trMap[name].pages = trMap[name].pages ?? [];
   if (!trMap[name].pages.find(p => p.eval_page_num === pgNum)) {
     const pb = pageCache[pgNum]?.passBResult ?? {};
     trMap[name].pages.push({ eval_page_num: pgNum, building: pb.building ?? null, floor: pb.level ?? null });
   }
+  // Persist so restoreFromSupabase can reconstruct this page's TR assignment —
+  // shared by both placeManualTR (serving) and placeManualExit (off-sheet exit).
+  await setPageTR(pgNum, { tr_name: name });
 }
 
 // Serving pin: the demarc/TR lives on THIS sheet; devices route to it.
@@ -1604,7 +1653,7 @@ async function placeManualTR(pgNum) {
   if (!name) return;
   trMap[name] = { ...(trMap[name] ?? {}), name, on_sheet: true, host_confirmed: true,
                   demarc_page_num: pgNum, source: 'user_pin' };
-  ensureServedPage(name, pgNum);
+  await ensureServedPage(name, pgNum);
   if (!pageAssignments[pgNum]) pageAssignments[pgNum] = {};
   pageAssignments[pgNum].trName = name;
   await openPinModal(name, pgNum);   // targetPageNum === demarc_page_num → serving mode
@@ -1615,7 +1664,7 @@ async function placeManualExit(pgNum) {
   const name = (prompt(`Off-sheet TR this exit routes to\n(e.g. MDF on another floor):`, `OFFSHEET-TR`) || '').trim();
   if (!name) return;
   if (!trMap[name]) trMap[name] = { name, on_sheet: false, demarc_page_num: null, source: 'off_sheet' };
-  ensureServedPage(name, pgNum);
+  await ensureServedPage(name, pgNum);
   await openPinModal(name, pgNum);   // demarc_page_num null → isExtraPin → exit mode + jumper
 }
 
@@ -4130,6 +4179,8 @@ async function restoreFromSupabase(pid) {
         pageCache[pg.eval_page_num] = {
           pageId: pg.page_id,
           page_role: pg.page_role ?? null,
+          tr_name:           pg.tr_name ?? null,
+          tr_name_secondary: pg.tr_name_secondary ?? null,
           suggest_skip:   pg.suggest_skip ?? false,
           suggest_reason: pg.suggest_reason ?? null,
           passBResult: {
@@ -4185,7 +4236,9 @@ async function restoreFromSupabase(pid) {
         const region     = d.region_id != null ? regionById.get(d.region_id) : null;
         const homePageId = region?.page_id ?? d.page_id;
         const pageForDemarc = projPages.find(p => p.page_id === homePageId);
-        // Served pages: legacy tr_name match, else at least the home page itself.
+        // Served pages: tr_name match (written by reassignPage/ensureServedPage
+        // via setPageTR), else at least the home page itself as a fallback for
+        // demarcs written before this field existed.
         let pages = projPages
           .filter(p => p.tr_name === d.name)
           .map(p => ({ page_id: p.page_id, eval_page_num: p.eval_page_num,

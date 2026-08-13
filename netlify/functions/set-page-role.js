@@ -1,16 +1,29 @@
 // netlify/functions/set-page-role.js
 // POST /api/set-page-role
-//   Body: { page_id, page_role }                       (legacy: update by row id)
-//      or { project_id, pdf_page_number, page_role }    (preferred: resolve/create)
+//   Body: { page_id, page_role?, tr_name?, tr_name_secondary? }        (legacy: update by row id)
+//      or { project_id, pdf_page_number, page_role?, tr_name?, tr_name_secondary? }  (preferred: resolve/create)
 //
-// Persists the HUMAN-ASSIGNED page role (plan|schedule|legend|detail|skip, or
-// null/'' to clear back to needs-role). Source of truth for the page-role gate.
+// Persists per-page human assignments: page_role (plan|schedule|legend|detail|skip,
+// or null/'' to clear back to needs-role), and/or tr_name / tr_name_secondary (the
+// TR(s) this page hosts or is served by — null/'' clears). Only the fields present
+// in the body are written; omitted fields are left untouched. This matters: a
+// tr_name-only call must NOT clobber an already-set page_role, and vice versa —
+// each field is independently optional, not a full-row overwrite.
 //
-// Keying by (project_id, pdf_page_number) makes a role saveable for ANY page the
-// moment a human assigns it — no dependency on a prior scan or client cache. If
-// the page row doesn't exist yet it is created (and linked in project_pages so a
-// later restore sees it). A page declared non-counting carries no device count,
-// so its device_instances are cleared — stale counts can't linger in the total.
+// tr_name is the source of truth restoreFromSupabase() reads to reconstruct
+// trMap[name].pages beyond a TR's own host page. Previously written only to the
+// demarcs table (pin coordinates), never back to pages — so served-page
+// assignments beyond a TR's host page were lost on every reload. tr_name_secondary
+// covers the split-sheet case (a page's drawing references two TR names); it's
+// persisted directly rather than re-derived from passBResult.description, which
+// is not restored.
+//
+// Keying by (project_id, pdf_page_number) makes any of these fields saveable for
+// ANY page the moment a human assigns it — no dependency on a prior scan or
+// client cache. If the page row doesn't exist yet it is created (and linked in
+// project_pages so a later restore sees it). A page declared non-counting carries
+// no device count, so its device_instances are cleared — stale counts can't
+// linger in the total.
 // ─────────────────────────────────────────────────────────────────
 
 import { getSupabase, ok, err, CORS } from "./utils/clients.js";
@@ -27,8 +40,28 @@ export default async function handler(req) {
   try { body = await req.json(); } catch { return err("Invalid JSON"); }
 
   let { page_id, project_id, pdf_page_number } = body;
-  const role = (body.page_role === null || body.page_role === "") ? null : String(body.page_role);
-  if (role !== null && !ROLES.has(role)) return err(`invalid page_role: ${role}`);
+
+  // Each of these three fields is independently optional: "present in body" (even
+  // as null/'' to clear) vs "absent" are different things. Absent means leave the
+  // column untouched — this is what stops a tr_name-only call from nulling out an
+  // already-set page_role, and vice versa.
+  const hasRole   = Object.prototype.hasOwnProperty.call(body, "page_role");
+  const hasTr     = Object.prototype.hasOwnProperty.call(body, "tr_name");
+  const hasTrSec  = Object.prototype.hasOwnProperty.call(body, "tr_name_secondary");
+  if (!hasRole && !hasTr && !hasTrSec)
+    return err("at least one of page_role, tr_name, tr_name_secondary required");
+
+  const role = hasRole
+    ? ((body.page_role === null || body.page_role === "") ? null : String(body.page_role))
+    : undefined;
+  if (hasRole && role !== null && !ROLES.has(role)) return err(`invalid page_role: ${role}`);
+
+  const trName = hasTr
+    ? ((body.tr_name === null || body.tr_name === "") ? null : String(body.tr_name).trim())
+    : undefined;
+  const trNameSecondary = hasTrSec
+    ? ((body.tr_name_secondary === null || body.tr_name_secondary === "") ? null : String(body.tr_name_secondary).trim())
+    : undefined;
 
   const gate = await requireOrg(req);
   if (gate.error) return gate.error;
@@ -51,9 +84,13 @@ export default async function handler(req) {
     if (found) {
       page_id = found.id;
     } else {
+      const insertRow = { project_id, pdf_page_number, status: "ready" };
+      if (hasRole)  insertRow.page_role = role;
+      if (hasTr)    insertRow.tr_name = trName;
+      if (hasTrSec) insertRow.tr_name_secondary = trNameSecondary;
       const { data: ins, error: insErr } = await supabase
         .from("pages")
-        .insert({ project_id, pdf_page_number, page_role: role, status: "ready" })
+        .insert(insertRow)
         .select("id").single();
       if (insErr) return err(insErr.message);
       page_id = ins.id;
@@ -64,19 +101,25 @@ export default async function handler(req) {
     }
   }
 
+  const updates = {};
+  if (hasRole)  updates.page_role = role;
+  if (hasTr)    updates.tr_name = trName;
+  if (hasTrSec) updates.tr_name_secondary = trNameSecondary;
+
   const { error: updErr } = await supabase
-    .from("pages").update({ page_role: role }).eq("id", page_id);
+    .from("pages").update(updates).eq("id", page_id);
   if (updErr) return err(updErr.message);
 
-  // Non-counting role -> page holds no device count.
+  // Non-counting role -> page holds no device count. Only runs when page_role
+  // was actually part of this call — a tr_name-only call must not touch counts.
   let cleared = 0;
-  if (role && NON_COUNTING.has(role)) {
+  if (hasRole && role && NON_COUNTING.has(role)) {
     const { data: del } = await supabase
       .from("device_instances").delete().eq("page_id", page_id).select("id");
     cleared = del?.length ?? 0;
   }
 
-  return ok({ page_id, page_role: role, cleared });
+  return ok({ page_id, page_role: role, tr_name: trName, tr_name_secondary: trNameSecondary, cleared });
 }
 
 export const config = { path: "/api/set-page-role" };

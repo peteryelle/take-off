@@ -52,7 +52,7 @@ export default async function handler(req) {
         page_id,
         pages (
           id, pdf_page_number, sheet_title, drawing_number,
-          building, level, area, tr_name, page_role,
+          building, level, area, tr_name, tr_name_secondary, page_role,
           scale_paper_in, scale_real_ft,
           demarc_label, demarc_x, demarc_y, demarc_is_host,
           demarc_type, demarc_source,
@@ -101,6 +101,7 @@ export default async function handler(req) {
     level:           pp.pages?.level           ?? null,
     area:            pp.pages?.area            ?? null,
     tr_name:         pp.pages?.tr_name         ?? null,
+    tr_name_secondary: pp.pages?.tr_name_secondary ?? null,
     page_role:       pp.pages?.page_role       ?? null,
     scale_paper_in:  pp.pages?.scale_paper_in  ?? null,
     scale_real_ft:   pp.pages?.scale_real_ft   ?? null,
