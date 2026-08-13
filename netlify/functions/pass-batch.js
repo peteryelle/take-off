@@ -87,6 +87,32 @@ export default async function handler(req) {
     if (!deviceTypes?.length)
       return err("No device types with detection_config — run discovery or backfill the contract", 404);
 
+    // ── Drawing-bounds filter (label + vector symbol tracks) ────────────
+    // Boilerplate text and legend glyphs outside the actual plan area were being
+    // detected as real placed devices on every page that carried them — confirmed
+    // on a real project: a WAP-symbol legend block got counted as 7+ placed
+    // devices, requiring the same hand-culls to be redone on every re-run, since
+    // the source was never actually removed. drawing_bounds (captured by Pass B,
+    // pages.drawing_x0/y0/x1/y1) marks the real plan area vs. surrounding title
+    // block/legend/notes — both in the same identity-frame fraction units as
+    // text_items' cx_norm/cy_norm and symbol_instances' x/y, so no conversion
+    // needed. Falls back to unfiltered when bounds haven't been captured for this
+    // page yet (e.g. Pass B hasn't run) rather than silently dropping everything.
+    //
+    // Schedule parsing deliberately does NOT use this filter below — a schedule
+    // table often sits outside what Pass B considers the "drawing" area, and
+    // filtering it the same way would break UIN/cable_dest extraction entirely.
+    const db = { x0: page.drawing_x0, y0: page.drawing_y0, x1: page.drawing_x1, y1: page.drawing_y1 };
+    const hasDrawingBounds = [db.x0, db.y0, db.x1, db.y1].every((v) => v != null);
+    const inDrawingArea = (x, y) => !hasDrawingBounds || (x >= db.x0 && x <= db.x1 && y >= db.y0 && y <= db.y1);
+
+    const labelTextItems = hasDrawingBounds
+      ? text_items.filter((t) => inDrawingArea(t.cx_norm, t.cy_norm))
+      : text_items;
+    const boundedSymbolInstances = hasDrawingBounds
+      ? (symbol_instances || []).filter((s) => inDrawingArea(s.x, s.y))
+      : (symbol_instances || []);
+
     // Scale override from the per-page editor: persist to the page row (so distances
     // use it and it survives reload; redo replaces), then read it back for this run.
     if (scale_override && Number.isFinite(scale_override.paper_value) && Number.isFinite(scale_override.real_value) && scale_override.real_value > 0) {
@@ -200,9 +226,9 @@ export default async function handler(req) {
     }
 
     const { devices: reconciled, typeMap } = buildDeviceList(
-      text_items, deviceTypes, page.schedule,
+      labelTextItems, deviceTypes, page.schedule,
       { scheduleRows: seededScheduleRows, planRegions: scopedPins.map((p) => p.scope_box).filter(Boolean) },
-      symbol_instances || [], leaderOv);
+      boundedSymbolInstances, leaderOv);
 
     // ── Manually-added devices (confidence-map "add missed device") ─────
     // manual_devices is the durable source — re-injected as synthetic reconcile
