@@ -961,6 +961,38 @@ function showPDFFilename(name) {
   document.getElementById('pdf-reattach-bar').style.display = 'none';
 }
 
+// Attempts to load the project's persisted drawing set straight from Storage,
+// so the person doesn't need to re-pick it from disk. Returns true on success
+// (pdfDoc/totalPages are set, thumbnails rendered) so the caller can skip
+// showing the manual re-attach prompt; false for anything short of that
+// (nothing stored yet, expired signed URL, network hiccup) so the existing
+// fallback flow still works exactly as it did before this existed.
+async function attemptAutoLoadPdf(pid) {
+  try {
+    const r = await fetch(`${base()}/api/pdf-storage-url`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: pid, mode: 'download' })
+    });
+    const j = await r.json();
+    if (!r.ok || !j.url) return false;   // nothing persisted for this project yet
+
+    setStatus('pdf-status', 'Loading persisted drawing set…', 'running');
+    const resp = await fetch(j.url);
+    if (!resp.ok) throw new Error(`Storage fetch failed: ${resp.status}`);
+    const ab = await resp.arrayBuffer();
+    pdfDoc = await pdfjsLib.getDocument({ data: ab }).promise;
+    totalPages = pdfDoc.numPages;
+    setStatus('pdf-status', `✓ ${totalPages} pages loaded (persisted)`, 'ok');
+    if (j.filename) { showPDFFilename(j.filename); localStorage.setItem('mp_last_pdf_name', j.filename); }
+    await renderThumbnails();
+    return true;
+  } catch (e) {
+    console.warn('[attemptAutoLoadPdf]', e.message);
+    setStatus('pdf-status', '', '');
+    return false;
+  }
+}
+
 async function loadPDF(input) {
   const file = input.files[0];
   if (!file) return;
@@ -973,7 +1005,10 @@ async function loadPDF(input) {
     showPDFFilename(file.name);
     localStorage.setItem('mp_last_pdf_name', file.name);
     await renderThumbnails();
-    // Save filename to project record
+    // Save filename to project record, and persist the PDF itself to Storage so
+    // it doesn't need to be re-picked from disk on the next visit — see
+    // persistPdfToStorage() below. Storage upload runs after the filename/count
+    // save so the project record is at least current even if the upload fails.
     if (projectId) {
       document.getElementById('project-card-file').textContent = '📄 ' + file.name;
       document.getElementById('project-card-file').style.color = '#4a7a4a';
@@ -984,8 +1019,40 @@ async function loadPDF(input) {
           pdf_filename: file.name, pdf_page_count: totalPages
         })
       }).catch(() => {});
+      persistPdfToStorage(file);
     }
   } catch(e) { setStatus('pdf-status', 'Error: ' + e.message, 'err'); }
+}
+
+// Uploads the drawing set to the private "schematics" Storage bucket via a
+// short-lived signed upload URL — bytes go straight from the browser to
+// Storage, never through a Netlify Function, so a large multi-page set never
+// risks the function payload/timeout ceiling. Best-effort: the local pdfDoc is
+// already loaded and usable regardless of whether this succeeds, so failure
+// here only means the next visit falls back to the manual re-attach prompt —
+// never blocks or errors the current session.
+async function persistPdfToStorage(file) {
+  try {
+    setStatus('pdf-status', `✓ ${totalPages} pages loaded · persisting for next time…`, 'ok');
+    const r = await fetch(`${base()}/api/pdf-storage-url`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: projectId, mode: 'upload', filename: file.name })
+    });
+    const j = await r.json();
+    if (!r.ok || !j.url) throw new Error(j.error || 'no upload URL returned');
+
+    const putRes = await fetch(j.url, { method: 'PUT', body: file, headers: { 'Content-Type': 'application/pdf' } });
+    if (!putRes.ok) throw new Error(`Storage upload failed: ${putRes.status}`);
+
+    await fetch(`${base()}/api/projects`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'update_project', project_id: projectId, pdf_storage_path: j.path })
+    });
+    setStatus('pdf-status', `✓ ${totalPages} pages loaded · persisted`, 'ok');
+  } catch (e) {
+    console.warn('[persistPdfToStorage]', e.message);
+    setStatus('pdf-status', `✓ ${totalPages} pages loaded (not persisted — will need re-attaching next time)`, 'ok');
+  }
 }
 
 async function renderThumbnails() {
@@ -4690,15 +4757,18 @@ async function restoreFromSupabase(pid) {
     }
 
     if (selectedPages.size > 0) {
-      // Show re-attach bar if we have a known filename from localStorage or project record
-      const savedName = localStorage.getItem('mp_last_pdf_name');
-      const reBar  = document.getElementById('pdf-reattach-bar');
-      const reName = document.getElementById('pdf-last-name');
-      if (savedName && reBar && reName && reBar.style.display === 'none') {
-        reName.textContent = savedName;
-        reBar.style.display = 'block';
+      const autoLoaded = await attemptAutoLoadPdf(pid);
+      if (!autoLoaded) {
+        // Show re-attach bar if we have a known filename from localStorage or project record
+        const savedName = localStorage.getItem('mp_last_pdf_name');
+        const reBar  = document.getElementById('pdf-reattach-bar');
+        const reName = document.getElementById('pdf-last-name');
+        if (savedName && reBar && reName && reBar.style.display === 'none') {
+          reName.textContent = savedName;
+          reBar.style.display = 'block';
+        }
+        setStatus('pdf-status', '', '');
       }
-      setStatus('pdf-status', '', '');
     }
 
   } catch(e) {

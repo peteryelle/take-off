@@ -28,7 +28,7 @@ export default async function handler(req) {
     // Fallback: base table
     const { data, error } = await supabase
       .from("projects")
-      .select("id, name, project_number, client, pdf_filename, pdf_page_count, created_at, updated_at, last_run_at")
+      .select("id, name, project_number, client, pdf_filename, pdf_page_count, pdf_storage_path, created_at, updated_at, last_run_at")
       .eq("org_id", orgId)
       .order("updated_at", { ascending: false });
 
@@ -297,7 +297,7 @@ export default async function handler(req) {
 
     // ── Action: update an existing project (e.g. mark as library) ──
     if (action === "update_project") {
-      const { id, is_library, library_name, name, number, client, pdf_filename, pdf_page_count } = body;
+      const { id, is_library, library_name, name, number, client, pdf_filename, pdf_page_count, pdf_storage_path } = body;
       const project_id = body.project_id ?? id;
       if (!project_id) return err("project_id required");
       if (!(await assertProjectInOrg(supabase, project_id, orgId)))
@@ -311,6 +311,7 @@ export default async function handler(req) {
       if (client         !== undefined) patch.client         = client;
       if (pdf_filename   !== undefined) patch.pdf_filename    = pdf_filename;
       if (pdf_page_count !== undefined) patch.pdf_page_count  = pdf_page_count;
+      if (pdf_storage_path !== undefined) patch.pdf_storage_path = pdf_storage_path;
 
       const { data, error } = await supabase
         .from("projects")
