@@ -493,7 +493,7 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
      z-index:300; flex-direction:column; align-items:center; justify-content:center;">
   <div style="color:#f0c040; font-size:15px; font-weight:bold; margin-bottom:4px;" id="conf-title">Confidence Map</div>
   <div style="color:#aaa; font-size:13px; margin-bottom:8px;">
-    Each star is a counted device · color = confidence · number = row in device table · hover for detail · scroll to zoom · drag to pan
+    Each star is a counted device · color = confidence · number = row in device table · ✕ = excluded · hover for detail · scroll to zoom · drag to pan
   </div>
   <div style="display:flex; gap:8px; margin-bottom:8px; align-items:center;">
     <button onclick="confZoomBtn(1.5)" style="padding:3px 12px;">＋</button>
@@ -514,6 +514,29 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
     </div>
   </div>
   <div id="conf-hover-info" style="min-height:18px; margin-top:8px; color:#ccc; font-size:12px; font-family:monospace;"></div>
+  <div id="conf-cull-panel" style="display:none; margin-top:8px; padding:10px 14px; background:#1a1a1a;
+       border:1px solid #444; border-radius:6px; max-width:520px; text-align:center;">
+    <div id="conf-cull-title" style="color:#f0c040; font-size:12px; margin-bottom:8px;"></div>
+    <div id="conf-cull-step1" style="display:flex; gap:8px; justify-content:center;">
+      <button onclick="submitCull('junk')" class="danger" style="padding:5px 14px; font-size:12px;">Junk — not a real detection</button>
+      <button onclick="showCullReasons()" style="padding:5px 14px; font-size:12px;">Excluded — valid, not counted</button>
+      <button onclick="cancelCull()" class="info" style="padding:5px 14px; font-size:12px;">Cancel</button>
+    </div>
+    <div id="conf-cull-step2" style="display:none;">
+      <div style="color:#888; font-size:11px; margin-bottom:6px;">Why is it excluded?</div>
+      <div style="display:flex; gap:6px; flex-wrap:wrap; justify-content:center; margin-bottom:8px;">
+        <button onclick="submitCull('excluded','Out of scope / out of bounds')" style="padding:4px 10px; font-size:11px;">Out of scope / out of bounds</button>
+        <button onclick="submitCull('excluded','Adjacent equipment')" style="padding:4px 10px; font-size:11px;">Adjacent equipment</button>
+        <button onclick="submitCull('excluded','Duplicate of another detection')" style="padding:4px 10px; font-size:11px;">Duplicate</button>
+        <button onclick="submitCull('excluded','Existing device — not in scope of work')" style="padding:4px 10px; font-size:11px;">Existing device</button>
+      </div>
+      <div style="display:flex; gap:6px; justify-content:center; align-items:center;">
+        <input id="conf-cull-other" type="text" placeholder="Other reason…" style="padding:4px 8px; font-size:11px; width:220px;">
+        <button onclick="submitCullOther()" style="padding:4px 10px; font-size:11px;">Use</button>
+        <button onclick="cancelCull()" class="info" style="padding:4px 10px; font-size:11px;">Cancel</button>
+      </div>
+    </div>
+  </div>
   <div style="color:#40c0f0; font-size:11px; margin-top:2px;">● waypoint · hover a device star to highlight its routed path</div>
   <div id="conf-path-legend" style="font-size:11px; margin-top:2px; display:none;">
     <span style="color:#888;">path confidence (waypoint coverage):</span>
@@ -3395,7 +3418,16 @@ function renderByPage() {
         ? `<strong style="color:${d.tia_flag ? '#f07a7a' : '#7af07a'}">${d.total_ft}ft</strong>`
         : '—';
       const fl = d.flags ?? [];
-      const badge = fl.includes('out_of_scope')
+      const culled = fl.includes('manual_excluded');
+      const cullLabel = d.cull_category === 'junk'
+        ? '✕ junk'
+        : d.cull_reason ? `✕ excluded — ${d.cull_reason}` : '✕ excluded';
+      const cullTitle = d.cull_category === 'junk'
+        ? 'flagged as junk — not a real detection'
+        : `valid detection, excluded from count${d.cull_reason ? ': ' + d.cull_reason : ''}`;
+      const badge = culled
+        ? ` <span title="${cullTitle}" style="color:#f07a7a; font-size:9px; border:1px solid #7a3030; border-radius:3px; padding:0 3px;">${cullLabel}</span>`
+        : fl.includes('out_of_scope')
         ? ' <span title="outside the marked distance area — counted, not measured" style="color:#888; font-size:9px; border:1px solid #555; border-radius:3px; padding:0 3px;">no-dist</span>'
         : fl.includes('leader_expanded')
         ? ' <span title="added via 1:N leader markup" style="color:#c08cff; font-size:9px; border:1px solid #6b4ea8; border-radius:3px; padding:0 3px;">⤳ leader</span>'
@@ -3404,14 +3436,18 @@ function renderByPage() {
         : fl.includes('placement_inferred')
         ? ' <span title="position inferred from symbol only" style="color:#7ac0f0; font-size:9px; border:1px solid #3a6a8a; border-radius:3px; padding:0 3px;">inferred</span>'
         : '';
-      const rowBg = fl.includes('leader_expanded') ? ' style="background:rgba(192,140,255,0.05);"' : '';
+      // Culled rows stay in the table (not spliced out) as visual confirmation the
+      // click applied, at a stable row number matched to what was on the map when
+      // it was excluded — struck-through and dimmed rather than removed.
+      const rowBg = culled ? '' : (fl.includes('leader_expanded') ? ' style="background:rgba(192,140,255,0.05);"' : '');
+      const strike = culled ? ' style="text-decoration:line-through; opacity:0.45;"' : '';
       html += `<tr${rowBg}>
-        <td style="color:#555;">${i+1}</td>
-        <td style="color:#f0c040;">${d.name ?? '—'}${badge}</td>
-        <td style="color:#7ac0f0; font-family:monospace;">${(d.raw_labels ?? []).join(' · ')}</td>
-        ${showTR ? `<td style="color:#9aa0d0; font-family:monospace;">${d.demarc_id != null ? (trByDemarc[d.demarc_id] ?? ('#' + d.demarc_id)) : '—'}</td>` : ''}
-        <td style="text-align:right; color:#666; font-family:monospace;">${d.x_norm?.toFixed(3)}, ${d.y_norm?.toFixed(3)}</td>
-        <td style="text-align:right;">${dist}</td>
+        <td${strike} style="color:#555;">${i+1}</td>
+        <td${strike} style="color:#f0c040;">${d.name ?? '—'}${!culled ? badge : ''}</td>
+        <td${strike} style="color:#7ac0f0; font-family:monospace;">${(d.raw_labels ?? []).join(' · ')}</td>
+        ${showTR ? `<td${strike} style="color:#9aa0d0; font-family:monospace;">${d.demarc_id != null ? (trByDemarc[d.demarc_id] ?? ('#' + d.demarc_id)) : '—'}</td>` : ''}
+        <td${strike} style="text-align:right; color:#666; font-family:monospace;">${d.x_norm?.toFixed(3)}, ${d.y_norm?.toFixed(3)}</td>
+        <td${strike} style="text-align:right;">${dist}${culled ? badge : ''}</td>
       </tr>`;
     });
 
@@ -3728,64 +3764,76 @@ function confRedraw() {
 
   for (const d of confDevices) {
     if (d.x_norm == null || d.y_norm == null) continue;
-    const armed = d._num != null && d._num === confArmedForCull;
-    const color = armed ? '#f07a7a' : (CONF_COLOR[d.confidence] ?? '#888');
+    const culled = (d.flags ?? []).includes('manual_excluded');
+    const armed  = !culled && d._num != null && d._num === confArmedForCull;
+    const color  = culled ? '#666' : armed ? '#f07a7a' : (CONF_COLOR[d.confidence] ?? '#888');
+    const pos = normToCanvasXY(d.x_norm, d.y_norm, bboxForDevice(confPageNum, d), confCW, confCH);
+    const size = 16 / confZoom;
+
     const star = document.createElement('div');
     star.className = 'conf-star';
     // Counter-scale so the star's on-screen size stays ~constant across zoom levels.
-    const size = 16 / confZoom;
     star.style.cssText = `position:absolute; width:${size}px; height:${size}px;
-      transform:translate(-50%,-50%); pointer-events:auto; z-index:10;
+      transform:translate(-50%,-50%); pointer-events:${culled ? 'none' : 'auto'}; z-index:10;
       display:flex; align-items:center; justify-content:center;
-      font-size:${size}px; line-height:1; color:${color};
+      font-size:${size}px; line-height:1; color:${color}; opacity:${culled ? 0.6 : 1};
       text-shadow:0 0 ${2/confZoom}px rgba(0,0,0,0.9), 0 0 ${1/confZoom}px rgba(0,0,0,0.9);
-      cursor:pointer;`;
-    star.textContent = '★';
-    const pos = normToCanvasXY(d.x_norm, d.y_norm, bboxForDevice(confPageNum, d), confCW, confCH);
+      cursor:${culled ? 'default' : 'pointer'};`;
+    // Culled devices show as ✕ instead of ★ — same permanent-record reasoning as
+    // the table's strikethrough: confirms the click applied, doesn't just vanish.
+    star.textContent = culled ? '✕' : '★';
     star.style.left = pos.x + 'px';
     star.style.top  = pos.y + 'px';
-    star.onmouseenter = () => {
-      const routeNote = d.routed_via_waypoints?.length ? `  ·  via ${d.routed_via_waypoints.length} waypoint(s)` : '';
-      const cullNote = armed ? '  ·  click again to exclude' : '  ·  click to exclude';
-      document.getElementById('conf-hover-info').textContent =
-        `${d.name ?? d.type ?? '—'}  ·  ${(d.raw_labels ?? []).join(' · ')}  ·  confidence: ${d.confidence ?? '—'}${routeNote}${cullNote}`;
-      drawConfPath(d);
-    };
-    star.onmouseleave = () => { document.getElementById('conf-hover-info').textContent = ''; clearConfPath(); };
-    star.onclick = (e) => { e.stopPropagation(); armOrCullDevice(d); };
+    if (!culled) {
+      star.onmouseenter = () => {
+        const routeNote = d.routed_via_waypoints?.length ? `  ·  via ${d.routed_via_waypoints.length} waypoint(s)` : '';
+        const cullNote = armed ? '  ·  click again to exclude' : '  ·  click to exclude';
+        document.getElementById('conf-hover-info').textContent =
+          `${d.name ?? d.type ?? '—'}  ·  ${(d.raw_labels ?? []).join(' · ')}  ·  confidence: ${d.confidence ?? '—'}${routeNote}${cullNote}`;
+        drawConfPath(d);
+      };
+      star.onmouseleave = () => { document.getElementById('conf-hover-info').textContent = ''; clearConfPath(); };
+      star.onclick = (e) => { e.stopPropagation(); armOrCullDevice(d); };
+    } else {
+      star.title = d.cull_category === 'junk'
+        ? `${d.name ?? 'device'} #${d._num} — junk (not a real detection)`
+        : `${d.name ?? 'device'} #${d._num} — excluded${d.cull_reason ? ': ' + d.cull_reason : ''}`;
+    }
     layer.appendChild(star);
 
     // Numbered badge, tied to the device's row (#) in the by-page device table —
     // lets you cross-reference a plotted point back to its table row, and click it
-    // to exclude a device that shouldn't have been counted (e.g. inside a hatched
-    // out-of-scope area the zone tool didn't catch). Same arm-then-confirm pattern
-    // as the exclude-zone delete flow — click once to arm (red, 5s to confirm),
-    // click again to actually exclude. Kept as a separate element next to the star
-    // rather than replacing it, so the star's color still reads as confidence
-    // at a glance (it only turns red while armed).
+    // (while not yet culled) to exclude a device that shouldn't have been counted
+    // (e.g. inside a hatched out-of-scope area the zone tool didn't catch). Same
+    // arm-then-confirm pattern as the exclude-zone delete flow — click once to arm
+    // (red, 5s to confirm), click again to actually exclude. Kept as a separate
+    // element next to the star rather than replacing it, so the star's color still
+    // reads as confidence at a glance (it only turns red while armed).
     if (d._num != null) {
       const numSize = 12 / confZoom;
       const badge = document.createElement('div');
       badge.className = 'conf-star'; // reuse hit-test/cleanup grouping in confRedraw's clear step
       badge.style.cssText = `position:absolute; min-width:${numSize*1.6}px; height:${numSize*1.4}px;
-        transform:translate(-50%,-50%); pointer-events:auto; z-index:11; cursor:pointer;
+        transform:translate(-50%,-50%); pointer-events:${culled ? 'none' : 'auto'}; z-index:11;
+        cursor:${culled ? 'default' : 'pointer'}; opacity:${culled ? 0.6 : 1};
         display:flex; align-items:center; justify-content:center;
         font-size:${numSize}px; line-height:1; font-family:monospace; font-weight:bold;
         color:#0a0a0a; background:${color}; border-radius:${3/confZoom}px;
         padding:0 ${2/confZoom}px;`;
       badge.textContent = d._num;
-      badge.title = armed ? 'Click again to exclude' : 'Click to exclude this device';
+      badge.title = culled ? 'Excluded' : (armed ? 'Click again to exclude' : 'Click to exclude this device');
       badge.style.left = (pos.x + size * 0.55) + 'px';
       badge.style.top  = (pos.y - size * 0.55) + 'px';
-      badge.onclick = (e) => { e.stopPropagation(); armOrCullDevice(d); };
+      if (!culled) badge.onclick = (e) => { e.stopPropagation(); armOrCullDevice(d); };
       layer.appendChild(badge);
     }
   }
 }
 
 // Click a device's star or number badge once to arm it (red, "click again to
-// exclude"), click again to actually cull it. Mirrors armOrDeleteExclZone's
-// arm-then-confirm pattern — no native confirm(), same 5s auto-disarm.
+// exclude"), click again to open the cull-reason panel (Junk vs Excluded, with
+// reason presets under Excluded) rather than confirming outright — see
+// showCullReasons/submitCull/submitCullOther/cancelCull below.
 //
 // Persistence: device_instances gets wiped and regenerated per (page_id,
 // device_type_id) on every batch re-run (the idempotent-runs rule), so simply
@@ -3794,16 +3842,58 @@ function confRedraw() {
 // around the device's point and confirms it through the SAME /api/page-regions
 // (kind:'exclude') call the manual zone-draw flow already uses — the batch
 // pipeline already honors that on every future run, so the cull holds. The device
-// is also stripped from batchResults immediately for instant feedback, rather
-// than waiting on a re-run.
-async function armOrCullDevice(d) {
+// is flagged 'manual_excluded' immediately for instant feedback (struck through
+// in the device table, shown as ✕ on the map, dropped from active counts) rather
+// than waiting on a re-run — kept in both lists rather than spliced out, so the
+// struck-through row and the ✕ marker are themselves the visible confirmation
+// the click applied.
+let confCullTarget = null; // the device currently in the cull-reason panel
+
+function armOrCullDevice(d) {
   if (confArmedForCull !== d._num) {
     confArmedForCull = d._num;
     confRedraw();
     setTimeout(() => { if (confArmedForCull === d._num) { confArmedForCull = null; confRedraw(); } }, 5000);
     return;
   }
+  openCullPanel(d);
+}
+
+function openCullPanel(d) {
+  confCullTarget = d;
+  document.getElementById('conf-cull-title').textContent =
+    `${d.name ?? 'device'} #${d._num} — how should this be recorded?`;
+  document.getElementById('conf-cull-step1').style.display = 'flex';
+  document.getElementById('conf-cull-step2').style.display = 'none';
+  document.getElementById('conf-cull-other').value = '';
+  document.getElementById('conf-cull-panel').style.display = 'block';
+}
+
+function showCullReasons() {
+  document.getElementById('conf-cull-step1').style.display = 'none';
+  document.getElementById('conf-cull-step2').style.display = 'block';
+}
+
+function cancelCull() {
   confArmedForCull = null;
+  confCullTarget = null;
+  document.getElementById('conf-cull-panel').style.display = 'none';
+  confRedraw();
+}
+
+function submitCullOther() {
+  const text = document.getElementById('conf-cull-other').value.trim();
+  if (!text) return;
+  submitCull('excluded', text);
+}
+
+// category: 'junk' | 'excluded'. reason: only meaningful for 'excluded' — a
+// preset label or the free-text "Other" entry.
+async function submitCull(category, reason) {
+  const d = confCullTarget;
+  if (!d) return;
+  confArmedForCull = null;
+  document.getElementById('conf-cull-panel').style.display = 'none';
 
   const pageId = pageCache[confPageNum]?.pageId;
   if (!pageId) { document.getElementById('conf-hover-info').textContent = 'Page not persisted — run the scan first'; confRedraw(); return; }
@@ -3818,7 +3908,9 @@ async function armOrCullDevice(d) {
   const x0 = Math.max(0, xIdentity - CULL_PAD_FRAC), x1 = Math.min(1, xIdentity + CULL_PAD_FRAC);
   const y0 = Math.max(0, yIdentity - CULL_PAD_FRAC), y1 = Math.min(1, yIdentity + CULL_PAD_FRAC);
   const polygon = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
-  const label = `Manual exclude — ${d.name ?? 'device'} #${d._num}`;
+  const label = category === 'junk'
+    ? `Manual exclude — ${d.name ?? 'device'} #${d._num} — junk (not a real detection)`
+    : `Manual exclude — ${d.name ?? 'device'} #${d._num} — excluded: ${reason}`;
 
   document.getElementById('conf-hover-info').textContent = 'Excluding…';
   try {
@@ -3826,19 +3918,38 @@ async function armOrCullDevice(d) {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ project_id: projectId, page_id: pageId, label, polygon, x0, y0, x1, y1, kind: 'exclude' })
     });
-    if (!r.ok) { const j = await r.json().catch(() => ({})); document.getElementById('conf-hover-info').textContent = 'Exclude failed: ' + (j.error || r.status); confRedraw(); return; }
-  } catch (e) { document.getElementById('conf-hover-info').textContent = 'Error: ' + e.message; confRedraw(); return; }
+    if (!r.ok) { const j = await r.json().catch(() => ({})); document.getElementById('conf-hover-info').textContent = 'Exclude failed: ' + (j.error || r.status); confCullTarget = null; confRedraw(); return; }
+  } catch (e) { document.getElementById('conf-hover-info').textContent = 'Error: ' + e.message; confCullTarget = null; confRedraw(); return; }
 
-  // Strip it from the live results now — don't wait for a re-run.
+  // Flag the ACTUAL device in res.devices, not this confDevices copy — confDevices
+  // is built via `.map(d => ({ ...d, _num }))`, a shallow copy, so mutating `d`
+  // here would only touch the copy and the table's flag check (which reads
+  // res.devices directly) would never see it. d._num - 1 is res.devices' index
+  // for this device, since confDevices was numbered off that same array/order.
   const res = batchResults[confPageNum];
   if (res) {
-    res.devices = (res.devices ?? []).filter(dev => dev !== d);
-    res.device_count = (res.device_count ?? 1) - 1;
+    const orig = res.devices?.[d._num - 1];
+    if (orig) {
+      const flags = new Set(orig.flags ?? []);
+      flags.add('manual_excluded');
+      orig.flags = [...flags];
+      orig.cull_category = category;    // 'junk' | 'excluded'
+      orig.cull_reason = category === 'excluded' ? reason : null;
+    }
+    res.device_count = Math.max(0, (res.device_count ?? 1) - 1);
     res.excluded_out_of_scope = (res.excluded_out_of_scope ?? 0) + 1;
     const bt = (res.by_type ?? []).find(t => t.name === d.name);
     if (bt) bt.count = Math.max(0, bt.count - 1);
   }
-  confDevices = confDevices.filter(dev => dev !== d);
+  // Update the local copy too, so this redraw immediately shows ✕ without
+  // needing the modal to be reopened.
+  const flags = new Set(d.flags ?? []);
+  flags.add('manual_excluded');
+  d.flags = [...flags];
+  d.cull_category = category;
+  d.cull_reason = category === 'excluded' ? reason : null;
+
+  confCullTarget = null;
   document.getElementById('conf-hover-info').textContent = '';
   clearConfPath();
   confRedraw();
@@ -3923,6 +4034,8 @@ async function openConfidenceModal(pageNum) {
   if (!res || !pdfDoc) { alert('Run the batch for this page first'); return; }
   confPageNum = pageNum;
   confArmedForCull = null;
+  confCullTarget = null;
+  document.getElementById('conf-cull-panel').style.display = 'none';
   confDevices = (res.devices || [])
     .map((d, i) => ({ ...d, _num: i + 1 }))   // matches the # column in the by-page device table
     .filter(d => d.x_norm != null && d.y_norm != null);
@@ -3974,7 +4087,12 @@ async function openConfidenceModal(pageNum) {
   confRedraw();
 }
 
-function closeConfidenceModal() { document.getElementById('conf-modal').style.display = 'none'; }
+function closeConfidenceModal() {
+  document.getElementById('conf-modal').style.display = 'none';
+  confArmedForCull = null;
+  confCullTarget = null;
+  document.getElementById('conf-cull-panel').style.display = 'none';
+}
 
 function lcSetQty() {
   if (!lcSel) return;
