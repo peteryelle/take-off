@@ -1152,8 +1152,11 @@ async function setPageRole(n, role) {
       body: JSON.stringify({ project_id: projectId, pdf_page_number: n, page_role: pageRole })
     });
     const j = await r.json().catch(() => ({}));
+    if (!r.ok) { setStatus('selection-status', `pg${n} role save failed: ${j.error || r.status}`, 'err'); return; }
     if (j?.page_id) pageCache[n].pageId = j.page_id;
-  } catch (e) { console.warn('set-page-role:', e.message); }
+  } catch (e) {
+    setStatus('selection-status', `pg${n} role save failed: ${e.message}`, 'err');
+  }
 }
 
 // Persist a page's TR assignment(s) — which TR this page hosts/is served by
@@ -1174,8 +1177,11 @@ async function setPageTR(n, fields) {
       body: JSON.stringify({ project_id: projectId, pdf_page_number: n, ...fields })
     });
     const j = await r.json().catch(() => ({}));
+    if (!r.ok) { setStatus('selection-status', `pg${n} TR save failed: ${j.error || r.status}`, 'err'); return; }
     if (j?.page_id) pageCache[n].pageId = j.page_id;
-  } catch (e) { console.warn('setPageTR:', e.message); }
+  } catch (e) {
+    setStatus('selection-status', `pg${n} TR save failed: ${e.message}`, 'err');
+  }
 }
 
 // Bulk-assign one role to every currently SELECTED page (the 39-page ergonomics:
