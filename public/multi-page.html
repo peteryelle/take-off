@@ -3489,12 +3489,15 @@ function renderByPage() {
       <th>#</th><th>Name</th><th>Labels</th>${showTR ? '<th>TR</th>' : ''}<th style="text-align:right;">X,Y</th><th style="text-align:right;">Dist (ft)</th>
     </tr></thead><tbody>`;
 
+    let noDistCount = 0;
     (res.devices ?? []).forEach((d, i) => {
       const dist = d.total_ft != null
         ? `<strong style="color:${d.tia_flag ? '#f07a7a' : '#7af07a'}">${d.total_ft}ft</strong>`
         : '—';
       const fl = d.flags ?? [];
       const culled = fl.includes('manual_excluded');
+      const isNoDist = !culled && fl.includes('out_of_scope');
+      if (isNoDist) noDistCount++;
       const cullLabel = d.cull_category === 'junk'
         ? '✕ junk'
         : d.cull_reason ? `✕ excluded — ${d.cull_reason}` : '✕ excluded';
@@ -3515,9 +3518,13 @@ function renderByPage() {
       // Culled rows stay in the table (not spliced out) as visual confirmation the
       // click applied, at a stable row number matched to what was on the map when
       // it was excluded — struck-through and dimmed rather than removed.
-      const rowBg = culled ? '' : (fl.includes('leader_expanded') ? ' style="background:rgba(192,140,255,0.05);"' : '');
+      // No-dist rows (outside every scope box on a scoped page) stay counted but
+      // collapse behind a single toggle below — still real, still in the BOM,
+      // just not worth 95 near-identical rows dominating the view by default.
+      const rowClass = isNoDist ? ` class="nodist-row-pg${pageNum}" style="display:none;"` : '';
+      const rowBg = (culled || isNoDist) ? '' : (fl.includes('leader_expanded') ? ' style="background:rgba(192,140,255,0.05);"' : '');
       const strike = culled ? ' style="text-decoration:line-through; opacity:0.45;"' : '';
-      html += `<tr${rowBg}>
+      html += `<tr${rowClass}${rowBg}>
         <td${strike} style="color:#555;">${i+1}</td>
         <td${strike} style="color:#f0c040;">${d.name ?? '—'}${!culled ? badge : ''}</td>
         <td${strike} style="color:#7ac0f0; font-family:monospace;">${(d.raw_labels ?? []).join(' · ')}</td>
@@ -3527,10 +3534,31 @@ function renderByPage() {
       </tr>`;
     });
 
+    if (noDistCount) {
+      const cols = showTR ? 6 : 5;
+      html += `<tr class="nodist-toggle-pg${pageNum}" style="cursor:pointer;" onclick="toggleNoDistRows(${pageNum})">
+        <td colspan="${cols}" style="text-align:center; color:#888; padding:6px; font-size:12px;">
+          <span id="nodist-arrow-pg${pageNum}">▸</span> ${noDistCount} outside the scoped area (no-dist) — click to show
+        </td>
+      </tr>`;
+    }
+
     html += `</tbody></table></div>`;
   }
 
   el.innerHTML = html || '<div style="color:#555;">No results yet</div>';
+}
+
+// Toggles visibility of a page's no-dist rows (collapsed by default — see the
+// isNoDist rowClass above). Rows still count toward the total and BOM; this only
+// affects whether they clutter the table view.
+function toggleNoDistRows(pageNum) {
+  const rows = document.querySelectorAll(`.nodist-row-pg${pageNum}`);
+  if (!rows.length) return;
+  const showing = rows[0].style.display !== 'none';
+  rows.forEach(r => { r.style.display = showing ? 'none' : ''; });
+  const arrow = document.getElementById(`nodist-arrow-pg${pageNum}`);
+  if (arrow) arrow.textContent = showing ? '▸' : '▾';
 }
 
 // ── CSV export of the full device-level results ──────────────────────
