@@ -246,9 +246,28 @@ export default async function handler(req) {
       .eq("kind", "exclude");
     if (exclErr) console.warn("[exclude regions]", exclErr.message);
 
+    // Small automatic buffer on genuinely drawn out-of-scope REGIONS — not the tiny
+    // per-device boxes the confidence-map cull flow auto-generates (those stay
+    // pixel-precise on purpose, so they don't swallow a nearby device on a dense
+    // sheet). A hand-drawn region is rarely pixel-perfect against the true wall/
+    // room edge; a device sitting just outside it by a hair is still meant to be
+    // excluded, not counted on a technicality. Confirmed on a real project: several
+    // rows of devices sat 0.011-0.018 outside a drawn boundary, all along the same
+    // wall line — a systematic under-draw, not scattered noise. 0.02 covers that
+    // with a little headroom. MIN_REGION_SIZE_FOR_BUFFER distinguishes "region" from
+    // "single-device cull box" by size (cull boxes are exactly CULL_PAD_FRAC*2 wide,
+    // well under this) rather than needing a schema flag for it.
+    const EXCLUDE_ZONE_BUFFER_FRAC = 0.02;
+    const MIN_REGION_SIZE_FOR_BUFFER = 0.05;
+
     const inExcludeZone = (x, y) => {
       if (x == null || y == null || !excludeRegions?.length) return false;
-      return excludeRegions.some((r) => r.x0 != null && x >= r.x0 && x <= r.x1 && y >= r.y0 && y <= r.y1);
+      return excludeRegions.some((r) => {
+        if (r.x0 == null) return false;
+        const isRegion = (r.x1 - r.x0) >= MIN_REGION_SIZE_FOR_BUFFER && (r.y1 - r.y0) >= MIN_REGION_SIZE_FOR_BUFFER;
+        const buf = isRegion ? EXCLUDE_ZONE_BUFFER_FRAC : 0;
+        return x >= r.x0 - buf && x <= r.x1 + buf && y >= r.y0 - buf && y <= r.y1 + buf;
+      });
     };
     const excludedCount = reconciled.filter((dev) => !dev._manual && inExcludeZone(dev.x, dev.y)).length;
     let inScope = reconciled.filter((dev) => dev._manual || !inExcludeZone(dev.x, dev.y));
