@@ -1439,12 +1439,19 @@ async function runDemarcScan() {
     `✓ ${scanResult.pages_scanned} pages scanned · ${scanResult.tr_rooms} TR rooms found · ${scanResult.off_sheet} need configuration`,
     scanResult.off_sheet > 0 ? '' : 'ok');
 
-  // Store TR map
-  trMap = {};
-  for (const tr of (scanResult.tr_map ?? [])) trMap[tr.name] = tr;
+  // Merge, don't overwrite — same principle as the pageCache merge above.
+  // pass-scan only returns schedule-derived TRs (empty for a no-schedule project
+  // like this one, per its own doc comment: "pages without a schedule contribute
+  // no auto TRs"). Wiping trMap first discarded every manually-placed pin that
+  // had just been restored from demarcs — even though this scan never touches
+  // the demarcs table at all. Nothing was actually lost server-side; the visible
+  // list just went blank.
+  for (const tr of (scanResult.tr_map ?? [])) {
+    trMap[tr.name] = { ...(trMap[tr.name] ?? {}), ...tr };
+  }
 
-  renderPageAssignmentTable(scanResult.tr_map ?? []);
-  renderTRMap(scanResult.tr_map ?? []);
+  renderPageAssignmentTable(Object.values(trMap));
+  renderTRMap(Object.values(trMap));
 }
 
 // ── Page → TR Assignment Table ────────────────────────────────────
@@ -3898,11 +3905,11 @@ function confRedraw() {
     star.className = 'conf-star';
     // Counter-scale so the star's on-screen size stays ~constant across zoom levels.
     star.style.cssText = `position:absolute; width:${size}px; height:${size}px;
-      transform:translate(-50%,-50%); pointer-events:${culled ? 'none' : 'auto'}; z-index:10;
+      transform:translate(-50%,-50%); pointer-events:auto; z-index:10;
       display:flex; align-items:center; justify-content:center;
       font-size:${size}px; line-height:1; color:${color}; opacity:${culled ? 0.6 : 1};
       text-shadow:0 0 ${2/confZoom}px rgba(0,0,0,0.9), 0 0 ${1/confZoom}px rgba(0,0,0,0.9);
-      cursor:${culled ? 'default' : 'pointer'};`;
+      cursor:pointer;`;
     // Culled devices show as ✕ instead of ★ — same permanent-record reasoning as
     // the table's strikethrough: confirms the click applied, doesn't just vanish.
     star.textContent = culled ? '✕' : '★';
@@ -3919,9 +3926,11 @@ function confRedraw() {
       star.onmouseleave = () => { document.getElementById('conf-hover-info').textContent = ''; clearConfPath(); };
       star.onclick = (e) => { e.stopPropagation(); armOrCullDevice(d); };
     } else {
-      star.title = d.cull_category === 'junk'
+      star.title = (d.cull_category === 'junk'
         ? `${d.name ?? 'device'} #${d._num} — junk (not a real detection)`
-        : `${d.name ?? 'device'} #${d._num} — excluded${d.cull_reason ? ': ' + d.cull_reason : ''}`;
+        : `${d.name ?? 'device'} #${d._num} — excluded${d.cull_reason ? ': ' + d.cull_reason : ''}`)
+        + ' — click to restore';
+      star.onclick = (e) => { e.stopPropagation(); unCullDevice(d); };
     }
     layer.appendChild(star);
 
@@ -3945,8 +3954,11 @@ function confRedraw() {
         ${pinned ? `box-shadow:0 0 0 ${2/confZoom}px #fff;` : ''}`;
       badge.textContent = d._num;
       badge.title = culled ? 'Excluded' : (pinned ? 'Click to hide this path' : 'Click to show this device\'s path');
-      badge.style.left = (pos.x + size * 0.55) + 'px';
-      badge.style.top  = (pos.y - size * 0.55) + 'px';
+      // 1.25x offset (was 0.55x) — at typical zoom the old offset put the badge's
+      // bounding box back inside the star's own, so a click aimed at either one
+      // could land on the other. This gives them a real gap.
+      badge.style.left = (pos.x + size * 1.25) + 'px';
+      badge.style.top  = (pos.y - size * 1.25) + 'px';
       if (!culled) badge.onclick = (e) => { e.stopPropagation(); togglePinnedPath(d); };
       layer.appendChild(badge);
     }
@@ -4045,12 +4057,14 @@ async function submitCull(category, reason) {
     : `Manual exclude — ${d.name ?? 'device'} #${d._num} — excluded: ${reason}`;
 
   document.getElementById('conf-hover-info').textContent = 'Excluding…';
+  let regionId;
   try {
     const r = await fetch(`${base()}/api/page-regions`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ project_id: projectId, page_id: pageId, label, polygon, x0, y0, x1, y1, kind: 'exclude' })
     });
     if (!r.ok) { const j = await r.json().catch(() => ({})); document.getElementById('conf-hover-info').textContent = 'Exclude failed: ' + (j.error || r.status); confCullTarget = null; confRedraw(); return; }
+    regionId = (await r.json())?.id;
   } catch (e) { document.getElementById('conf-hover-info').textContent = 'Error: ' + e.message; confCullTarget = null; confRedraw(); return; }
 
   // Flag the ACTUAL device in res.devices, not this confDevices copy — confDevices
@@ -4067,6 +4081,7 @@ async function submitCull(category, reason) {
       orig.flags = [...flags];
       orig.cull_category = category;    // 'junk' | 'excluded'
       orig.cull_reason = category === 'excluded' ? reason : null;
+      orig.cull_region_id = regionId;   // lets unCullDevice() delete precisely this box, not guess
     }
     res.device_count = Math.max(0, (res.device_count ?? 1) - 1);
     res.excluded_out_of_scope = (res.excluded_out_of_scope ?? 0) + 1;
@@ -4080,10 +4095,55 @@ async function submitCull(category, reason) {
   d.flags = [...flags];
   d.cull_category = category;
   d.cull_reason = category === 'excluded' ? reason : null;
+  d.cull_region_id = regionId;
 
   confCullTarget = null;
   document.getElementById('conf-hover-info').textContent = '';
   clearConfPath();
+  confRedraw();
+  renderResults();
+}
+
+// Undo a cull — deletes the exact exclude-region row created for this device
+// (via cull_region_id, captured at cull time) rather than guessing which box
+// among possibly many on the page belongs to it, then clears the flag/category/
+// reason so it goes back to being a normal, counted, clickable star.
+async function unCullDevice(d) {
+  if (!d.cull_region_id) {
+    // Culled before this field existed, or the region id never made it back —
+    // clear the local flag anyway so the person isn't stuck, but the auto-drawn
+    // exclude box (if any) will need manual cleanup since we can't identify it.
+    document.getElementById('conf-hover-info').textContent = 'Restoring (exclude box may need manual cleanup — no region id on record)…';
+  } else {
+    document.getElementById('conf-hover-info').textContent = 'Restoring…';
+    try {
+      const r = await fetch(`${base()}/api/page-regions?id=${d.cull_region_id}`, { method: 'DELETE' });
+      if (!r.ok) { const j = await r.json().catch(() => ({})); document.getElementById('conf-hover-info').textContent = 'Restore failed: ' + (j.error || r.status); confRedraw(); return; }
+    } catch (e) { document.getElementById('conf-hover-info').textContent = 'Error: ' + e.message; confRedraw(); return; }
+  }
+
+  const res = batchResults[confPageNum];
+  if (res) {
+    const orig = res.devices?.[d._num - 1];
+    if (orig) {
+      const flags = new Set(orig.flags ?? []);
+      flags.delete('manual_excluded');
+      orig.flags = [...flags];
+      orig.cull_category = null;
+      orig.cull_reason = null;
+      orig.cull_region_id = null;
+    }
+    res.device_count = (res.device_count ?? 0) + 1;
+    res.excluded_out_of_scope = Math.max(0, (res.excluded_out_of_scope ?? 1) - 1);
+    const bt = (res.by_type ?? []).find(t => t.name === d.name);
+    if (bt) bt.count = (bt.count ?? 0) + 1;
+  }
+  d.flags = (d.flags ?? []).filter(f => f !== 'manual_excluded');
+  d.cull_category = null;
+  d.cull_reason = null;
+  d.cull_region_id = null;
+
+  document.getElementById('conf-hover-info').textContent = '';
   confRedraw();
   renderResults();
 }
