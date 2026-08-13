@@ -493,7 +493,7 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
      z-index:300; flex-direction:column; align-items:center; justify-content:center;">
   <div style="color:#f0c040; font-size:15px; font-weight:bold; margin-bottom:4px;" id="conf-title">Confidence Map</div>
   <div style="color:#aaa; font-size:13px; margin-bottom:8px;">
-    Each star is a counted device · color = confidence · click a star to exclude it · click its number to isolate its path · ✕ = excluded · click empty space to add a missed device · hover for detail · scroll to zoom · drag to pan
+    Each star is a counted device · color = confidence · click a star to exclude it · click its number to isolate its path · ✕ = excluded · click empty space to add a missed device · filter by type to triage one device type at a time · hover for detail · scroll to zoom · drag to pan
   </div>
   <div style="display:flex; gap:8px; margin-bottom:8px; align-items:center;">
     <button onclick="confZoomBtn(1.5)" style="padding:3px 12px;">＋</button>
@@ -505,6 +505,8 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
     <span style="color:#f07a7a; font-size:11px;">● low</span>
     <button id="conf-paths-toggle" onclick="toggleConfPaths()" class="info"
       style="padding:3px 10px; font-size:11px; margin-left:12px;">🔀 show path confidence</button>
+    <select id="conf-type-filter" onchange="setConfTypeFilter(this.value)"
+      style="padding:3px 8px; font-size:11px; margin-left:12px; max-width:220px;"></select>
   </div>
   <div id="conf-wrap" style="overflow:hidden; width:88vw; height:60vh; position:relative;
        cursor:grab; border:1px solid #333;">
@@ -3831,6 +3833,7 @@ async function openLeaderModal(pageNum) {
 // prone to (see click-coordinate bug notes elsewhere in this file).
 let confPageNum = null, confDevices = [];
 let confPinnedPath = null;   // device whose path is click-isolated (badge click), independent of hover and the arm-for-cull state
+let confTypeFilter = null;   // device name to show exclusively, or null for all — lets a busy page be triaged one type at a time
 let confArmedForCull = null;   // _num of a device clicked once, awaiting a second click to exclude
 // Default padding (identity-frame fraction) around a culled device's point when
 // auto-building its exclude box. Small enough not to swallow a close neighbor on a
@@ -3884,6 +3887,7 @@ function confRedraw() {
 
   for (const d of confDevices) {
     if (d.x_norm == null || d.y_norm == null) continue;
+    if (confTypeFilter && d.name !== confTypeFilter) continue;   // triage one type at a time on a busy sheet
     const culled = (d.flags ?? []).includes('manual_excluded');
     const armed  = !culled && d._num != null && d._num === confArmedForCull;
     const color  = culled ? '#666' : armed ? '#f07a7a' : (CONF_COLOR[d.confidence] ?? '#888');
@@ -4239,6 +4243,7 @@ function renderAllConfPaths() {
   svg.setAttribute('viewBox', `0 0 ${confCW} ${confCH}`);
   if (confShowAllPaths) {
     for (const d of confDevices) {
+      if (confTypeFilter && d.name !== confTypeFilter) continue;
       const p = computeDevicePath(d);
       if (!p) continue;
       svgPolyline(svg, p.points, PATH_TIER_COLOR[p.tier], Math.max(0.75, 1.5 / confZoom), 0.6);
@@ -4261,6 +4266,15 @@ function toggleConfPaths() {
   renderAllConfPaths();
 }
 
+// Show only one device type's stars/badges/paths at a time — lets a busy sheet
+// (e.g. 144 devices, 40 of them the type actually being triaged) be worked
+// through without the other ~100 in the way. '' (All types) shows everything.
+function setConfTypeFilter(name) {
+  confTypeFilter = name || null;
+  confRedraw();
+  renderAllConfPaths();
+}
+
 // Hover highlight: redraw the background layer (if on), then overlay this ONE device's
 // path in bright white so it reads clearly against the dimmer confidence-colored layer.
 function drawConfPath(d) {
@@ -4279,10 +4293,24 @@ async function openConfidenceModal(pageNum) {
   confArmedForCull = null;
   confCullTarget = null;
   confPinnedPath = null;
+  confTypeFilter = null;
   document.getElementById('conf-cull-panel').style.display = 'none';
   confDevices = (res.devices || [])
     .map((d, i) => ({ ...d, _num: i + 1 }))   // matches the # column in the by-page device table
     .filter(d => d.x_norm != null && d.y_norm != null);
+
+  // Populate the type filter from what's actually on this page, with counts, so a
+  // busy sheet can be triaged one type at a time (e.g. all 40 WAPs, none of the
+  // other 104 devices in the way). "All types" first, always resets to it on open.
+  const typeCounts = {};
+  for (const d of confDevices) typeCounts[d.name ?? '—'] = (typeCounts[d.name ?? '—'] ?? 0) + 1;
+  const filterSel = document.getElementById('conf-type-filter');
+  filterSel.innerHTML = '<option value="">All types</option>' +
+    Object.entries(typeCounts)
+      .sort((a, b) => b[1] - a[1])
+      .map(([name, n]) => `<option value="${name.replace(/"/g, '&quot;')}">${name} (${n})</option>`)
+      .join('');
+  filterSel.value = '';
   confZoom = 1; confPanX = 0; confPanY = 0;
 
   const cv   = document.getElementById('conf-canvas');
