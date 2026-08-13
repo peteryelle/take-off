@@ -77,6 +77,7 @@ export default async function handler(req) {
         port_count_data, port_count_voice,
         run_length_ft, total_ft, tia_flag, tia_reason,
         demarc_id, confidence, xy_source, symbol_via,
+        flags, cull_category, cull_reason,
         device_types ( id, legend_id, name )
       `)
       .in("page_id",

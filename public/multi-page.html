@@ -4073,12 +4073,11 @@ async function submitCull(category, reason) {
   // res.devices directly) would never see it. d._num - 1 is res.devices' index
   // for this device, since confDevices was numbered off that same array/order.
   const res = batchResults[confPageNum];
+  const flagsArr = [...new Set([...(res?.devices?.[d._num - 1]?.flags ?? []), 'manual_excluded'])];
   if (res) {
     const orig = res.devices?.[d._num - 1];
     if (orig) {
-      const flags = new Set(orig.flags ?? []);
-      flags.add('manual_excluded');
-      orig.flags = [...flags];
+      orig.flags = flagsArr;
       orig.cull_category = category;    // 'junk' | 'excluded'
       orig.cull_reason = category === 'excluded' ? reason : null;
       orig.cull_region_id = regionId;   // lets unCullDevice() delete precisely this box, not guess
@@ -4088,11 +4087,23 @@ async function submitCull(category, reason) {
     const bt = (res.by_type ?? []).find(t => t.name === d.name);
     if (bt) bt.count = Math.max(0, bt.count - 1);
   }
+  // Persist to the row itself — previously only the exclude-region was saved
+  // (stops a future re-run from re-detecting it), but the CURRENT row was never
+  // patched, so a plain reload without a fresh run showed every culled device
+  // as untouched. Best-effort: the exclude-region already landed, so the cull
+  // still "holds" on the next run even if this specific write fails.
+  const rowId = res?.devices?.[d._num - 1]?.id;
+  if (rowId) {
+    try {
+      await fetch(`${base()}/api/device-instance`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: rowId, flags: flagsArr, cull_category: category, cull_reason: category === 'excluded' ? reason : null })
+      });
+    } catch (e) { console.warn('[device-instance patch]', e.message); }
+  }
   // Update the local copy too, so this redraw immediately shows ✕ without
   // needing the modal to be reopened.
-  const flags = new Set(d.flags ?? []);
-  flags.add('manual_excluded');
-  d.flags = [...flags];
+  d.flags = flagsArr;
   d.cull_category = category;
   d.cull_reason = category === 'excluded' ? reason : null;
   d.cull_region_id = regionId;
@@ -4123,12 +4134,11 @@ async function unCullDevice(d) {
   }
 
   const res = batchResults[confPageNum];
+  const clearedFlags = (res?.devices?.[d._num - 1]?.flags ?? []).filter(f => f !== 'manual_excluded');
   if (res) {
     const orig = res.devices?.[d._num - 1];
     if (orig) {
-      const flags = new Set(orig.flags ?? []);
-      flags.delete('manual_excluded');
-      orig.flags = [...flags];
+      orig.flags = clearedFlags;
       orig.cull_category = null;
       orig.cull_reason = null;
       orig.cull_region_id = null;
@@ -4138,7 +4148,19 @@ async function unCullDevice(d) {
     const bt = (res.by_type ?? []).find(t => t.name === d.name);
     if (bt) bt.count = (bt.count ?? 0) + 1;
   }
-  d.flags = (d.flags ?? []).filter(f => f !== 'manual_excluded');
+  // Persist the clear — same reasoning as submitCull's write: without this, the
+  // row itself stays flagged manual_excluded in the database even after the
+  // exclude-region is gone, so a reload would show it culled again.
+  const rowId = res?.devices?.[d._num - 1]?.id;
+  if (rowId) {
+    try {
+      await fetch(`${base()}/api/device-instance`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: rowId, flags: clearedFlags, cull_category: null, cull_reason: null })
+      });
+    } catch (e) { console.warn('[device-instance patch]', e.message); }
+  }
+  d.flags = clearedFlags;
   d.cull_category = null;
   d.cull_reason = null;
   d.cull_region_id = null;
@@ -4860,10 +4882,17 @@ async function restoreFromSupabase(pid) {
         if (!pgNum) continue;
         if (!byPage[pgNum]) byPage[pgNum] = {
           device_count: 0, by_type: {}, devices: [],
-          tia_violations: 0
+          tia_violations: 0, excluded_out_of_scope: 0
         };
-        byPage[pgNum].device_count++;
+        // Culled devices stay in devices[] (the table renders their strikethrough
+        // from inst.flags/cull_category/cull_reason), but — matching live-run
+        // behavior in submitCull/unCullDevice — don't count toward the active
+        // total or by-type tallies. Without this, a reload would both lose the
+        // struck-through display AND double-count every culled device.
+        const culled = (inst.flags ?? []).includes('manual_excluded');
         byPage[pgNum].devices.push(inst);
+        if (culled) { byPage[pgNum].excluded_out_of_scope++; continue; }
+        byPage[pgNum].device_count++;
         if (inst.tia_flag) byPage[pgNum].tia_violations++;
         const k = inst.legend_id ?? String(inst.device_type_id);
         byPage[pgNum].by_type[k] = byPage[pgNum].by_type[k]
