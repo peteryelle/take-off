@@ -99,6 +99,24 @@ export function contentFrame(textCenters = [], vpW = 0, vpH = 0) {
  * @returns {Promise<Array>} [{ points:[[x,y]...], closed:true, filled:true, fill_rgb:[r,g,b] }]
  */
 export async function extractFilledSubpaths(page, OPS) {
+  return (await extractSubpaths(page, OPS)).filter((s) => s.filled);
+}
+
+/**
+ * Same operator-list walk as extractFilledSubpaths, but keeps BOTH filled and
+ * stroke-only sub-paths (tagged filled:true/false) instead of discarding strokes.
+ * Added for ring verification (geometry.js:findEncirclingRing) — a symbol's
+ * encircling outline is typically drawn as a stroke with no fill, which the
+ * fills-only extractor never captured at all. extractFilledSubpaths is now a
+ * one-line wrapper over this, so its existing return shape/contract is
+ * untouched — no existing consumer or gate sees a behavior change from adding
+ * this function.
+ *
+ * @param {Object} page  an opened pdf.js page (has getOperatorList())
+ * @param {Object} OPS   that runtime's pdfjsLib.OPS table
+ * @returns {Promise<Array>} [{ points:[[x,y]...], closed:true, filled:bool, fill_rgb:[r,g,b] }]
+ */
+export async function extractSubpaths(page, OPS) {
   const { fnArray, argsArray } = await page.getOperatorList();
   let ctm = [1, 0, 0, 1, 0, 0];
   const stack = [];
@@ -109,7 +127,7 @@ export async function extractFilledSubpaths(page, OPS) {
   const startSub = (x, y) => { cur.push({ points: [[x, y]] }); pt = [x, y]; };
   const lineTo = (x, y) => { if (!cur.length) startSub(x, y); else { cur[cur.length - 1].points.push([x, y]); pt = [x, y]; } };
   const flush = (f) => {
-    if (f) for (const sp of cur) if (sp.points.length >= 2) out.push({ points: sp.points, closed: true, filled: true, fill_rgb: fill.slice() });
+    for (const sp of cur) if (sp.points.length >= 2) out.push({ points: sp.points, closed: true, filled: f, fill_rgb: fill.slice() });
     cur = []; pt = null;
   };
   for (let i = 0; i < fnArray.length; i++) {
@@ -134,7 +152,8 @@ export async function extractFilledSubpaths(page, OPS) {
         }
         break;
       }
-      case OPS.fill: case OPS.eoFill: case OPS.fillStroke: case OPS.eoFillStroke: case OPS.closeFillStroke: flush(true); break;
+      case OPS.fill: case OPS.eoFill: flush(true); break;
+      case OPS.fillStroke: case OPS.eoFillStroke: case OPS.closeFillStroke: flush(true); break;
       case OPS.stroke: case OPS.closeStroke: flush(false); break;
       case OPS.endPath: cur = []; pt = null; break;
     }
@@ -146,6 +165,59 @@ export async function extractFilledSubpaths(page, OPS) {
 export function filterByFill(subpaths = [], target = null, tol = 48) {
   if (!target) return subpaths.slice();
   return subpaths.filter((s) => Array.isArray(s.fill_rgb) && s.fill_rgb.every((v, i) => Math.abs(v - target[i]) <= tol));
+}
+
+/**
+ * Is this closed point-loop roughly circular — constant radius from its own
+ * centroid, within `tol` (relative standard deviation of the radius samples)?
+ * PDF vector circles are drawn precisely (not scanned/rasterized), so a tight
+ * default tolerance is safe. Too few points to judge (a triangle, a short
+ * segment) returns null rather than a false circle call.
+ *
+ * @param {Array} points [[x,y]...] closed loop, any consistent coordinate frame
+ * @param {number} tol   relative std-dev of radius allowed (default 0.15)
+ * @returns {{center:[x,y], radius:number}|null}
+ */
+export function isCircleLike(points, tol = 0.15) {
+  if (!Array.isArray(points) || points.length < 8) return null;
+  const c = centroid(points);
+  const radii = points.map(([x, y]) => Math.hypot(x - c[0], y - c[1]));
+  const meanR = radii.reduce((a, b) => a + b, 0) / radii.length;
+  if (meanR <= 0) return null;
+  const variance = radii.reduce((a, r) => a + (r - meanR) ** 2, 0) / radii.length;
+  const relStd = Math.sqrt(variance) / meanR;
+  return relStd <= tol ? { center: c, radius: meanR } : null;
+}
+
+/**
+ * Does some stroke-only sub-path form a circle that genuinely WRAPS AROUND this
+ * blob — center close to the blob's own centroid, radius meaningfully bigger
+ * (not just any nearby circle, and not one so much bigger it's clearly an
+ * unrelated feature elsewhere on the sheet)? Ring verification for symbol types
+ * whose real glyph is a filled shape inside a circular outline (e.g. WAP) — the
+ * outline is typically an unfilled stroke, which extractFilledSubpaths never
+ * captured; extractSubpaths(...).filter(s => !s.filled) is the intended source
+ * for `strokeSubpaths` here.
+ *
+ * @param {[number,number]} blobCentroid  the candidate blob's [x,y] (normalized)
+ * @param {number} blobRadius             the blob's own rough radius (e.g. sqrt(area/PI))
+ * @param {Array} strokeSubpaths          [{points, filled:false, ...}] normalized, same frame
+ * @param {Object} opts { centerTol, minRadiusRatio=1.1, maxRadiusRatio=3.0 }
+ * @returns {{center, radius}|null} the matching ring, or null if none found
+ */
+export function findEncirclingRing(blobCentroid, blobRadius, strokeSubpaths = [], opts = {}) {
+  if (!(blobRadius > 0)) return null;
+  const centerTol = opts.centerTol ?? blobRadius * 0.5;
+  const minRadiusRatio = opts.minRadiusRatio ?? 1.1;
+  const maxRadiusRatio = opts.maxRadiusRatio ?? 3.0;
+  for (const sp of strokeSubpaths) {
+    const circle = isCircleLike(sp.points, opts.circleTol);
+    if (!circle) continue;
+    const dCenter = Math.hypot(circle.center[0] - blobCentroid[0], circle.center[1] - blobCentroid[1]);
+    const ratio = circle.radius / blobRadius;
+    if (dCenter <= centerTol && ratio >= minRadiusRatio && ratio <= maxRadiusRatio) return circle;
+  }
+  return null;
 }
 
 /**
@@ -261,11 +333,16 @@ export function classifyCameraBlob(blob, opts = {}) {
 export async function extractCameraBlobs(page, OPS, textCenters = [], opts = {}) {
   const { vpW = 0, vpH = 0, fill = null, fillTol = 48, bodyArea = 2e-5 } = opts;
   const frame = contentFrame(textCenters, vpW, vpH);
-  const raw = await extractFilledSubpaths(page, OPS);
+  // One operator-list walk for both — extractSubpaths returns filled AND
+  // stroke-only paths tagged; splitting locally avoids parsing the PDF twice.
+  const rawAll = await extractSubpaths(page, OPS);
+  const raw = rawAll.filter((s) => s.filled);
+  const rawStrokes = rawAll.filter((s) => !s.filled);
   const normed = raw.map((s) => ({ ...s, points: s.points.map(([x, y]) => frame.norm(x, y)) }));
+  const normedStrokes = rawStrokes.map((s) => ({ ...s, points: s.points.map(([x, y]) => frame.norm(x, y)) }));
   const kept = filterByFill(normed, fill, fillTol);
   const blobs = groupSubpaths(kept, { bodyArea });
-  return { blobs, frame, n_subpaths_raw: raw.length, n_subpaths_kept: kept.length };
+  return { blobs, frame, n_subpaths_raw: raw.length, n_subpaths_kept: kept.length, strokeSubpaths: normedStrokes };
 }
 
-export default { contentFrame, extractFilledSubpaths, filterByFill, groupSubpaths, classifyCameraBlob, extractCameraBlobs, polyArea };
+export default { contentFrame, extractFilledSubpaths, extractSubpaths, filterByFill, groupSubpaths, isCircleLike, findEncirclingRing, classifyCameraBlob, extractCameraBlobs, polyArea };
