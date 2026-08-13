@@ -495,7 +495,7 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
   <div style="color:#aaa; font-size:13px; margin-bottom:8px;">
     Each star is a counted device · color = confidence · click a star to exclude it · click its number to isolate its path · ✕ = excluded · click empty space to add a missed device · filter by type to triage one device type at a time · hover for detail · scroll to zoom · drag to pan
   </div>
-  <div style="display:flex; gap:8px; margin-bottom:8px; align-items:center;">
+  <div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:8px; align-items:center; justify-content:center;">
     <button onclick="confZoomBtn(1.5)" style="padding:3px 12px;">＋</button>
     <button onclick="confZoomBtn(1/1.5)" style="padding:3px 12px;">－</button>
     <button onclick="confReset()" class="info" style="padding:3px 10px; font-size:11px;">Reset</button>
