@@ -493,7 +493,7 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
      z-index:300; flex-direction:column; align-items:center; justify-content:center;">
   <div style="color:#f0c040; font-size:15px; font-weight:bold; margin-bottom:4px;" id="conf-title">Confidence Map</div>
   <div style="color:#aaa; font-size:13px; margin-bottom:8px;">
-    Each star is a counted device · color = confidence · hover for detail · scroll to zoom · drag to pan
+    Each star is a counted device · color = confidence · number = row in device table · hover for detail · scroll to zoom · drag to pan
   </div>
   <div style="display:flex; gap:8px; margin-bottom:8px; align-items:center;">
     <button onclick="confZoomBtn(1.5)" style="padding:3px 12px;">＋</button>
@@ -3745,6 +3745,26 @@ function confRedraw() {
     };
     star.onmouseleave = () => { document.getElementById('conf-hover-info').textContent = ''; clearConfPath(); };
     layer.appendChild(star);
+
+    // Numbered badge, tied to the device's row (#) in the by-page device table —
+    // lets you cross-reference a plotted point back to its table row. Kept as a
+    // separate element next to the star rather than replacing it, so the star's
+    // color still reads as the confidence signal at a glance.
+    if (d._num != null) {
+      const numSize = 12 / confZoom;
+      const badge = document.createElement('div');
+      badge.className = 'conf-star'; // reuse hit-test/cleanup grouping in confRedraw's clear step
+      badge.style.cssText = `position:absolute; min-width:${numSize*1.6}px; height:${numSize*1.4}px;
+        transform:translate(-50%,-50%); pointer-events:none; z-index:11;
+        display:flex; align-items:center; justify-content:center;
+        font-size:${numSize}px; line-height:1; font-family:monospace; font-weight:bold;
+        color:#0a0a0a; background:${color}; border-radius:${3/confZoom}px;
+        padding:0 ${2/confZoom}px;`;
+      badge.textContent = d._num;
+      badge.style.left = (pos.x + size * 0.55) + 'px';
+      badge.style.top  = (pos.y - size * 0.55) + 'px';
+      layer.appendChild(badge);
+    }
   }
 }
 
@@ -3825,7 +3845,9 @@ async function openConfidenceModal(pageNum) {
   const res = batchResults[pageNum];
   if (!res || !pdfDoc) { alert('Run the batch for this page first'); return; }
   confPageNum = pageNum;
-  confDevices = (res.devices || []).filter(d => d.x_norm != null && d.y_norm != null);
+  confDevices = (res.devices || [])
+    .map((d, i) => ({ ...d, _num: i + 1 }))   // matches the # column in the by-page device table
+    .filter(d => d.x_norm != null && d.y_norm != null);
   confZoom = 1; confPanX = 0; confPanY = 0;
 
   const cv   = document.getElementById('conf-canvas');
