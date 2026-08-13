@@ -645,7 +645,7 @@ function setStatus(id, msg, cls='') {
     projectId = parseInt(stored);
     updateLinks();
     document.getElementById('device-type-bar').style.display = 'block';
-    restoreFromSupabase(parseInt(stored));
+    restoreFromSupabase(parseInt(stored)).then(() => attemptAutoLoadPdf(parseInt(stored)));
   }
 })();
 function updateLinks() {
@@ -968,6 +968,7 @@ function showPDFFilename(name) {
 // (nothing stored yet, expired signed URL, network hiccup) so the existing
 // fallback flow still works exactly as it did before this existed.
 async function attemptAutoLoadPdf(pid) {
+  if (pdfDoc) return true;   // already loaded this session (manual pick or a prior auto-load) — nothing to do
   try {
     const r = await fetch(`${base()}/api/pdf-storage-url`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -988,7 +989,7 @@ async function attemptAutoLoadPdf(pid) {
     return true;
   } catch (e) {
     console.warn('[attemptAutoLoadPdf]', e.message);
-    setStatus('pdf-status', '', '');
+    setStatus('pdf-status', `Could not auto-load the persisted PDF (${e.message}) — please re-attach below`, 'err');
     return false;
   }
 }
@@ -1820,7 +1821,7 @@ async function deleteTRRoom(trName) {
 
   // Reload state from Supabase so trMap, the page-assignment table and every
   // rendered card reflect exactly what's left in the demarcs table.
-  if (projectId) await restoreFromSupabase(projectId);
+  if (projectId) { await restoreFromSupabase(projectId); await attemptAutoLoadPdf(projectId); }
 }
 
 function renderTRMap(trs) {
@@ -4784,19 +4785,22 @@ async function restoreFromSupabase(pid) {
       setDeviceTypeBarReady(`${dtCount} device type${dtCount !== 1 ? 's' : ''} configured`);
     }
 
-    if (selectedPages.size > 0) {
-      const autoLoaded = await attemptAutoLoadPdf(pid);
-      if (!autoLoaded) {
-        // Show re-attach bar if we have a known filename from localStorage or project record
-        const savedName = localStorage.getItem('mp_last_pdf_name');
-        const reBar  = document.getElementById('pdf-reattach-bar');
-        const reName = document.getElementById('pdf-last-name');
-        if (savedName && reBar && reName && reBar.style.display === 'none') {
-          reName.textContent = savedName;
-          reBar.style.display = 'block';
-        }
-        setStatus('pdf-status', '', '');
+    // PDF auto-load runs independently, outside this function's try/catch — see
+    // the caller. Kept OUT of here deliberately: this function covers ~180 lines
+    // of restore logic (TR maps, batch results, device types, rollups), and an
+    // unrelated failure anywhere in that meant auto-load silently never ran, with
+    // no visible error — exactly what caused a real persisted PDF to still need
+    // manual re-attaching. Show the fallback bar now; the caller's auto-load
+    // attempt will hide it again via showPDFFilename() if it succeeds.
+    {
+      const savedName = localStorage.getItem('mp_last_pdf_name');
+      const reBar  = document.getElementById('pdf-reattach-bar');
+      const reName = document.getElementById('pdf-last-name');
+      if (savedName && reBar && reName && reBar.style.display === 'none') {
+        reName.textContent = savedName;
+        reBar.style.display = 'block';
       }
+      setStatus('pdf-status', '', '');
     }
 
   } catch(e) {
