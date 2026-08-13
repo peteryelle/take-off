@@ -3677,6 +3677,12 @@ async function openLeaderModal(pageNum) {
 // the getBoundingClientRect/CSS-clamp drift that plain overlay positioning is
 // prone to (see click-coordinate bug notes elsewhere in this file).
 let confPageNum = null, confDevices = [];
+let confArmedForCull = null;   // _num of a device clicked once, awaiting a second click to exclude
+// Default padding (identity-frame fraction) around a culled device's point when
+// auto-building its exclude box. Small enough not to swallow a close neighbor on a
+// dense sheet, generous enough that a re-run's slightly different symbol center
+// still lands inside it. Same units as page_regions' x0/y0/x1/y1.
+const CULL_PAD_FRAC = 0.012;
 let confWaypoints = [], confDemarcs = {};   // for routed-path visualization on hover
 let confShowAllPaths = false;               // path-confidence layer toggle
 let confZoom = 1, confPanX = 0, confPanY = 0, confDrag = null, confCW = 0, confCH = 0;
@@ -3722,7 +3728,8 @@ function confRedraw() {
 
   for (const d of confDevices) {
     if (d.x_norm == null || d.y_norm == null) continue;
-    const color = CONF_COLOR[d.confidence] ?? '#888';
+    const armed = d._num != null && d._num === confArmedForCull;
+    const color = armed ? '#f07a7a' : (CONF_COLOR[d.confidence] ?? '#888');
     const star = document.createElement('div');
     star.className = 'conf-star';
     // Counter-scale so the star's on-screen size stays ~constant across zoom levels.
@@ -3732,40 +3739,110 @@ function confRedraw() {
       display:flex; align-items:center; justify-content:center;
       font-size:${size}px; line-height:1; color:${color};
       text-shadow:0 0 ${2/confZoom}px rgba(0,0,0,0.9), 0 0 ${1/confZoom}px rgba(0,0,0,0.9);
-      cursor:default;`;
+      cursor:pointer;`;
     star.textContent = '★';
     const pos = normToCanvasXY(d.x_norm, d.y_norm, bboxForDevice(confPageNum, d), confCW, confCH);
     star.style.left = pos.x + 'px';
     star.style.top  = pos.y + 'px';
     star.onmouseenter = () => {
       const routeNote = d.routed_via_waypoints?.length ? `  ·  via ${d.routed_via_waypoints.length} waypoint(s)` : '';
+      const cullNote = armed ? '  ·  click again to exclude' : '  ·  click to exclude';
       document.getElementById('conf-hover-info').textContent =
-        `${d.name ?? d.type ?? '—'}  ·  ${(d.raw_labels ?? []).join(' · ')}  ·  confidence: ${d.confidence ?? '—'}${routeNote}`;
+        `${d.name ?? d.type ?? '—'}  ·  ${(d.raw_labels ?? []).join(' · ')}  ·  confidence: ${d.confidence ?? '—'}${routeNote}${cullNote}`;
       drawConfPath(d);
     };
     star.onmouseleave = () => { document.getElementById('conf-hover-info').textContent = ''; clearConfPath(); };
+    star.onclick = (e) => { e.stopPropagation(); armOrCullDevice(d); };
     layer.appendChild(star);
 
     // Numbered badge, tied to the device's row (#) in the by-page device table —
-    // lets you cross-reference a plotted point back to its table row. Kept as a
-    // separate element next to the star rather than replacing it, so the star's
-    // color still reads as the confidence signal at a glance.
+    // lets you cross-reference a plotted point back to its table row, and click it
+    // to exclude a device that shouldn't have been counted (e.g. inside a hatched
+    // out-of-scope area the zone tool didn't catch). Same arm-then-confirm pattern
+    // as the exclude-zone delete flow — click once to arm (red, 5s to confirm),
+    // click again to actually exclude. Kept as a separate element next to the star
+    // rather than replacing it, so the star's color still reads as confidence
+    // at a glance (it only turns red while armed).
     if (d._num != null) {
       const numSize = 12 / confZoom;
       const badge = document.createElement('div');
       badge.className = 'conf-star'; // reuse hit-test/cleanup grouping in confRedraw's clear step
       badge.style.cssText = `position:absolute; min-width:${numSize*1.6}px; height:${numSize*1.4}px;
-        transform:translate(-50%,-50%); pointer-events:none; z-index:11;
+        transform:translate(-50%,-50%); pointer-events:auto; z-index:11; cursor:pointer;
         display:flex; align-items:center; justify-content:center;
         font-size:${numSize}px; line-height:1; font-family:monospace; font-weight:bold;
         color:#0a0a0a; background:${color}; border-radius:${3/confZoom}px;
         padding:0 ${2/confZoom}px;`;
       badge.textContent = d._num;
+      badge.title = armed ? 'Click again to exclude' : 'Click to exclude this device';
       badge.style.left = (pos.x + size * 0.55) + 'px';
       badge.style.top  = (pos.y - size * 0.55) + 'px';
+      badge.onclick = (e) => { e.stopPropagation(); armOrCullDevice(d); };
       layer.appendChild(badge);
     }
   }
+}
+
+// Click a device's star or number badge once to arm it (red, "click again to
+// exclude"), click again to actually cull it. Mirrors armOrDeleteExclZone's
+// arm-then-confirm pattern — no native confirm(), same 5s auto-disarm.
+//
+// Persistence: device_instances gets wiped and regenerated per (page_id,
+// device_type_id) on every batch re-run (the idempotent-runs rule), so simply
+// deleting this one row wouldn't survive — detection would just find the same
+// symbol again next run. Instead this auto-draws a small exclude region tightly
+// around the device's point and confirms it through the SAME /api/page-regions
+// (kind:'exclude') call the manual zone-draw flow already uses — the batch
+// pipeline already honors that on every future run, so the cull holds. The device
+// is also stripped from batchResults immediately for instant feedback, rather
+// than waiting on a re-run.
+async function armOrCullDevice(d) {
+  if (confArmedForCull !== d._num) {
+    confArmedForCull = d._num;
+    confRedraw();
+    setTimeout(() => { if (confArmedForCull === d._num) { confArmedForCull = null; confRedraw(); } }, 5000);
+    return;
+  }
+  confArmedForCull = null;
+
+  const pageId = pageCache[confPageNum]?.pageId;
+  if (!pageId) { document.getElementById('conf-hover-info').textContent = 'Page not persisted — run the scan first'; confRedraw(); return; }
+
+  // Same identity-frame conversion applyDistanceScope uses for the in-box test —
+  // device x_norm/y_norm aren't always in the identity frame (label/vector-sourced
+  // devices normalize against the content bbox), so convert before building a box
+  // in the frame page_regions actually expects.
+  const bbox = bboxForDevice(confPageNum, d);
+  const xIdentity = bbox.xmin_frac + d.x_norm * bbox.w_frac;
+  const yIdentity = 1 - bbox.ymin_frac - (1 - d.y_norm) * bbox.h_frac;
+  const x0 = Math.max(0, xIdentity - CULL_PAD_FRAC), x1 = Math.min(1, xIdentity + CULL_PAD_FRAC);
+  const y0 = Math.max(0, yIdentity - CULL_PAD_FRAC), y1 = Math.min(1, yIdentity + CULL_PAD_FRAC);
+  const polygon = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+  const label = `Manual exclude — ${d.name ?? 'device'} #${d._num}`;
+
+  document.getElementById('conf-hover-info').textContent = 'Excluding…';
+  try {
+    const r = await fetch(`${base()}/api/page-regions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: projectId, page_id: pageId, label, polygon, x0, y0, x1, y1, kind: 'exclude' })
+    });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); document.getElementById('conf-hover-info').textContent = 'Exclude failed: ' + (j.error || r.status); confRedraw(); return; }
+  } catch (e) { document.getElementById('conf-hover-info').textContent = 'Error: ' + e.message; confRedraw(); return; }
+
+  // Strip it from the live results now — don't wait for a re-run.
+  const res = batchResults[confPageNum];
+  if (res) {
+    res.devices = (res.devices ?? []).filter(dev => dev !== d);
+    res.device_count = (res.device_count ?? 1) - 1;
+    res.excluded_out_of_scope = (res.excluded_out_of_scope ?? 0) + 1;
+    const bt = (res.by_type ?? []).find(t => t.name === d.name);
+    if (bt) bt.count = Math.max(0, bt.count - 1);
+  }
+  confDevices = confDevices.filter(dev => dev !== d);
+  document.getElementById('conf-hover-info').textContent = '';
+  clearConfPath();
+  confRedraw();
+  renderResults();
 }
 
 // Draw the device's routed path (device -> waypoints -> demarc) as an SVG polyline,
@@ -3845,6 +3922,7 @@ async function openConfidenceModal(pageNum) {
   const res = batchResults[pageNum];
   if (!res || !pdfDoc) { alert('Run the batch for this page first'); return; }
   confPageNum = pageNum;
+  confArmedForCull = null;
   confDevices = (res.devices || [])
     .map((d, i) => ({ ...d, _num: i + 1 }))   // matches the # column in the by-page device table
     .filter(d => d.x_norm != null && d.y_norm != null);
