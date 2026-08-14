@@ -322,14 +322,16 @@ export default async function handler(req) {
     // Dedup: if detection later genuinely finds the same physical device a manual
     // add already covers (better symbol matching, a schedule row lands, etc.), drop
     // the freshly-detected duplicate rather than double-counting — the manual entry
-    // was a confirmed human decision and wins.
+    // was a confirmed human decision and wins. Compares in identity frame (see
+    // frame.js) — manual points are already identity-frame; dev may not be.
     const MANUAL_DEDUP_RADIUS_FRAC = 0.015;
     const manualPoints = inScope.filter((d) => d._manual);
     if (manualPoints.length) {
       inScope = inScope.filter((dev) => {
         if (dev._manual || dev.x == null || dev.y == null) return true;
+        const [ix, iy] = toIdentityXY(dev, content_bbox);
         return !manualPoints.some((m) =>
-          m.type === dev.type && Math.hypot(dev.x - m.x, dev.y - m.y) <= MANUAL_DEDUP_RADIUS_FRAC);
+          m.type === dev.type && Math.hypot(ix - m.x, iy - m.y) <= MANUAL_DEDUP_RADIUS_FRAC);
       });
     }
 
@@ -339,7 +341,16 @@ export default async function handler(req) {
       const codes = dev.attributes?.codes || [];     // full tokens w/ detail # (DV1/DD3)
       const anchor = dt.detection_config?.anchor || null;
       const ports = portsFromFamilies(fams);
-      const cx = dev.x, cy = dev.y;
+      // Transform to identity frame BEFORE any position-based use — assignPin,
+      // routedPts, and euclidPts all compare against demarc pins and scope
+      // boxes, which are always identity-frame (placed via the pin modal's
+      // identity-frame click math). dev.x/dev.y are NOT always identity-frame
+      // (label and vector-symbol devices normalize against the content-bbox).
+      // This was the same frame-mismatch class fixed for the exclude-zone
+      // check earlier tonight, but here it affects EVERY distance value shown
+      // for a label-sourced device, not just the exclude-zone gate — a much
+      // more foundational bug than tonight's other fixes. See frame.js.
+      const [cx, cy] = toIdentityXY(dev, content_bbox);
       const hasXY = cx != null && cy != null;
       // Label: anchor leads (N2), then the detail-numbered family codes in detected order.
       // UIN'd (prefix) types lead with the UIN; standalone (WAP/180) just the type.
@@ -374,8 +385,14 @@ export default async function handler(req) {
         row: {
           page_id, device_type_id: dt.id ?? null, detection_method: dev._manual ? "manual" : "reconciled",
           uin: dev.uin ?? null,
-          x_norm: hasXY ? parseFloat(cx.toFixed(4)) : null,
-          y_norm: hasXY ? parseFloat(cy.toFixed(4)) : null,
+          // ORIGINAL native-frame coordinates, not the identity-transformed
+          // cx/cy above — the client applies its own transform on render
+          // (bboxForDevice, keyed on xy_source), so persisting the already-
+          // transformed value here would double-transform every label-sourced
+          // device's displayed position. cx/cy exist ONLY for this function's
+          // own position-based math against identity-frame pins/scope-boxes.
+          x_norm: hasXY ? parseFloat(dev.x.toFixed(4)) : null,
+          y_norm: hasXY ? parseFloat(dev.y.toFixed(4)) : null,
           x_ft: xFt, y_ft: yFt,
           raw_labels: rawLabels,
           data_ports: ports.data_ports, voice_ports: ports.voice_ports, node_labels: ports.node_labels,
