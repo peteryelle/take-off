@@ -307,6 +307,122 @@ export function findEncirclingRing(blobCentroid, blobRadius, strokeSubpaths = []
 }
 
 /**
+ * Fit a straight line through a point set via 2D total-least-squares (closed-form
+ * eigen-decomposition of the 2x2 covariance matrix — no linear-algebra library
+ * needed at this size). Returns the line's own centroid, unit direction, length
+ * (span of points projected onto that direction), and maxResidual (worst
+ * perpendicular distance any point sits from the fitted line — the straightness
+ * measure).
+ */
+function fitLine(points) {
+  const c = centroid(points);
+  let sxx = 0, sxy = 0, syy = 0;
+  for (const [x, y] of points) {
+    const dx = x - c[0], dy = y - c[1];
+    sxx += dx * dx; sxy += dx * dy; syy += dy * dy;
+  }
+  const n = points.length;
+  sxx /= n; sxy /= n; syy /= n;
+  const theta = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+  const dir = [Math.cos(theta), Math.sin(theta)];
+  let minT = Infinity, maxT = -Infinity, maxResidual = 0;
+  for (const [x, y] of points) {
+    const dx = x - c[0], dy = y - c[1];
+    const t = dx * dir[0] + dy * dir[1];
+    const perp = Math.abs(-dx * dir[1] + dy * dir[0]);
+    if (t < minT) minT = t;
+    if (t > maxT) maxT = t;
+    if (perp > maxResidual) maxResidual = perp;
+  }
+  return { center: c, dir, length: maxT - minT, maxResidual };
+}
+
+/**
+ * Is this point set (after stitching, typically) a straight line — every point
+ * within `straightnessTol` × the line's own length of the fitted line, not just
+ * clustered/circular? Needs at least 4 points to be a meaningful fit (a 2-point
+ * "line" is trivially straight and would pass everything).
+ *
+ * @returns {{center, dir, length, maxResidual}|null}
+ */
+export function isLineLike(points, opts = {}) {
+  if (!Array.isArray(points) || points.length < 4) return null;
+  const straightnessTol = opts.straightnessTol ?? 0.12;
+  const fit = fitLine(points);
+  if (!(fit.length > 0)) return null;
+  return (fit.maxResidual / fit.length) <= straightnessTol ? fit : null;
+}
+
+/**
+ * Does some stroke geometry near this blob form a straight line passing through
+ * (or very near) its centroid, roughly diameter-length? Same local-neighborhood-
+ * filter + stitch pattern as findEncirclingRing (real lines can be drawn as many
+ * short disconnected segments too, not just rings) — restrict to a local search
+ * radius first, stitch that local set, then fit/check each stitched chain.
+ *
+ * @param {[number,number]} blobCentroid
+ * @param {number} blobRadius
+ * @param {Array} strokeSubpaths
+ * @param {Object} opts { centerTol, minLenRatio=1.0, maxLenRatio=5.0, searchRadius, stitchTol, straightnessTol }
+ * @returns {{center,dir,length,maxResidual}|null}
+ */
+export function findLineThroughCenter(blobCentroid, blobRadius, strokeSubpaths = [], opts = {}) {
+  if (!(blobRadius > 0)) return null;
+  const minLenRatio = opts.minLenRatio ?? 1.0;
+  const maxLenRatio = opts.maxLenRatio ?? 5.0;
+  const centerTol = opts.centerTol ?? blobRadius * 1.0;
+  const searchRadius = opts.searchRadius ?? blobRadius * (maxLenRatio + 1) + centerTol;
+  const blobDiameter = blobRadius * 2;
+
+  const nearby = strokeSubpaths.filter((sp) => {
+    if (!sp.points?.length) return false;
+    const c = centroid(sp.points);
+    return Math.hypot(c[0] - blobCentroid[0], c[1] - blobCentroid[1]) <= searchRadius;
+  });
+  const stitched = stitchSegments(nearby, opts.stitchTol ?? 0.001);
+
+  for (const sp of stitched) {
+    const line = isLineLike(sp.points, opts);
+    if (!line) continue;
+    const dx = blobCentroid[0] - line.center[0], dy = blobCentroid[1] - line.center[1];
+    const perpDist = Math.abs(-dx * line.dir[1] + dy * line.dir[0]);
+    const ratio = line.length / blobDiameter;
+    if (perpDist <= centerTol && ratio >= minLenRatio && ratio <= maxLenRatio) return line;
+  }
+  return null;
+}
+
+/**
+ * Diagnostic sibling of findLineThroughCenter — every line-like candidate near
+ * the blob regardless of whether it would pass the length/center checks,
+ * closest-perpendicular-distance first.
+ *
+ * @returns {Array} [{ perpDist, ratio, length, center, dir }]
+ */
+export function debugLineCandidates(blobCentroid, blobRadius, strokeSubpaths = [], opts = {}) {
+  const searchRadius = opts.searchRadius ?? (blobRadius > 0 ? blobRadius * 6 + 0.02 : 0.02);
+  const blobDiameter = blobRadius * 2;
+  const nearby = strokeSubpaths.filter((sp) => {
+    if (!sp.points?.length) return false;
+    const c = centroid(sp.points);
+    return Math.hypot(c[0] - blobCentroid[0], c[1] - blobCentroid[1]) <= searchRadius;
+  });
+  const stitched = stitchSegments(nearby, opts.stitchTol ?? 0.001);
+  const out = [];
+  for (const sp of stitched) {
+    const line = isLineLike(sp.points, opts);
+    if (!line) continue;
+    const dx = blobCentroid[0] - line.center[0], dy = blobCentroid[1] - line.center[1];
+    out.push({
+      perpDist: Math.abs(-dx * line.dir[1] + dy * line.dir[0]),
+      ratio: blobDiameter > 0 ? line.length / blobDiameter : null,
+      length: line.length, center: line.center, dir: line.dir
+    });
+  }
+  return out.sort((a, b) => a.perpDist - b.perpDist);
+}
+
+/**
  * Diagnostic sibling of findEncirclingRing — never used in the accept/reject
  * path itself, returns every circle-like candidate near the blob (regardless
  * of whether it would pass the ratio/center checks), closest first, so a
@@ -462,4 +578,4 @@ export async function extractCameraBlobs(page, OPS, textCenters = [], opts = {})
   return { blobs, frame, n_subpaths_raw: raw.length, n_subpaths_kept: kept.length, strokeSubpaths: normedStrokes };
 }
 
-export default { contentFrame, extractFilledSubpaths, extractSubpaths, filterByFill, groupSubpaths, isCircleLike, stitchSegments, findEncirclingRing, debugRingCandidates, debugNearbyStrokes, classifyCameraBlob, extractCameraBlobs, polyArea };
+export default { contentFrame, extractFilledSubpaths, extractSubpaths, filterByFill, groupSubpaths, isCircleLike, stitchSegments, findEncirclingRing, debugRingCandidates, isLineLike, findLineThroughCenter, debugLineCandidates, debugNearbyStrokes, classifyCameraBlob, extractCameraBlobs, polyArea };

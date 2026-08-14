@@ -3244,43 +3244,46 @@ async function runBatch() {
           for (const step of steps) {
             if (step.route === 'vector') {
               let res = { instances: [], degraded: true };
-              const ringDiagnostics = [];
+              const checkDiagnostics = [];
+              const activeCheck = step.group?.requires_ring ? 'ring'
+                : step.group?.requires_line_through_center ? 'line' : null;
               try {
                 res = await V.locateVector(pdfPage, pdfjsLib.OPS, textCenters, step.group,
                   {
                     extractCameraBlobs: V.extractCameraBlobs,
-                    onCandidate: step.group?.requires_ring ? (c) => ringDiagnostics.push(c) : undefined
+                    onCandidate: activeCheck ? (c) => checkDiagnostics.push(c) : undefined
                   },
                   { vpW: W, vpH: H });
                 console.log(`[vector] pg${pageNum}: raw=${res.n_subpaths_raw} kept=${res.n_subpaths_kept} blobs=${res.blob_count} instances=${res.instances?.length ?? 0} (frame ${W}x${H}, bodyArea ${step.group?.body_area ?? 2e-5})`);
-                if (step.group?.requires_ring) {
-                  const accepted = ringDiagnostics.filter(c => c.accepted).length;
-                  console.log(`[ring-verify] pg${pageNum}: strokes_found=${res.n_strokes_found} candidates=${ringDiagnostics.length} accepted=${accepted} rejected=${ringDiagnostics.length - accepted}`);
+                if (activeCheck) {
+                  const tag = `[${activeCheck}-verify]`;
+                  const accepted = checkDiagnostics.filter(c => c.accepted).length;
+                  console.log(`${tag} pg${pageNum}: strokes_found=${res.n_strokes_found} candidates=${checkDiagnostics.length} accepted=${accepted} rejected=${checkDiagnostics.length - accepted}`);
                   if (res.n_strokes_found === 0) {
-                    console.warn(`[ring-verify] pg${pageNum}: ZERO stroke-only subpaths extracted — the ring is likely not drawn as a plain stroke on this sheet (could be a filled annulus, or a different encoding entirely). requires_ring will reject everything until this is understood.`);
-                  } else if (accepted === 0 && ringDiagnostics.length) {
-                    const lines = ringDiagnostics.slice(0, 5).map(c => {
+                    console.warn(`${tag} pg${pageNum}: ZERO stroke-only subpaths extracted — the ${activeCheck === 'ring' ? 'ring' : 'line'} is likely not drawn as a plain stroke on this sheet. Every candidate will be rejected until this is understood.`);
+                  } else if (accepted === 0 && checkDiagnostics.length) {
+                    const lines = checkDiagnostics.slice(0, 5).map(c => {
                       const n = c.nearby?.[0];
-                      const nearestTxt = n
+                      const nearestTxt = !n ? `NO ${activeCheck.toUpperCase()}-LIKE STROKE FOUND NEARBY AT ALL`
+                        : activeCheck === 'ring'
                         ? `dCenter=${n.dCenter.toFixed(5)} ratio=${n.ratio != null ? n.ratio.toFixed(2) : '—'} ringRadius=${n.radius.toFixed(5)}`
-                        : 'NO CIRCLE-LIKE STROKE FOUND NEARBY AT ALL';
+                        : `perpDist=${n.perpDist.toFixed(5)} ratio=${n.ratio != null ? n.ratio.toFixed(2) : '—'} length=${n.length.toFixed(5)}`;
                       return `blob(${c.x.toFixed(4)},${c.y.toFixed(4)}) r=${c.radius.toFixed(5)} → nearest: ${nearestTxt}`;
                     });
-                    console.warn(`[ring-verify] pg${pageNum}: strokes exist but NOTHING passed —\n` + lines.join('\n'));
+                    console.warn(`${tag} pg${pageNum}: strokes exist but NOTHING passed —\n` + lines.join('\n'));
 
-                    // One more level down: for the FIRST blob, ignore the circle-shape
-                    // check entirely and bucket every nearby stroke by distance from the
-                    // device — distinguishes "nothing is drawn near this device at all"
-                    // from "something is drawn near it but at the wrong distance to be
-                    // the ring" from "there IS a cluster near the expected ring radius
-                    // but the shape check still rejects it." Showing only the closest 8
-                    // previously hid a same-radius cluster if 8+ unrelated fragments
-                    // happened to be even closer to the device than the ring itself.
-                    const first = ringDiagnostics[0];
+                    // Distance/proximity histogram for the FIRST blob, ignoring the
+                    // shape check entirely — same reasoning as the original ring
+                    // diagnostic: distinguishes "nothing near the device at all" from
+                    // "something's near it but at the wrong distance" from "there IS a
+                    // cluster at the right distance but the shape check still rejects
+                    // it." Showing only the closest few previously hid a same-distance
+                    // cluster if unrelated fragments sat even closer to the device.
+                    const first = checkDiagnostics[0];
                     if (first && res.strokeSubpaths && V.debugNearbyStrokes) {
                       const nearby = V.debugNearbyStrokes([first.x, first.y], res.strokeSubpaths, 0.02);
                       if (!nearby.length) {
-                        console.warn(`[ring-verify] pg${pageNum}: NOTHING stroke-only within 2% of blob(${first.x.toFixed(4)},${first.y.toFixed(4)}) at all — no ring geometry is reaching this device's position, full stop.`);
+                        console.warn(`${tag} pg${pageNum}: NOTHING stroke-only within 2% of blob(${first.x.toFixed(4)},${first.y.toFixed(4)}) at all — no geometry is reaching this device's position, full stop.`);
                       } else {
                         const bucketW = 0.0005;
                         const buckets = {};
@@ -3288,11 +3291,13 @@ async function runBatch() {
                           const b = (Math.floor(s.dCenter / bucketW) * bucketW).toFixed(4);
                           buckets[b] = (buckets[b] ?? 0) + 1;
                         }
-                        const expectedLo = (first.radius * 1.1).toFixed(5), expectedHi = (first.radius * 3.0).toFixed(5);
+                        const expectedTxt = activeCheck === 'ring'
+                          ? `expected ring dCenter range: ${(first.radius * 1.1).toFixed(5)}–${(first.radius * 3.0).toFixed(5)}`
+                          : `expected line length range: ${(first.radius * 2 * 1.0).toFixed(5)}–${(first.radius * 2 * 5.0).toFixed(5)} (perpDist near 0)`;
                         const bucketLines = Object.entries(buckets)
                           .sort((a, b) => parseFloat(a[0]) - parseFloat(b[0]))
                           .map(([b, n]) => `  dCenter≈${b}: ${n} stroke(s)`);
-                        console.warn(`[ring-verify] pg${pageNum}: ${nearby.length} stroke(s) near blob(${first.x.toFixed(4)},${first.y.toFixed(4)}) r=${first.radius.toFixed(5)} — expected ring dCenter range for this blob: ${expectedLo}–${expectedHi} —\n` +
+                        console.warn(`${tag} pg${pageNum}: ${nearby.length} stroke(s) near blob(${first.x.toFixed(4)},${first.y.toFixed(4)}) r=${first.radius.toFixed(5)} — ${expectedTxt} —\n` +
                           bucketLines.join('\n'));
                       }
                     }
