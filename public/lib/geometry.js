@@ -230,12 +230,73 @@ export function isCircleLike(points, tol = 0.15) {
  * @param {Object} opts { centerTol, minRadiusRatio=1.1, maxRadiusRatio=3.0 }
  * @returns {{center, radius}|null} the matching ring, or null if none found
  */
+/**
+ * Chain together short stroke subpaths whose endpoints connect within `tol`,
+ * into longer continuous polylines. Real PDF circles are sometimes drawn as
+ * many short disconnected segments (each its own moveTo/lineTo/stroke) rather
+ * than one closed path — confirmed on a real project: a WAP's encircling ring
+ * was 55 separate 2-point pieces, every one individually far too short to
+ * read as a circle. Greedy nearest-endpoint chaining, not a full TSP solve —
+ * sufficient for "many short pieces of one shape," which is what this exists
+ * for, not general curve reconstruction.
+ *
+ * @param {Array} subpaths [{points:[[x,y]...]}]
+ * @param {number} tol     max gap between two endpoints to treat as connected
+ * @returns {Array} [{points:[[x,y]...]}] — stitched chains (unmatched inputs
+ *   pass through unchanged as their own single-element chain)
+ */
+export function stitchSegments(subpaths, tol = 0.001) {
+  let chains = subpaths.filter((sp) => sp.points?.length >= 2).map((sp) => sp.points.slice());
+  const dist = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1]);
+  let merged = true;
+  while (merged) {
+    merged = false;
+    outer:
+    for (let i = 0; i < chains.length; i++) {
+      const a = chains[i], aStart = a[0], aEnd = a[a.length - 1];
+      for (let j = i + 1; j < chains.length; j++) {
+        const b = chains[j], bStart = b[0], bEnd = b[b.length - 1];
+        let joined = null;
+        if (dist(aEnd, bStart) <= tol)        joined = a.concat(b.slice(1));
+        else if (dist(aEnd, bEnd) <= tol)     joined = a.concat(b.slice(0, -1).reverse());
+        else if (dist(aStart, bEnd) <= tol)   joined = b.concat(a.slice(1));
+        else if (dist(aStart, bStart) <= tol) joined = b.slice().reverse().concat(a.slice(1));
+        if (joined) { chains.splice(j, 1); chains[i] = joined; merged = true; break outer; }
+      }
+    }
+  }
+  return chains.map((points) => ({ points }));
+}
+
+/**
+ * Does some stroke geometry near this blob form a circle that genuinely WRAPS
+ * AROUND it? Restricts to strokes within a local search radius first (cheap
+ * even when the page has tens of thousands of unrelated strokes), stitches
+ * that local set into continuous chains (see stitchSegments — a real ring is
+ * often many short disconnected pieces, not one closed path), THEN checks
+ * each stitched chain for the circle shape and size/center match.
+ *
+ * @param {[number,number]} blobCentroid
+ * @param {number} blobRadius
+ * @param {Array} strokeSubpaths  [{points, filled:false, ...}] normalized, same frame
+ * @param {Object} opts { centerTol, minRadiusRatio=1.1, maxRadiusRatio=3.0, searchRadius, stitchTol }
+ * @returns {{center, radius}|null}
+ */
 export function findEncirclingRing(blobCentroid, blobRadius, strokeSubpaths = [], opts = {}) {
   if (!(blobRadius > 0)) return null;
   const centerTol = opts.centerTol ?? blobRadius * 0.5;
   const minRadiusRatio = opts.minRadiusRatio ?? 1.1;
   const maxRadiusRatio = opts.maxRadiusRatio ?? 3.0;
-  for (const sp of strokeSubpaths) {
+  const searchRadius = opts.searchRadius ?? blobRadius * (maxRadiusRatio + 1) + centerTol;
+
+  const nearby = strokeSubpaths.filter((sp) => {
+    if (!sp.points?.length) return false;
+    const c = centroid(sp.points);
+    return Math.hypot(c[0] - blobCentroid[0], c[1] - blobCentroid[1]) <= searchRadius;
+  });
+  const stitched = stitchSegments(nearby, opts.stitchTol ?? 0.001);
+
+  for (const sp of stitched) {
     const circle = isCircleLike(sp.points, opts.circleTol);
     if (!circle) continue;
     const dCenter = Math.hypot(circle.center[0] - blobCentroid[0], circle.center[1] - blobCentroid[1]);
@@ -255,9 +316,16 @@ export function findEncirclingRing(blobCentroid, blobRadius, strokeSubpaths = []
  *
  * @returns {Array} [{ dCenter, ratio, center, radius }] sorted by dCenter, closest first
  */
-export function debugRingCandidates(blobCentroid, blobRadius, strokeSubpaths = []) {
+export function debugRingCandidates(blobCentroid, blobRadius, strokeSubpaths = [], opts = {}) {
+  const searchRadius = opts.searchRadius ?? (blobRadius > 0 ? blobRadius * 4 + 0.02 : 0.02);
+  const nearby = strokeSubpaths.filter((sp) => {
+    if (!sp.points?.length) return false;
+    const c = centroid(sp.points);
+    return Math.hypot(c[0] - blobCentroid[0], c[1] - blobCentroid[1]) <= searchRadius;
+  });
+  const stitched = stitchSegments(nearby, opts.stitchTol ?? 0.001);
   const out = [];
-  for (const sp of strokeSubpaths) {
+  for (const sp of stitched) {
     const circle = isCircleLike(sp.points);
     if (!circle) continue;
     out.push({
@@ -394,4 +462,4 @@ export async function extractCameraBlobs(page, OPS, textCenters = [], opts = {})
   return { blobs, frame, n_subpaths_raw: raw.length, n_subpaths_kept: kept.length, strokeSubpaths: normedStrokes };
 }
 
-export default { contentFrame, extractFilledSubpaths, extractSubpaths, filterByFill, groupSubpaths, isCircleLike, findEncirclingRing, debugRingCandidates, debugNearbyStrokes, classifyCameraBlob, extractCameraBlobs, polyArea };
+export default { contentFrame, extractFilledSubpaths, extractSubpaths, filterByFill, groupSubpaths, isCircleLike, stitchSegments, findEncirclingRing, debugRingCandidates, debugNearbyStrokes, classifyCameraBlob, extractCameraBlobs, polyArea };

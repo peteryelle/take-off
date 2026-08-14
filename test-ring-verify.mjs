@@ -6,7 +6,7 @@
 // counted as WAP. A candidate with no matching encircling ring is dropped
 // outright — the ring's absence is decisive negative evidence for this glyph
 // family, not an ambiguous case needing a flag.
-import { isCircleLike, findEncirclingRing } from './public/lib/geometry.js';
+import { isCircleLike, findEncirclingRing, stitchSegments } from './public/lib/geometry.js';
 import { blobsToInstances } from './public/lib/locate.js';
 
 let fail = 0; const A = (c, m) => { console.log((c ? '  PASS ' : '  FAIL ') + m); if (!c) fail++; };
@@ -18,12 +18,39 @@ const circlePoints = (cx, cy, r, n = 16) =>
     return [cx + r * Math.cos(a), cy + r * Math.sin(a)];
   });
 
+// Break a closed point loop into many independent 2-point stroke subpaths —
+// exactly the real-world shape confirmed on a production project: a WAP's
+// encircling ring was 55 separate 2-point segments, each its own moveTo/
+// lineTo/stroke, not one continuous path. Every individual piece is far too
+// short for isCircleLike to recognize on its own.
+const asFragments = (points) =>
+  points.map((p, i) => ({ points: [p, points[(i + 1) % points.length]], filled: false }));
+
 // ── isCircleLike: pure geometry ─────────────────────────────────────
 console.log('isCircleLike:');
 A(isCircleLike(circlePoints(0.5, 0.5, 0.02)) !== null, 'a real circle loop is recognized');
 A(isCircleLike([[0.49, 0.49], [0.51, 0.49], [0.50, 0.52]]) === null, 'a 3-point triangle is not (too few points)');
 A(isCircleLike(circlePoints(0.5, 0.5, 0.02).map(([x, y], i) => i === 0 ? [x + 0.05, y] : [x, y])) === null,
   'a loop with one wildly displaced vertex is not circle-like (blown variance)');
+
+// ── stitchSegments: pure geometry ────────────────────────────────────
+console.log('stitchSegments:');
+{
+  const fragments = asFragments(circlePoints(0.5, 0.5, 0.02, 20));
+  const stitched = stitchSegments(fragments, 0.001);
+  A(stitched.length === 1, `20 disconnected 2-point fragments stitch into one chain (got ${stitched.length} chain(s))`);
+  A(isCircleLike(stitched[0]?.points ?? []) !== null, 'the stitched chain reads as a circle (no individual fragment could)');
+
+  // Mutation tripwire: two genuinely separate fragments with a real gap between
+  // them must NOT get stitched together — proves the tolerance is a real gate,
+  // not stitching anything within vague proximity.
+  const farApart = [
+    { points: [[0.1, 0.1], [0.1, 0.11]], filled: false },
+    { points: [[0.9, 0.9], [0.9, 0.91]], filled: false }
+  ];
+  const notStitched = stitchSegments(farApart, 0.001);
+  A(notStitched.length === 2, `two fragments with a real gap between them stay separate (got ${notStitched.length})`);
+}
 
 // ── findEncirclingRing: pure geometry ───────────────────────────────
 console.log('findEncirclingRing:');
@@ -34,6 +61,13 @@ A(findEncirclingRing([0.5, 0.5], 0.03, ringStrokes) === null,
   'a circle SMALLER than (or barely bigger than) the blob is rejected — must genuinely wrap around it');
 A(findEncirclingRing([0.5, 0.5], 0.001, [{ points: circlePoints(0.5, 0.5, 10), filled: false }]) === null,
   'an absurdly oversized circle elsewhere on the sheet is rejected (maxRadiusRatio)');
+
+// The real-world case: ring drawn as many disconnected short fragments, not one
+// closed path. Without stitching this returns null every time (confirmed on
+// production data — 0 of 86+ candidates ever passed).
+const fragmentedRing = asFragments(circlePoints(0.5, 0.5, 0.02, 24));
+A(findEncirclingRing([0.5, 0.5], 0.01, fragmentedRing) !== null,
+  'a ring made of 24 disconnected fragments is still found (the actual production bug)');
 
 // ── blobsToInstances integration: the full wiring a real page goes through ──
 console.log('blobsToInstances (requires_ring integration):');
@@ -46,6 +80,12 @@ const strokeSubpaths = [{ points: circlePoints(0.50, 0.503, 0.02), filled: false
 const kept = blobsToInstances([blobWithRing, blobNoRing], group, { strokeSubpaths });
 A(kept.length === 1, `only the ringed blob survives (got ${kept.length})`);
 A(kept[0]?.type === 'WIRELESS ACCESS POINT', 'the surviving instance keeps the correct type');
+
+// Same integration test, but with the ring as fragments (like real production
+// pages) instead of one whole circle — the end-to-end path that actually matters.
+const fragmentedStrokes = asFragments(circlePoints(0.50, 0.503, 0.02, 24));
+const keptFragmented = blobsToInstances([blobWithRing, blobNoRing], group, { strokeSubpaths: fragmentedStrokes });
+A(keptFragmented.length === 1, `fragmented ring: only the ringed blob survives (got ${keptFragmented.length})`);
 
 // Same two blobs, requires_ring OFF — every other symbol type's existing behavior
 // (single_type without a ring requirement) must be completely unaffected.
