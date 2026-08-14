@@ -14,7 +14,7 @@
 // imports no PDF library. Output is the live contract { type, x, y, confidence } that
 // pass-extract already threads into reconcile — plus flag/via for the review surface.
 
-import { classifyCameraBlob, polyArea, findEncirclingRing } from './geometry.js';
+import { classifyCameraBlob, polyArea, findEncirclingRing, debugRingCandidates } from './geometry.js';
 
 const fillKey = (rgb) => (Array.isArray(rgb) ? rgb.join(',') : 'none');
 const hasTemplate = (g) => !!(g && Array.isArray(g.fill_rgb) && g.fill_rgb.length === 3);
@@ -57,7 +57,11 @@ export function chooseLocator(sheetClass, group) {
  *
  * @param {Array}  blobs  from groupSubpaths/extractCameraBlobs (carry x,y normalized)
  * @param {Object} group  { single_type? | prototypes?, proto_tol?, aspect_hub_max?, requires_ring? }
- * @param {Object} deps   { strokeSubpaths? } — only consulted when group.requires_ring
+ * @param {Object} deps   { strokeSubpaths?, onCandidate? } — onCandidate is a diagnostic
+ *   hook only, no-op when omitted: called once per blob when requires_ring is set, with
+ *   { x, y, radius, accepted, nearby } (nearby = debugRingCandidates, closest 3) — for
+ *   calibrating centerTol/minRadiusRatio/maxRadiusRatio against real page geometry when
+ *   a blind tolerance guess turns out wrong in production.
  * @returns {Array} [{ type, x, y, confidence, flag, via:'vector' }]
  */
 export function blobsToInstances(blobs = [], group = {}, deps = {}) {
@@ -68,7 +72,14 @@ export function blobsToInstances(blobs = [], group = {}, deps = {}) {
       const bodyPoints = b.paths?.[0]?.points;
       const area = bodyPoints ? polyArea(bodyPoints) : 0;
       const radius = Math.sqrt(area / Math.PI);
-      return radius > 0 && !!findEncirclingRing([b.x, b.y], radius, strokeSubpaths);
+      const ring = radius > 0 ? findEncirclingRing([b.x, b.y], radius, strokeSubpaths) : null;
+      if (deps.onCandidate) {
+        deps.onCandidate({
+          x: b.x, y: b.y, radius, accepted: !!ring,
+          nearby: radius > 0 ? debugRingCandidates([b.x, b.y], radius, strokeSubpaths).slice(0, 3) : []
+        });
+      }
+      return !!ring;
     });
   }
   if (group.single_type) {
@@ -130,13 +141,15 @@ export function planSymbolDetection(sheetClass, symTypes = []) {
  * @returns {Promise<{ instances, blob_count, degraded }>}
  */
 export async function locateVector(page, OPS, textCenters, group, deps = {}, opts = {}) {
-  const { extractCameraBlobs } = deps;
+  const { extractCameraBlobs, onCandidate } = deps;
   const { blobs, n_subpaths_raw, n_subpaths_kept, strokeSubpaths } = await extractCameraBlobs(page, OPS, textCenters, {
     vpW: opts.vpW, vpH: opts.vpH, fill: group.fill_rgb, fillTol: group.fill_tol ?? 48, bodyArea: group.body_area ?? 2e-5,
   });
   return {
-    instances: blobsToInstances(blobs, group, { strokeSubpaths }),
-    blob_count: blobs.length, n_subpaths_raw, n_subpaths_kept, degraded: blobs.length === 0
+    instances: blobsToInstances(blobs, group, { strokeSubpaths, onCandidate }),
+    blob_count: blobs.length, n_subpaths_raw, n_subpaths_kept,
+    n_strokes_found: strokeSubpaths?.length ?? 0,
+    degraded: blobs.length === 0
   };
 }
 

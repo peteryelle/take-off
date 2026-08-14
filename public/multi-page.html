@@ -3244,11 +3244,25 @@ async function runBatch() {
           for (const step of steps) {
             if (step.route === 'vector') {
               let res = { instances: [], degraded: true };
+              const ringDiagnostics = [];
               try {
                 res = await V.locateVector(pdfPage, pdfjsLib.OPS, textCenters, step.group,
-                  { extractCameraBlobs: V.extractCameraBlobs },
+                  {
+                    extractCameraBlobs: V.extractCameraBlobs,
+                    onCandidate: step.group?.requires_ring ? (c) => ringDiagnostics.push(c) : undefined
+                  },
                   { vpW: W, vpH: H });
                 console.log(`[vector] pg${pageNum}: raw=${res.n_subpaths_raw} kept=${res.n_subpaths_kept} blobs=${res.blob_count} instances=${res.instances?.length ?? 0} (frame ${W}x${H}, bodyArea ${step.group?.body_area ?? 2e-5})`);
+                if (step.group?.requires_ring) {
+                  const accepted = ringDiagnostics.filter(c => c.accepted).length;
+                  console.log(`[ring-verify] pg${pageNum}: strokes_found=${res.n_strokes_found} candidates=${ringDiagnostics.length} accepted=${accepted} rejected=${ringDiagnostics.length - accepted}`);
+                  if (res.n_strokes_found === 0) {
+                    console.warn(`[ring-verify] pg${pageNum}: ZERO stroke-only subpaths extracted — the ring is likely not drawn as a plain stroke on this sheet (could be a filled annulus, or a different encoding entirely). requires_ring will reject everything until this is understood.`);
+                  } else if (accepted === 0 && ringDiagnostics.length) {
+                    console.warn(`[ring-verify] pg${pageNum}: strokes exist but NOTHING passed — nearest candidates for first 5 blobs:`,
+                      ringDiagnostics.slice(0, 5).map(c => ({ x: c.x, y: c.y, blob_radius: c.radius, nearest: c.nearby[0] ?? null })));
+                  }
+                }
               } catch (e) { console.warn('[vector locate] pg' + pageNum, e.message); }
               if (res.degraded) {                       // found nothing -> LLM for each type in the group
                 console.warn(`[vector] pg${pageNum}: degraded (0 blobs) -> LLM fallback for ${step.device_type_ids?.length ?? 0} types`);

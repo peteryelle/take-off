@@ -221,6 +221,30 @@ export function findEncirclingRing(blobCentroid, blobRadius, strokeSubpaths = []
 }
 
 /**
+ * Diagnostic sibling of findEncirclingRing — never used in the accept/reject
+ * path itself, returns every circle-like candidate near the blob (regardless
+ * of whether it would pass the ratio/center checks), closest first, so a
+ * rejection can be inspected instead of just returning null. Built for
+ * calibrating centerTol/minRadiusRatio/maxRadiusRatio against real page
+ * geometry when a blind tolerance guess turns out wrong in production.
+ *
+ * @returns {Array} [{ dCenter, ratio, center, radius }] sorted by dCenter, closest first
+ */
+export function debugRingCandidates(blobCentroid, blobRadius, strokeSubpaths = []) {
+  const out = [];
+  for (const sp of strokeSubpaths) {
+    const circle = isCircleLike(sp.points);
+    if (!circle) continue;
+    out.push({
+      dCenter: Math.hypot(circle.center[0] - blobCentroid[0], circle.center[1] - blobCentroid[1]),
+      ratio: blobRadius > 0 ? circle.radius / blobRadius : null,
+      center: circle.center, radius: circle.radius
+    });
+  }
+  return out.sort((a, b) => a.dCenter - b.dCenter);
+}
+
+/**
  * Group filled sub-paths into per-glyph blobs. Sub-paths above `bodyArea` are glyph
  * BODIES; each smaller sub-path (lens cones, mounting marks) attaches to the nearest
  * body by edge distance to the body centroid. Points are assumed already normalized,
@@ -345,4 +369,4 @@ export async function extractCameraBlobs(page, OPS, textCenters = [], opts = {})
   return { blobs, frame, n_subpaths_raw: raw.length, n_subpaths_kept: kept.length, strokeSubpaths: normedStrokes };
 }
 
-export default { contentFrame, extractFilledSubpaths, extractSubpaths, filterByFill, groupSubpaths, isCircleLike, findEncirclingRing, classifyCameraBlob, extractCameraBlobs, polyArea };
+export default { contentFrame, extractFilledSubpaths, extractSubpaths, filterByFill, groupSubpaths, isCircleLike, findEncirclingRing, debugRingCandidates, classifyCameraBlob, extractCameraBlobs, polyArea };
