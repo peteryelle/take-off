@@ -273,35 +273,63 @@ export function stitchSegments(subpaths, tol = 0.001) {
  * AROUND it? Restricts to strokes within a local search radius first (cheap
  * even when the page has tens of thousands of unrelated strokes), stitches
  * that local set into continuous chains (see stitchSegments — a real ring is
- * often many short disconnected pieces, not one closed path), THEN checks
- * each stitched chain for the circle shape and size/center match.
+ * often many short disconnected pieces, not one closed path). Groups fragments
+ * into radial distance BANDS from the blob center before stitching — real ring
+ * fragments all sit at roughly the same distance (that's what makes it a
+ * ring); unrelated nearby geometry (walls, other fragments) doesn't share that
+ * property. Stitching the whole neighborhood in one pass let unrelated
+ * geometry at a different distance get merged into (and corrupt) the real
+ * ring's shape — confirmed on real production data: a histogram of nearby
+ * strokes showed two distinct distance clusters, and even a wide unbanded
+ * search found nothing circle-like across the combined set.
  *
  * @param {[number,number]} blobCentroid
  * @param {number} blobRadius
  * @param {Array} strokeSubpaths  [{points, filled:false, ...}] normalized, same frame
- * @param {Object} opts { centerTol, minRadiusRatio=1.1, maxRadiusRatio=3.0, searchRadius, stitchTol }
+ * @param {Object} opts { centerTol, minRadiusRatio=1.1, maxRadiusRatio=8.0, searchRadius, stitchTol, bandWidth }
  * @returns {{center, radius}|null}
  */
 export function findEncirclingRing(blobCentroid, blobRadius, strokeSubpaths = [], opts = {}) {
   if (!(blobRadius > 0)) return null;
   const centerTol = opts.centerTol ?? blobRadius * 0.5;
   const minRadiusRatio = opts.minRadiusRatio ?? 1.1;
-  const maxRadiusRatio = opts.maxRadiusRatio ?? 3.0;
+  // Widened from the original 3.0 — a triangle's area-derived "radius"
+  // (sqrt(area/PI)) systematically underestimates its visual size vs. a true
+  // circle of the same area, so the real ring sits proportionally further out
+  // than that math suggests. Confirmed on real data: the actual ring cluster
+  // sat at ~4.6-6.5x the triangle blob's computed radius.
+  const maxRadiusRatio = opts.maxRadiusRatio ?? 8.0;
   const searchRadius = opts.searchRadius ?? blobRadius * (maxRadiusRatio + 1) + centerTol;
+  const bandWidth = opts.bandWidth ?? blobRadius * 0.3;
 
-  const nearby = strokeSubpaths.filter((sp) => {
-    if (!sp.points?.length) return false;
+  const nearby = [];
+  for (const sp of strokeSubpaths) {
+    if (!sp.points?.length) continue;
     const c = centroid(sp.points);
-    return Math.hypot(c[0] - blobCentroid[0], c[1] - blobCentroid[1]) <= searchRadius;
-  });
-  const stitched = stitchSegments(nearby, opts.stitchTol ?? 0.001);
+    const d = Math.hypot(c[0] - blobCentroid[0], c[1] - blobCentroid[1]);
+    if (d <= searchRadius) nearby.push({ sp, d });
+  }
+  if (!nearby.length) return null;
 
-  for (const sp of stitched) {
-    const circle = isCircleLike(sp.points, opts.circleTol);
-    if (!circle) continue;
-    const dCenter = Math.hypot(circle.center[0] - blobCentroid[0], circle.center[1] - blobCentroid[1]);
-    const ratio = circle.radius / blobRadius;
-    if (dCenter <= centerTol && ratio >= minRadiusRatio && ratio <= maxRadiusRatio) return circle;
+  const bands = new Map();
+  for (const { sp, d } of nearby) {
+    const key = Math.round(d / bandWidth);
+    if (!bands.has(key)) bands.set(key, []);
+    bands.get(key).push(sp);
+  }
+  // Try the most heavily-populated band first — a real ring, drawn as many
+  // small fragments, should be the largest tight cluster at one distance.
+  const orderedBands = [...bands.values()].sort((a, b) => b.length - a.length);
+
+  for (const bandStrokes of orderedBands) {
+    const stitched = stitchSegments(bandStrokes, opts.stitchTol ?? 0.001);
+    for (const sp of stitched) {
+      const circle = isCircleLike(sp.points, opts.circleTol);
+      if (!circle) continue;
+      const dCenter = Math.hypot(circle.center[0] - blobCentroid[0], circle.center[1] - blobCentroid[1]);
+      const ratio = circle.radius / blobRadius;
+      if (dCenter <= centerTol && ratio >= minRadiusRatio && ratio <= maxRadiusRatio) return circle;
+    }
   }
   return null;
 }
@@ -433,22 +461,34 @@ export function debugLineCandidates(blobCentroid, blobRadius, strokeSubpaths = [
  * @returns {Array} [{ dCenter, ratio, center, radius }] sorted by dCenter, closest first
  */
 export function debugRingCandidates(blobCentroid, blobRadius, strokeSubpaths = [], opts = {}) {
-  const searchRadius = opts.searchRadius ?? (blobRadius > 0 ? blobRadius * 4 + 0.02 : 0.02);
-  const nearby = strokeSubpaths.filter((sp) => {
-    if (!sp.points?.length) return false;
+  const searchRadius = opts.searchRadius ?? (blobRadius > 0 ? blobRadius * 9 + 0.02 : 0.02);
+  const bandWidth = opts.bandWidth ?? (blobRadius > 0 ? blobRadius * 0.3 : 0.001);
+  const nearby = [];
+  for (const sp of strokeSubpaths) {
+    if (!sp.points?.length) continue;
     const c = centroid(sp.points);
-    return Math.hypot(c[0] - blobCentroid[0], c[1] - blobCentroid[1]) <= searchRadius;
-  });
-  const stitched = stitchSegments(nearby, opts.stitchTol ?? 0.001);
+    const d = Math.hypot(c[0] - blobCentroid[0], c[1] - blobCentroid[1]);
+    if (d <= searchRadius) nearby.push({ sp, d });
+  }
+  const bands = new Map();
+  for (const { sp, d } of nearby) {
+    const key = Math.round(d / bandWidth);
+    if (!bands.has(key)) bands.set(key, []);
+    bands.get(key).push(sp);
+  }
   const out = [];
-  for (const sp of stitched) {
-    const circle = isCircleLike(sp.points);
-    if (!circle) continue;
-    out.push({
-      dCenter: Math.hypot(circle.center[0] - blobCentroid[0], circle.center[1] - blobCentroid[1]),
-      ratio: blobRadius > 0 ? circle.radius / blobRadius : null,
-      center: circle.center, radius: circle.radius
-    });
+  for (const bandStrokes of bands.values()) {
+    if (bandStrokes.length < 3) continue;
+    const stitched = stitchSegments(bandStrokes, opts.stitchTol ?? 0.001);
+    for (const sp of stitched) {
+      const circle = isCircleLike(sp.points);
+      if (!circle) continue;
+      out.push({
+        dCenter: Math.hypot(circle.center[0] - blobCentroid[0], circle.center[1] - blobCentroid[1]),
+        ratio: blobRadius > 0 ? circle.radius / blobRadius : null,
+        center: circle.center, radius: circle.radius
+      });
+    }
   }
   return out.sort((a, b) => a.dCenter - b.dCenter);
 }

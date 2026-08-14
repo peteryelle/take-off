@@ -69,6 +69,22 @@ const fragmentedRing = asFragments(circlePoints(0.5, 0.5, 0.02, 24));
 A(findEncirclingRing([0.5, 0.5], 0.01, fragmentedRing) !== null,
   'a ring made of 24 disconnected fragments is still found (the actual production bug)');
 
+// The SECOND real-world finding: a ring's fragments mixed with unrelated nearby
+// noise fragments at a DIFFERENT distance from the blob (walls, other geometry)
+// — confirmed on production data via a distance histogram showing two distinct
+// clusters. Stitching the whole neighborhood in one unbanded pass let the noise
+// corrupt the fit; band-grouping by distance first should isolate the real
+// ring's band from the noise band automatically.
+{
+  const realRing = asFragments(circlePoints(0.5, 0.5, 0.02, 30));   // ratio 2.0, MORE fragments (like real production data)
+  const noise = asFragments(circlePoints(0.5, 0.5, 0.03, 10));      // ratio 3.0 — individually plausible too, fewer fragments
+  const mixed = [...realRing, ...noise];
+  const found = findEncirclingRing([0.5, 0.5], 0.01, mixed);
+  A(found !== null, 'the real ring is still found when mixed with unrelated noise at a different distance');
+  A(found && Math.abs(found.radius - 0.02) < 0.002,
+    `band priority (most fragments first) picks the REAL ring (r≈0.02), not the individually-plausible noise shell (got r=${found?.radius.toFixed(4)})`);
+}
+
 // ── blobsToInstances integration: the full wiring a real page goes through ──
 console.log('blobsToInstances (requires_ring integration):');
 const triangleBody = [[0.49, 0.49], [0.51, 0.49], [0.50, 0.52], [0.49, 0.49]]; // small filled triangle, area ~3e-4
