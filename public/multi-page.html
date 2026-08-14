@@ -4846,9 +4846,21 @@ async function restoreFromSupabase(pid) {
     const pageRegions = j.page_regions ?? [];   // schematics (page → 1+ regions)
     const regionById  = new Map(pageRegions.map(rg => [rg.id, rg]));
     // Distance-scope boxes, keyed by page_id (devices are scoped against these).
+    // Only genuine schematic/scope-defining regions — page-regions.js's own
+    // default is kind:'schematic' for anything that isn't explicitly 'exclude'
+    // (see confirmRegion's POST). Exclude-kind regions serve a completely
+    // different purpose (hard-exclude a specific device from the count) and
+    // must never be treated as a distance-scope boundary — confirmed on real
+    // production data: once enough exclude regions accumulated (164, mostly
+    // leftover per-device test culls from an extended debugging session),
+    // they got silently pulled into this same array, and almost every device
+    // on the page started reading as "outside every scope box" purely because
+    // it didn't happen to sit inside one of ~164 scattered, unrelated tiny
+    // cull boxes that were never meant to define a serving area at all.
     scopeRegions = {};
     for (const rg of pageRegions) {
       if (rg.page_id == null || rg.x0 == null) continue;
+      if (rg.kind === 'exclude') continue;
       (scopeRegions[rg.page_id] ??= []).push(rg);
     }
     const instances   = j.device_instances ?? []; // reconcile merges in Step 5
