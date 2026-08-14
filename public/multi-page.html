@@ -3269,19 +3269,31 @@ async function runBatch() {
                     console.warn(`[ring-verify] pg${pageNum}: strokes exist but NOTHING passed —\n` + lines.join('\n'));
 
                     // One more level down: for the FIRST blob, ignore the circle-shape
-                    // check entirely and just list every stroke subpath whose own
-                    // centroid is genuinely close to the device (within 2% of the
-                    // page) — distinguishes "nothing is drawn near this device at
-                    // all" from "something is drawn near it but isCircleLike rejects
-                    // its shape" (a capture gap vs. a shape-detection gap).
+                    // check entirely and bucket every nearby stroke by distance from the
+                    // device — distinguishes "nothing is drawn near this device at all"
+                    // from "something is drawn near it but at the wrong distance to be
+                    // the ring" from "there IS a cluster near the expected ring radius
+                    // but the shape check still rejects it." Showing only the closest 8
+                    // previously hid a same-radius cluster if 8+ unrelated fragments
+                    // happened to be even closer to the device than the ring itself.
                     const first = ringDiagnostics[0];
                     if (first && res.strokeSubpaths && V.debugNearbyStrokes) {
                       const nearby = V.debugNearbyStrokes([first.x, first.y], res.strokeSubpaths, 0.02);
                       if (!nearby.length) {
                         console.warn(`[ring-verify] pg${pageNum}: NOTHING stroke-only within 2% of blob(${first.x.toFixed(4)},${first.y.toFixed(4)}) at all — no ring geometry is reaching this device's position, full stop.`);
                       } else {
-                        console.warn(`[ring-verify] pg${pageNum}: ${nearby.length} stroke(s) actually near blob(${first.x.toFixed(4)},${first.y.toFixed(4)}) —\n` +
-                          nearby.slice(0, 8).map(s => `  n_points=${s.n_points} dCenter=${s.dCenter.toFixed(5)} isCircle=${s.isCircle}`).join('\n'));
+                        const bucketW = 0.0005;
+                        const buckets = {};
+                        for (const s of nearby) {
+                          const b = (Math.floor(s.dCenter / bucketW) * bucketW).toFixed(4);
+                          buckets[b] = (buckets[b] ?? 0) + 1;
+                        }
+                        const expectedLo = (first.radius * 1.1).toFixed(5), expectedHi = (first.radius * 3.0).toFixed(5);
+                        const bucketLines = Object.entries(buckets)
+                          .sort((a, b) => parseFloat(a[0]) - parseFloat(b[0]))
+                          .map(([b, n]) => `  dCenter≈${b}: ${n} stroke(s)`);
+                        console.warn(`[ring-verify] pg${pageNum}: ${nearby.length} stroke(s) near blob(${first.x.toFixed(4)},${first.y.toFixed(4)}) r=${first.radius.toFixed(5)} — expected ring dCenter range for this blob: ${expectedLo}–${expectedHi} —\n` +
+                          bucketLines.join('\n'));
                       }
                     }
                   }
