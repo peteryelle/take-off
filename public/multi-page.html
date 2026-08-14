@@ -3946,9 +3946,12 @@ function confRedraw() {
     layer.appendChild(dot);
   }
 
+  let attempted = 0, rendered = 0, skippedNullXY = 0, skippedFilter = 0, errored = [];
   for (const d of confDevices) {
-    if (d.x_norm == null || d.y_norm == null) continue;
-    if (confTypeFilter && d.name !== confTypeFilter) continue;   // triage one type at a time on a busy sheet
+    attempted++;
+    if (d.x_norm == null || d.y_norm == null) { skippedNullXY++; continue; }
+    if (confTypeFilter && d.name !== confTypeFilter) { skippedFilter++; continue; }   // triage one type at a time on a busy sheet
+    try {
     const culled = (d.flags ?? []).includes('manual_excluded');
     const armed  = !culled && d._num != null && d._num === confArmedForCull;
     const color  = culled ? '#666' : armed ? '#f07a7a' : (CONF_COLOR[d.confidence] ?? '#888');
@@ -4016,6 +4019,14 @@ function confRedraw() {
       if (!culled) badge.onclick = (e) => { e.stopPropagation(); togglePinnedPath(d); };
       layer.appendChild(badge);
     }
+    rendered++;
+    } catch (e) {
+      errored.push({ num: d._num, name: d.name, x: d.x_norm, y: d.y_norm, error: e.message });
+    }
+  }
+  if (confDevices.length) {
+    console.log(`[confRedraw] pg${confPageNum}: confDevices=${confDevices.length} attempted=${attempted} rendered=${rendered} skipped(nullXY)=${skippedNullXY} skipped(filter)=${skippedFilter} errored=${errored.length}`);
+    if (errored.length) console.warn('[confRedraw] devices that threw during rendering (silently skipped before this fix):', errored);
   }
 }
 
@@ -4144,16 +4155,29 @@ async function submitCull(category, reason) {
   // Persist to the row itself — previously only the exclude-region was saved
   // (stops a future re-run from re-detecting it), but the CURRENT row was never
   // patched, so a plain reload without a fresh run showed every culled device
-  // as untouched. Best-effort: the exclude-region already landed, so the cull
-  // still "holds" on the next run even if this specific write fails.
+  // as untouched. Not best-effort anymore — a silent failure here (rowId
+  // missing, or a non-ok response never checked) was the actual cause of culls
+  // silently not persisting despite the UI showing them as excluded.
   const rowId = res?.devices?.[d._num - 1]?.id;
-  if (rowId) {
+  let persistError = null;
+  if (!rowId) {
+    console.warn('[device-instance patch] no rowId — device_instances.id was never resolved for this device (check pass-batch.js insert-order mapping)');
+    persistError = 'no database id for this device';
+  } else {
     try {
-      await fetch(`${base()}/api/device-instance`, {
+      const r = await fetch(`${base()}/api/device-instance`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: rowId, flags: flagsArr, cull_category: category, cull_reason: category === 'excluded' ? reason : null })
       });
-    } catch (e) { console.warn('[device-instance patch]', e.message); }
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        console.warn('[device-instance patch] failed:', j.error || r.status);
+        persistError = j.error || String(r.status);
+      }
+    } catch (e) {
+      console.warn('[device-instance patch]', e.message);
+      persistError = e.message;
+    }
   }
   // Update the local copy too, so this redraw immediately shows ✕ without
   // needing the modal to be reopened.
@@ -4163,7 +4187,11 @@ async function submitCull(category, reason) {
   d.cull_region_id = regionId;
 
   confCullTarget = null;
-  document.getElementById('conf-hover-info').textContent = '';
+  if (persistError) {
+    document.getElementById('conf-hover-info').textContent = `⚠ Excluded locally, but the save failed: ${persistError}. It may reappear on reload.`;
+  } else {
+    document.getElementById('conf-hover-info').textContent = '';
+  }
   clearConfPath();
   confRedraw();
   renderResults();
@@ -4206,20 +4234,34 @@ async function unCullDevice(d) {
   // row itself stays flagged manual_excluded in the database even after the
   // exclude-region is gone, so a reload would show it culled again.
   const rowId = res?.devices?.[d._num - 1]?.id;
-  if (rowId) {
+  let persistError = null;
+  if (!rowId) {
+    console.warn('[device-instance patch] no rowId — device_instances.id was never resolved for this device');
+    persistError = 'no database id for this device';
+  } else {
     try {
-      await fetch(`${base()}/api/device-instance`, {
+      const r = await fetch(`${base()}/api/device-instance`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: rowId, flags: clearedFlags, cull_category: null, cull_reason: null })
       });
-    } catch (e) { console.warn('[device-instance patch]', e.message); }
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        console.warn('[device-instance patch] failed:', j.error || r.status);
+        persistError = j.error || String(r.status);
+      }
+    } catch (e) {
+      console.warn('[device-instance patch]', e.message);
+      persistError = e.message;
+    }
   }
   d.flags = clearedFlags;
   d.cull_category = null;
   d.cull_reason = null;
   d.cull_region_id = null;
 
-  document.getElementById('conf-hover-info').textContent = '';
+  document.getElementById('conf-hover-info').textContent = persistError
+    ? `⚠ Restored locally, but the save failed: ${persistError}. It may show as excluded again on reload.`
+    : '';
   confRedraw();
   renderResults();
 }
