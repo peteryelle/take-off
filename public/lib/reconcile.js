@@ -37,11 +37,6 @@ function inAnyRegion(regions, x, y) {
   return false;
 }
 
-function quantKey(type, x, y, decimals) {
-  const q = (v) => (v == null ? 'na' : Number(v).toFixed(decimals));
-  return `coord:${type}@${q(x)},${q(y)}`;
-}
-
 /**
  * @param {Object} catalog  type -> { sources: ['schedule'|'label'|'symbol', ...], ... }
  * @param {Array}  labelInstances   [{ uin?, type, x, y, families?|codes? }]
@@ -130,15 +125,33 @@ export function reconcile(catalog = {}, labelInstances = [], symbolInstances = [
       if (scheduleActive(lab.type)) d.flags.push('not_in_schedule');
       mergeFamilies(d, lab);
       devices.push(d); keyIndex.set(u, d);
-    } else {                                          // no UIN (VA / label-only) -> exact-coordinate collapse
-      const ckey = quantKey(lab.type, lab.x, lab.y, coordDecimals);
-      if (keyIndex.has(ckey)) {                        // duplicate pair: same point, same type -> fold in
-        const d = keyIndex.get(ckey);
-        addSource(d, 'label'); mergeFamilies(d, lab);
+    } else {                                          // no UIN (VA / label-only) -> proximity collapse
+      // Was an exact-coordinate Map lookup (4-decimal match required) — real PDF
+      // text-extraction/normalization has enough run-to-run variance that two
+      // detections of the SAME physical device rarely land at bit-identical
+      // coordinates, so genuine duplicates were creating two separate device
+      // records instead of folding into one (confirmed on real production data:
+      // clusters of near-duplicate detections 0.007-0.015 apart that should have
+      // been one device). Proximity-based, matching the SNAP step's own pattern a
+      // few lines below — a real radius, not exact equality. Restricted to
+      // OTHER no-UIN label-seeded devices specifically (synthetic id still
+      // carries its '_lab' prefix at this point, stripped to null only in SCORE
+      // below) so a same-type device seeded by a real UIN elsewhere on the page
+      // is never silently absorbed just because it happens to sit nearby.
+      const labelDedupR2 = (opts.labelDedupR ?? 0.003) ** 2;
+      let existing = null, bestD = labelDedupR2;
+      for (const d of devices) {
+        if (d.type !== lab.type || d.x == null) continue;
+        if (!(typeof d.uin === 'string' && d.uin.startsWith('_lab'))) continue;
+        const dd = (d.x - lab.x) ** 2 + (d.y - lab.y) ** 2;
+        if (dd <= bestD) { bestD = dd; existing = d; }
+      }
+      if (existing) {                                 // duplicate: same-ish point, same type -> fold in
+        addSource(existing, 'label'); mergeFamilies(existing, lab);
       } else {
         const d = rec(`_lab${synth++}`, lab.type, { x: lab.x, y: lab.y, xy_source: 'label', sources: ['label'] });
         mergeFamilies(d, lab);
-        devices.push(d); keyIndex.set(ckey, d);
+        devices.push(d);
       }
     }
   }
