@@ -15,6 +15,7 @@ import { requireOrg, assertProjectInOrg, assertPageInOrg } from "./utils/auth.js
 import { buildDeviceList } from "../../public/lib/pipeline.js";
 import { parseSchedule } from "../../public/lib/schedule.js";
 import { buildGreedyPath } from "../../public/lib/waypoint-path.js";
+import { toIdentityXY } from "../../public/lib/frame.js";
 
 const ROUTE_FACTOR  = 1.35;
 const TIA_OUTLET_FT = 295;
@@ -286,6 +287,18 @@ export default async function handler(req) {
     const EXCLUDE_ZONE_BUFFER_FRAC = 0.02;
     const MIN_REGION_SIZE_FOR_BUFFER = 0.05;
 
+    // Exclude regions are always stored in the identity (full-page) frame — the
+    // client draws them via the SAME bboxForDevice transform normToCanvasXY uses
+    // for rendering. But device.x/device.y here are NOT always in that frame:
+    // label-sourced (and vector-symbol-sourced) devices are normalized against
+    // the page's TEXT-CONTENT bounding box, not the full page. Comparing them
+    // directly against an identity-frame box compares two different coordinate
+    // spaces — confirmed on a real project: a cull's own exclude box failed to
+    // suppress the same device on the very next re-run, with position drift
+    // separately ruled out (three consecutive re-runs landed on IDENTICAL
+    // coordinates). The content-bbox offset alone (this page: ~0.03, ~-0.03)
+    // exceeds a per-device cull box's own half-width, so the mismatch guarantees
+    // a miss regardless of how precisely the device re-detects. See frame.js.
     const inExcludeZone = (x, y) => {
       if (x == null || y == null || !excludeRegions?.length) return false;
       return excludeRegions.some((r) => {
@@ -295,8 +308,16 @@ export default async function handler(req) {
         return x >= r.x0 - buf && x <= r.x1 + buf && y >= r.y0 - buf && y <= r.y1 + buf;
       });
     };
-    const excludedCount = reconciled.filter((dev) => !dev._manual && inExcludeZone(dev.x, dev.y)).length;
-    let inScope = reconciled.filter((dev) => dev._manual || !inExcludeZone(dev.x, dev.y));
+    const excludedCount = reconciled.filter((dev) => {
+      if (dev._manual) return false;
+      const [ix, iy] = toIdentityXY(dev, content_bbox);
+      return inExcludeZone(ix, iy);
+    }).length;
+    let inScope = reconciled.filter((dev) => {
+      if (dev._manual) return true;
+      const [ix, iy] = toIdentityXY(dev, content_bbox);
+      return !inExcludeZone(ix, iy);
+    });
 
     // Dedup: if detection later genuinely finds the same physical device a manual
     // add already covers (better symbol matching, a schedule row lands, etc.), drop
