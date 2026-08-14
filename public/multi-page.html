@@ -592,13 +592,13 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
      module scripts, so it is set before any page processing runs. If it fails to load,
      the per-page symbol loop falls back to the existing LLM (pass-symbol) path. -->
 <script type="module">
-  import { contentFrame, extractFilledSubpaths, extractCameraBlobs } from './lib/geometry.js';
+  import { contentFrame, extractFilledSubpaths, extractCameraBlobs, debugNearbyStrokes } from './lib/geometry.js';
   import { classifySheetClass, deriveSheetClassSignals } from './lib/sheet-class.js';
   import { planSymbolDetection, locateVector, blobsToInstances } from './lib/locate.js';
   import { runnerWorkForRole, unassignedPages } from './lib/plan-set.js';
   import { aggregateBom } from './lib/bom.js';
   import { buildGreedyPath } from './lib/waypoint-path.js';
-  window.TakeoffVec = { contentFrame, extractFilledSubpaths, extractCameraBlobs,
+  window.TakeoffVec = { contentFrame, extractFilledSubpaths, extractCameraBlobs, debugNearbyStrokes,
                         classifySheetClass, deriveSheetClassSignals,
                         planSymbolDetection, locateVector, blobsToInstances,
                         runnerWorkForRole, unassignedPages,
@@ -3267,6 +3267,23 @@ async function runBatch() {
                       return `blob(${c.x.toFixed(4)},${c.y.toFixed(4)}) r=${c.radius.toFixed(5)} → nearest: ${nearestTxt}`;
                     });
                     console.warn(`[ring-verify] pg${pageNum}: strokes exist but NOTHING passed —\n` + lines.join('\n'));
+
+                    // One more level down: for the FIRST blob, ignore the circle-shape
+                    // check entirely and just list every stroke subpath whose own
+                    // centroid is genuinely close to the device (within 2% of the
+                    // page) — distinguishes "nothing is drawn near this device at
+                    // all" from "something is drawn near it but isCircleLike rejects
+                    // its shape" (a capture gap vs. a shape-detection gap).
+                    const first = ringDiagnostics[0];
+                    if (first && res.strokeSubpaths && V.debugNearbyStrokes) {
+                      const nearby = V.debugNearbyStrokes([first.x, first.y], res.strokeSubpaths, 0.02);
+                      if (!nearby.length) {
+                        console.warn(`[ring-verify] pg${pageNum}: NOTHING stroke-only within 2% of blob(${first.x.toFixed(4)},${first.y.toFixed(4)}) at all — no ring geometry is reaching this device's position, full stop.`);
+                      } else {
+                        console.warn(`[ring-verify] pg${pageNum}: ${nearby.length} stroke(s) actually near blob(${first.x.toFixed(4)},${first.y.toFixed(4)}) —\n` +
+                          nearby.slice(0, 8).map(s => `  n_points=${s.n_points} dCenter=${s.dCenter.toFixed(5)} isCircle=${s.isCircle}`).join('\n'));
+                      }
+                    }
                   }
                 }
               } catch (e) { console.warn('[vector locate] pg' + pageNum, e.message); }

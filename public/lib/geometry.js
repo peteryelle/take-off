@@ -178,6 +178,31 @@ export function filterByFill(subpaths = [], target = null, tol = 48) {
  * @param {number} tol   relative std-dev of radius allowed (default 0.15)
  * @returns {{center:[x,y], radius:number}|null}
  */
+/**
+ * Diagnostic only, never used in the accept/reject or debugRingCandidates path —
+ * every stroke subpath whose OWN centroid falls within `radius` of `point`,
+ * regardless of whether isCircleLike accepts it. Built to distinguish "there's no
+ * stroke geometry anywhere near this device at all" from "there IS geometry
+ * nearby but it's failing the circle-shape check" — the two have very different
+ * fixes (capture gap vs. tolerance/shape-detection gap) and debugRingCandidates
+ * alone (which only reports already-circle-classified matches, however far away)
+ * can't tell them apart when NOTHING nearby passes the shape check.
+ *
+ * @returns {Array} [{ n_points, dCenter, isCircle:bool }] sorted by dCenter
+ */
+export function debugNearbyStrokes(point, strokeSubpaths = [], radius = 0.02) {
+  const out = [];
+  for (const sp of strokeSubpaths) {
+    if (!sp.points?.length) continue;
+    const c = centroid(sp.points);
+    const dCenter = Math.hypot(c[0] - point[0], c[1] - point[1]);
+    if (dCenter <= radius) {
+      out.push({ n_points: sp.points.length, dCenter, isCircle: !!isCircleLike(sp.points) });
+    }
+  }
+  return out.sort((a, b) => a.dCenter - b.dCenter);
+}
+
 export function isCircleLike(points, tol = 0.15) {
   if (!Array.isArray(points) || points.length < 8) return null;
   const c = centroid(points);
@@ -369,4 +394,4 @@ export async function extractCameraBlobs(page, OPS, textCenters = [], opts = {})
   return { blobs, frame, n_subpaths_raw: raw.length, n_subpaths_kept: kept.length, strokeSubpaths: normedStrokes };
 }
 
-export default { contentFrame, extractFilledSubpaths, extractSubpaths, filterByFill, groupSubpaths, isCircleLike, findEncirclingRing, debugRingCandidates, classifyCameraBlob, extractCameraBlobs, polyArea };
+export default { contentFrame, extractFilledSubpaths, extractSubpaths, filterByFill, groupSubpaths, isCircleLike, findEncirclingRing, debugRingCandidates, debugNearbyStrokes, classifyCameraBlob, extractCameraBlobs, polyArea };

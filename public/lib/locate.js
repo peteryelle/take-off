@@ -149,6 +149,7 @@ export async function locateVector(page, OPS, textCenters, group, deps = {}, opt
     instances: blobsToInstances(blobs, group, { strokeSubpaths, onCandidate }),
     blob_count: blobs.length, n_subpaths_raw, n_subpaths_kept,
     n_strokes_found: strokeSubpaths?.length ?? 0,
+    strokeSubpaths,   // diagnostic use only (debugNearbyStrokes) — not needed for normal operation
     degraded: blobs.length === 0
   };
 }
