@@ -85,6 +85,25 @@ A(findEncirclingRing([0.5, 0.5], 0.01, fragmentedRing) !== null,
     `band priority (most fragments first) picks the REAL ring (r≈0.02), not the individually-plausible noise shell (got r=${found?.radius.toFixed(4)})`);
 }
 
+// Mutation regression: a real cluster's own fragments can be spread widely in
+// distance from center (confirmed on production data: a genuine outer ring
+// cluster spanned dCenter 0.014-0.0195, roughly 6x wider than a bandWidth
+// derived from the blob's own size). A fixed-width binning approach split that
+// single real cluster into several too-sparse pieces, none of which could
+// reconstruct into a circle. Gap-based clustering must keep it together as
+// long as there's no unusually large gap WITHIN it.
+{
+  const spreadRing = circlePoints(0.5, 0.5, 0.02, 24).map(([x, y]) => {
+    const dx = x - 0.5, dy = y - 0.5;
+    const r = Math.hypot(dx, dy) + (Math.random() - 0.5) * 0.003; // ±0.0015 fragment-to-fragment jitter
+    const a = Math.atan2(dy, dx);
+    return [0.5 + r * Math.cos(a), 0.5 + r * Math.sin(a)];
+  });
+  const fragmented = asFragments(spreadRing);
+  A(findEncirclingRing([0.5, 0.5], 0.01, fragmented) !== null,
+    'a cluster with real fragment-to-fragment distance jitter (not a mathematically perfect circle) still stitches into one recognized ring');
+}
+
 // ── blobsToInstances integration: the full wiring a real page goes through ──
 console.log('blobsToInstances (requires_ring integration):');
 const triangleBody = [[0.49, 0.49], [0.51, 0.49], [0.50, 0.52], [0.49, 0.49]]; // small filled triangle, area ~3e-4

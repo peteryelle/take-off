@@ -269,24 +269,56 @@ export function stitchSegments(subpaths, tol = 0.001) {
 }
 
 /**
+ * Gap-based clustering of {sp, d} items by their `d` value — sorts by distance,
+ * then starts a new cluster whenever the gap to the next item exceeds `gapTol`.
+ * Adapts to however wide a real cluster actually is, unlike fixed-width binning
+ * (confirmed wrong on real data: a genuine ring's own fragment-to-fragment
+ * distance spread was ~6x wider than a bandWidth chosen from the blob's size
+ * alone, splitting one real cluster into several too-sparse fragments). The
+ * gap BETWEEN two real clusters was ~2.7x the largest gap WITHIN either one on
+ * that same data, which is what makes a gap threshold work at all here.
+ *
+ * @param {Array} items [{sp, d}] — d must be sorted-comparable (a distance)
+ * @param {number} gapTol
+ * @returns {Array} clusters, each an array of the original sp values, sorted by
+ *   cluster size descending (most items first)
+ */
+function clusterByDistance(items, gapTol) {
+  const sorted = [...items].sort((a, b) => a.d - b.d);
+  const clusters = [];
+  let current = [];
+  for (let i = 0; i < sorted.length; i++) {
+    if (current.length && sorted[i].d - sorted[i - 1].d > gapTol) {
+      clusters.push(current);
+      current = [];
+    }
+    current.push(sorted[i]);
+  }
+  if (current.length) clusters.push(current);
+  return clusters
+    .sort((a, b) => b.length - a.length)
+    .map((cluster) => cluster.map((item) => item.sp));
+}
+
+/**
  * Does some stroke geometry near this blob form a circle that genuinely WRAPS
  * AROUND it? Restricts to strokes within a local search radius first (cheap
  * even when the page has tens of thousands of unrelated strokes), stitches
  * that local set into continuous chains (see stitchSegments — a real ring is
  * often many short disconnected pieces, not one closed path). Groups fragments
- * into radial distance BANDS from the blob center before stitching — real ring
- * fragments all sit at roughly the same distance (that's what makes it a
- * ring); unrelated nearby geometry (walls, other fragments) doesn't share that
- * property. Stitching the whole neighborhood in one pass let unrelated
- * geometry at a different distance get merged into (and corrupt) the real
- * ring's shape — confirmed on real production data: a histogram of nearby
- * strokes showed two distinct distance clusters, and even a wide unbanded
- * search found nothing circle-like across the combined set.
+ * by distance from the blob center via gap-based clustering (clusterByDistance)
+ * before stitching — real ring fragments all sit at roughly the same distance
+ * (that's what makes it a ring); unrelated nearby geometry (walls, other
+ * fragments) doesn't share that property. Stitching the whole neighborhood in
+ * one pass let unrelated geometry at a different distance get merged into
+ * (and corrupt) the real ring's shape — confirmed on real production data: a
+ * histogram of nearby strokes showed two distinct distance clusters, and even
+ * a wide unbanded search found nothing circle-like across the combined set.
  *
  * @param {[number,number]} blobCentroid
  * @param {number} blobRadius
  * @param {Array} strokeSubpaths  [{points, filled:false, ...}] normalized, same frame
- * @param {Object} opts { centerTol, minRadiusRatio=1.1, maxRadiusRatio=8.0, searchRadius, stitchTol, bandWidth }
+ * @param {Object} opts { centerTol, minRadiusRatio=1.1, maxRadiusRatio=8.0, searchRadius, stitchTol, gapTol }
  * @returns {{center, radius}|null}
  */
 export function findEncirclingRing(blobCentroid, blobRadius, strokeSubpaths = [], opts = {}) {
@@ -300,7 +332,7 @@ export function findEncirclingRing(blobCentroid, blobRadius, strokeSubpaths = []
   // sat at ~4.6-6.5x the triangle blob's computed radius.
   const maxRadiusRatio = opts.maxRadiusRatio ?? 8.0;
   const searchRadius = opts.searchRadius ?? blobRadius * (maxRadiusRatio + 1) + centerTol;
-  const bandWidth = opts.bandWidth ?? blobRadius * 0.3;
+  const gapTol = opts.gapTol ?? blobRadius;
 
   const nearby = [];
   for (const sp of strokeSubpaths) {
@@ -311,18 +343,10 @@ export function findEncirclingRing(blobCentroid, blobRadius, strokeSubpaths = []
   }
   if (!nearby.length) return null;
 
-  const bands = new Map();
-  for (const { sp, d } of nearby) {
-    const key = Math.round(d / bandWidth);
-    if (!bands.has(key)) bands.set(key, []);
-    bands.get(key).push(sp);
-  }
-  // Try the most heavily-populated band first — a real ring, drawn as many
-  // small fragments, should be the largest tight cluster at one distance.
-  const orderedBands = [...bands.values()].sort((a, b) => b.length - a.length);
+  const clusters = clusterByDistance(nearby, gapTol);
 
-  for (const bandStrokes of orderedBands) {
-    const stitched = stitchSegments(bandStrokes, opts.stitchTol ?? 0.001);
+  for (const clusterStrokes of clusters) {
+    const stitched = stitchSegments(clusterStrokes, opts.stitchTol ?? 0.001);
     for (const sp of stitched) {
       const circle = isCircleLike(sp.points, opts.circleTol);
       if (!circle) continue;
@@ -462,7 +486,7 @@ export function debugLineCandidates(blobCentroid, blobRadius, strokeSubpaths = [
  */
 export function debugRingCandidates(blobCentroid, blobRadius, strokeSubpaths = [], opts = {}) {
   const searchRadius = opts.searchRadius ?? (blobRadius > 0 ? blobRadius * 9 + 0.02 : 0.02);
-  const bandWidth = opts.bandWidth ?? (blobRadius > 0 ? blobRadius * 0.3 : 0.001);
+  const gapTol = opts.gapTol ?? (blobRadius > 0 ? blobRadius : 0.001);
   const nearby = [];
   for (const sp of strokeSubpaths) {
     if (!sp.points?.length) continue;
@@ -470,16 +494,10 @@ export function debugRingCandidates(blobCentroid, blobRadius, strokeSubpaths = [
     const d = Math.hypot(c[0] - blobCentroid[0], c[1] - blobCentroid[1]);
     if (d <= searchRadius) nearby.push({ sp, d });
   }
-  const bands = new Map();
-  for (const { sp, d } of nearby) {
-    const key = Math.round(d / bandWidth);
-    if (!bands.has(key)) bands.set(key, []);
-    bands.get(key).push(sp);
-  }
+  const clusters = clusterByDistance(nearby, gapTol);
   const out = [];
-  for (const bandStrokes of bands.values()) {
-    if (bandStrokes.length < 3) continue;
-    const stitched = stitchSegments(bandStrokes, opts.stitchTol ?? 0.001);
+  for (const clusterStrokes of clusters) {
+    const stitched = stitchSegments(clusterStrokes, opts.stitchTol ?? 0.001);
     for (const sp of stitched) {
       const circle = isCircleLike(sp.points);
       if (!circle) continue;
