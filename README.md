@@ -27,7 +27,6 @@ Take-Off is a web-based application designed to streamline the process of extrac
 - Internet connection
 
 ### Installation
-
 1. Clone the repository:
 ```bash
 git clone https://github.com/peteryelle/take-off.git
