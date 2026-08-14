@@ -87,7 +87,7 @@ export default async function handler(req) {
 
     // Page regions — schematics (one or more per page); demarc_id = the schematic's primary TR
     supabase.from("page_regions")
-      .select("id, page_id, label, demarc_id, polygon, x0, y0, x1, y1")
+      .select("id, page_id, label, kind, demarc_id, polygon, x0, y0, x1, y1")
       .eq("project_id", project_id)
       .order("page_id")
   ]);
