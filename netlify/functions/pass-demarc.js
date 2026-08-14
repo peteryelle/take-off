@@ -49,7 +49,11 @@ export default async function handler(req) {
     if (!project_id || !name || !source) return err("project_id, name and source required");
 
   if (!(await assertProjectInOrg(supabase, project_id, orgId))) return err("Project not found in your organization", 404);
-  if (!(await assertPageInOrg(supabase, page_id, orgId))) return err("Page not found in your organization", 404);
+  // page_id is documented as legitimately null (project-level/off-sheet demarc)
+  // — assertPageInOrg returns false unconditionally for any falsy id, so
+  // calling it here for that legitimate case 404'd every off-sheet demarc
+  // save. Only check it when a page_id was actually supplied.
+  if (page_id != null && !(await assertPageInOrg(supabase, page_id, orgId))) return err("Page not found in your organization", 404);
 
     const row = {
       project_id,
