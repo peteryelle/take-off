@@ -3489,6 +3489,16 @@ function applyDistanceScope() {
   }
 }
 
+// Accordion state for the By Page results list. null = all collapsed.
+// Persists across re-renders (culls, leader edits, etc.) so the open page
+// stays open until the user collapses it or opens a different one.
+let expandedResultsPage = null;
+
+function toggleResultsPage(pageNum) {
+  expandedResultsPage = (expandedResultsPage === pageNum) ? null : pageNum;
+  renderByPage();
+}
+
 function renderResults() {
   renderByPage();
   renderByTR();
@@ -3537,16 +3547,20 @@ function renderByPage() {
     } else if (servingTRs.length > 1) {
       demarcInfo = `<span style="color:#555; margin-left:12px; font-size:11px;">${servingTRs.length} exits: ${servingTRs.map(t => t.name).join(', ')}</span>`;
     }
-    html += `<div style="color:#f0c040; font-size:13px; margin-bottom:6px; display:flex; align-items:baseline; flex-wrap:wrap; gap:8px;">
+    const isOpen = expandedResultsPage === pageNum;
+    html += `<div onclick="toggleResultsPage(${pageNum})" style="color:#f0c040; font-size:13px; margin-bottom:6px; display:flex; align-items:baseline; flex-wrap:wrap; gap:8px; cursor:pointer;">
+      <span style="color:#888; font-size:11px; width:10px; display:inline-block;">${isOpen ? '▾' : '▸'}</span>
       <strong>pg${pageNum}</strong>
       <span style="color:#e0e0e0;">${sheet}</span>
       <span style="color:#888;">${res.device_count} devices</span>
       ${res.tia_violations ? `<span style="color:#f07a7a;">⚠ ${res.tia_violations} TIA</span>` : ''}
       ${res.excluded_out_of_scope ? `<span style="color:#b06a2a;" title="dropped entirely — inside a marked out-of-scope zone">⬚ ${res.excluded_out_of_scope} excluded</span>` : ''}
       ${demarcInfo}
-      <button onclick="openLeaderModal(${pageNum})" class="info" style="padding:2px 9px; font-size:10px;">⤳ mark leaders</button>
-      <button onclick="openConfidenceModal(${pageNum})" class="info" style="padding:2px 9px; font-size:10px;">★ confidence map</button>
+      <button onclick="event.stopPropagation(); openLeaderModal(${pageNum})" class="info" style="padding:2px 9px; font-size:10px;">⤳ mark leaders</button>
+      <button onclick="event.stopPropagation(); openConfidenceModal(${pageNum})" class="info" style="padding:2px 9px; font-size:10px;">★ confidence map</button>
     </div>`;
+
+
 
     // By-type summary (with leader-added sub-count computed from device flags)
     const byType = res.by_type ?? [];
@@ -3561,6 +3575,11 @@ function renderByPage() {
       html += `<span style="margin-right:12px;"><strong style="color:#e0e0e0;">${t.count}</strong> ${t.name}${leaderNote}</span>`;
     }
     html += `</div>`;
+
+    if (!isOpen) {
+      html += `</div>`; // close the outer page wrapper — no table for a collapsed page
+      continue;
+    }
 
     // Device table
     html += `<table class="res-table"><thead><tr>
