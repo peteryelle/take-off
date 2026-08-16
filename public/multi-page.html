@@ -3050,7 +3050,13 @@ async function lockDemarcs() {
 }
 
 // ── Step 4: Batch run ─────────────────────────────────────────────
-async function runBatch() {
+async function runBatch(quiet = false) {
+  // quiet=true (single-page manual-add rerun): status bar/heartbeat still update,
+  // but batch-log is left untouched — it's an append-only, fixed-height (160px)
+  // running record of the full batch run, and a manual-add rerun re-invoking it
+  // per keystroke both floods it with duplicate per-page lines and scrolls the
+  // other pages' original entries out of view. Feedback for a quiet rerun goes
+  // through conf-hover-info (see submitManualAdd) instead.
   const sortedPages = [...selectedPages].sort((a,b) => a-b);
   _anchorCache = null; // force fresh load — device types may have changed since last run
 
@@ -3068,7 +3074,7 @@ async function runBatch() {
         `✗ Counting blocked — assign a role to every selected page first. Needs a role: ${missing.map(n=>'pg'+n).join(', ')}`,
         'err');
       const log0 = document.getElementById('batch-log');
-      if (log0) log0.innerHTML += `<div style="color:#f0c040;">⚠ ${missing.length} page${missing.length!==1?'s':''} unassigned — no pages counted. Set roles (plan / schedule / legend / detail / skip) and re-run.</div>`;
+      if (log0 && !quiet) log0.innerHTML += `<div style="color:#f0c040;">⚠ ${missing.length} page${missing.length!==1?'s':''} unassigned — no pages counted. Set roles (plan / schedule / legend / detail / skip) and re-run.</div>`;
       return;   // nothing counts
     }
   }
@@ -3108,7 +3114,7 @@ async function runBatch() {
     const passBRes = cache.passBResult;
 
     if (!pageId) {
-      log.innerHTML += `<div style="color:#f07a7a;">pg${pageNum}: no page record — skipping</div>`;
+      if (!quiet) log.innerHTML += `<div style="color:#f07a7a;">pg${pageNum}: no page record — skipping</div>`;
       continue;
     }
 
@@ -3118,7 +3124,7 @@ async function runBatch() {
     const pageRole  = cache.page_role ?? null;
     const work      = (window.TakeoffVec?.runnerWorkForRole?.(pageRole)) ?? 'count';
     if (work === 'skip') {
-      log.innerHTML += `<div style="color:#888;">pg${pageNum}: ${pageRole} — not counted</div>`;
+      if (!quiet) log.innerHTML += `<div style="color:#888;">pg${pageNum}: ${pageRole} — not counted</div>`;
       done++;
       bar.style.width = `${Math.round((done / sortedPages.length) * 100)}%`;
       continue;
@@ -3348,12 +3354,14 @@ async function runBatch() {
       const msg = r.ok
         ? `pg${pageNum}: ${j.device_count} devices${j.tia_violations ? ' ⚠'+j.tia_violations+' TIA' : ''}${j.excluded_out_of_scope ? ` · ${j.excluded_out_of_scope} excluded (out of scope)` : ''}`
         : `pg${pageNum}: ERROR — ${j.error}`;
-      log.innerHTML += `<div style="color:${r.ok ? '#7af07a' : '#f07a7a'}">${msg}</div>`;
-      log.scrollTop = log.scrollHeight;
+      if (!quiet) {
+        log.innerHTML += `<div style="color:${r.ok ? '#7af07a' : '#f07a7a'}">${msg}</div>`;
+        log.scrollTop = log.scrollHeight;
+      }
 
 
     } catch(e) {
-      log.innerHTML += `<div style="color:#f07a7a;">pg${pageNum}: ${e.message}</div>`;
+      if (!quiet) log.innerHTML += `<div style="color:#f07a7a;">pg${pageNum}: ${e.message}</div>`;
     }
 
     done++;
@@ -4365,7 +4373,7 @@ async function rerunPageAfterManualAdd(pageNum) {
   selectedPages.clear();
   selectedPages.add(pageNum);
   try {
-    await runBatch();
+    await runBatch(true);
   } finally {
     selectedPages.clear();
     for (const p of prevSelected) selectedPages.add(p);
