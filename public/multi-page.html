@@ -4396,6 +4396,7 @@ async function rerunPageAfterManualAdd(pageNum) {
   } finally {
     selectedPages.clear();
     for (const p of prevSelected) selectedPages.add(p);
+    renderResults();   // re-render against the restored full selection
   }
 }
 
