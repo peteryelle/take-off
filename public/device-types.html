@@ -230,7 +230,7 @@ button.amber:hover { background: #332800; }
 /* ── Assembly (kit) ── */
 button.kit { background: #10242a; border-color: #2a6a7a; color: #7ad0e0; }
 button.kit:hover { background: #163138; }
-.modal.asm { width: 800px; max-width: 95vw; max-height: 88vh; overflow: auto; }
+.modal.asm { width: 98vw; max-width: 98vw; max-height: 92vh; overflow: auto; }
 .asm-sub { color: #666; font-size: 13px; margin: -6px 0 12px; }
 .asm-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
 .asm-tab {
@@ -430,15 +430,16 @@ button.kit:hover { background: #163138; }
     <div class="asm-tabs" id="asm-tabs"></div>
     <table class="asm-table">
       <colgroup>
-        <col style="width:3%"><col style="width:12%"><col style="width:9%"><col style="width:7%">
-        <col style="width:17%"><col style="width:11%"><col style="width:28%">
+        <col style="width:3%"><col style="width:11%"><col style="width:9%">
+        <col style="width:19%"><col style="width:13%"><col style="width:32%">
         <col style="width:6%"><col style="width:4%"><col style="width:3%">
       </colgroup>
       <thead><tr>
-        <th>#</th><th>Device Name</th><th>Role</th><th>Mfr</th><th title="Type to search by part # or description, within the Role/Mfr picked at left.">Catalog Part</th><th>Manufacturer</th><th>Part Name</th><th>Qty</th><th title="Scale this part by the device's routed distance back to its TR, instead of a flat count per device">TR Run</th><th></th>
+        <th>#</th><th>Role</th><th>Mfr</th><th title="Type to search by part # or description, within the Role/Mfr picked at left.">Catalog Part</th><th>Manufacturer</th><th>Part Name</th><th>Qty</th><th title="Scale this part by the device's routed distance back to its TR, instead of a flat count per device">TR Run</th><th></th>
       </tr></thead>
       <tbody id="asm-tbody"></tbody>
     </table>
+    <div style="font-size:10px; color:#555; margin:6px 0 0;">Rows no longer carry a separate Device Name — Role covers it.</div>
     <button class="asm-add" onclick="addAsmRow()">+ Add Row</button>
     <div class="status" id="asm-status" style="margin-top:8px;"></div>
     <div class="actions">
@@ -666,7 +667,11 @@ function renderGrid(types) {
 }
 
 function escHtml(str) {
-  return String(str)
+  // ?? not || — part_number is intentionally stored as real null for
+  // unresolved rows (see saveAssembly), and String(null) is the literal
+  // text "null", which then poisons the datalist filter (an input showing
+  // "null" filters catalog options against that string, matching nothing).
+  return String(str ?? '')
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
     .replace(/"/g,'&quot;');
 }
@@ -723,6 +728,8 @@ function asmFilteredParts(role, mfr) {
 
 function asmSetRole(i, role) {
   asmFilters[i] = { role, mfr: '' };   // picking a role clears any manufacturer choice — it may no longer apply
+  const rows = asmData[asmActiveKind];
+  if (rows && rows[i] && role) rows[i].device_name = role;   // Role IS the device name now — mirror it in so bom.js/report labels still show something meaningful
   renderAsmTable();
 }
 function asmSetMfr(i, mfr) {
@@ -817,7 +824,6 @@ function renderAsmTable() {
     return `
     <tr>
       <td class="num">${i + 1}</td>
-      <td><input value="${escHtml(r.device_name)}"  oninput="asmUpd(${i},'device_name',this.value)"  placeholder="component"></td>
       <td><select onchange="asmSetRole(${i}, this.value)" style="width:100%; background:#1a1a1a; border:1px solid #333; color:#ccc; font-size:12px; padding:4px;">
         <option value="">any (${catalogParts.length})</option>
         ${asmCatalogRoles().map(([role, n]) => `<option value="${escHtml(role)}" ${filt.role === role ? 'selected' : ''}>${escHtml(role)} (${n})</option>`).join('')}
