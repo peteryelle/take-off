@@ -695,9 +695,25 @@ let asmDeviceId   = null;
 let asmKinds      = [];
 let asmActiveKind = null;
 let asmData       = {};
-let asmFilters    = {};   // per-row transient picker state: { [rowIndex]: { role, mfr } } — not persisted, reset on modal open/kind switch
 
-function asmBlankRow() { return { device_name:'', manufacturer:'', part_name:'', model:'', part_number:'', qty:1, per_run_ft:false }; }
+// role/mfr are persisted directly on each row (see asmBlankRow) — earlier
+// versions kept these as a separate in-memory-only filter that reset every
+// time the modal reopened. Storing them on the row itself is what makes the
+// picker's narrowing survive a close/reopen.
+function asmBlankRow() { return { device_name:'', manufacturer:'', part_name:'', model:'', part_number:'', role:'', mfr:'', qty:1, per_run_ft:false }; }
+
+// Backfill role/mfr for rows saved before those fields existed (or rows
+// where a catalog part was picked but the row predates this change) —
+// derived from the already-stored part_number via a catalog lookup, so
+// older assemblies don't show "any" forever just because they're old.
+function asmBackfillRoleMfr(rows) {
+  for (const r of rows) {
+    if (r.role || !r.part_number) continue;
+    const match = catalogParts.find(p => p.part_number === r.part_number);
+    if (match) { r.role = match.device_role || ''; r.mfr = match.manufacturer || ''; }
+  }
+  return rows;
+}
 
 // ── Catalog picker cascade: device_role -> manufacturer -> part_number search.
 // Each step narrows the next, so the search box never has to filter 1,000+
@@ -727,13 +743,17 @@ function asmFilteredParts(role, mfr) {
 }
 
 function asmSetRole(i, role) {
-  asmFilters[i] = { role, mfr: '' };   // picking a role clears any manufacturer choice — it may no longer apply
   const rows = asmData[asmActiveKind];
-  if (rows && rows[i] && role) rows[i].device_name = role;   // Role IS the device name now — mirror it in so bom.js/report labels still show something meaningful
+  if (!rows || !rows[i]) return;
+  rows[i].role = role;
+  rows[i].mfr  = '';           // picking a role clears any manufacturer choice — it may no longer apply
+  if (role) rows[i].device_name = role;   // Role IS the device name now — mirror it in so bom.js/report labels still show something meaningful
   renderAsmTable();
 }
 function asmSetMfr(i, mfr) {
-  asmFilters[i] = { role: (asmFilters[i]?.role || ''), mfr };
+  const rows = asmData[asmActiveKind];
+  if (!rows || !rows[i]) return;
+  rows[i].mfr = mfr;
   renderAsmTable();
 }
 
@@ -788,10 +808,9 @@ function openAssembly(id) {
   asmData = {};
   for (const k of asmKinds) {
     const rows = Array.isArray(saved[k]) ? saved[k].map(r => ({ ...asmBlankRow(), ...r })) : [];
-    asmData[k] = rows.length ? rows : [asmBlankRow()];   // opens with one row
+    asmData[k] = asmBackfillRoleMfr(rows.length ? rows : [asmBlankRow()]);   // opens with one row
   }
   asmActiveKind = asmKinds[0];
-  asmFilters = {};
   document.getElementById('asm-title').textContent =
     `⊞ Assembly — ${dt.legend_id ?? ''} · ${dt.name ?? ''}`;
   const catNote = catalogId ? '' : ' — no parts catalog assigned to this project, rows will price as unresolved';
@@ -820,7 +839,7 @@ function renderAsmTabs() {
 function renderAsmTable() {
   const rows = asmData[asmActiveKind] || [];
   document.getElementById('asm-tbody').innerHTML = rows.map((r, i) => {
-    const filt = asmFilters[i] || { role: '', mfr: '' };
+    const filt = { role: r.role || '', mfr: r.mfr || '' };
     return `
     <tr>
       <td class="num">${i + 1}</td>
@@ -877,7 +896,6 @@ function rmAsmRow(i) {
 
 function switchAsmKind(k) {
   asmActiveKind = k;
-  asmFilters = {};
   renderAsmTabs();
   renderAsmTable();
 }
@@ -902,6 +920,8 @@ async function saveAssembly() {
         part_name:    (r.part_name    || '').trim(),
         model:        (r.model        || '').trim(),
         part_number:  (r.part_number  || '').trim() || null,   // null (not '') = cleanly unresolved for pricing.js
+        role:         (r.role || '').trim(),   // picker state — persisted so Role/Mfr survive a close/reopen
+        mfr:          (r.mfr  || '').trim(),
         qty, per_run_ft: perRunFt,
       };
     });
