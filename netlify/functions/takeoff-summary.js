@@ -73,7 +73,8 @@ export default async function handler(req) {
           scale_paper_in, scale_real_ft,
           demarc_label, demarc_x, demarc_y, demarc_is_host,
           demarc_type, demarc_source,
-          content_xmin_frac, content_ymin_frac, content_w_frac, content_h_frac
+          content_xmin_frac, content_ymin_frac, content_w_frac, content_h_frac,
+          status, status_msg
         )
       `)
       .eq("project_id", project_id)
@@ -133,6 +134,13 @@ export default async function handler(req) {
     content_ymin_frac: pp.pages?.content_ymin_frac ?? null,
     content_w_frac:    pp.pages?.content_w_frac    ?? null,
     content_h_frac:    pp.pages?.content_h_frac    ?? null,
+    // Authoritative per-page completion signal — 'ready' (set up, never
+    // scanned) | 'running' | 'done' | 'error'. Previously not fetched at
+    // all here, so the restore UI could only infer completion from whether
+    // device_instances rows happened to exist for a page, which is a proxy,
+    // not the real thing pass-batch.js itself already tracks.
+    status:            pp.pages?.status            ?? null,
+    status_msg:        pp.pages?.status_msg         ?? null,
   }));
 
   // Annotate redundant-overall suggestions (advisory; the human confirms in the picker).

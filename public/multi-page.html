@@ -1088,6 +1088,16 @@ async function renderThumbnails() {
     wrap.onclick = () => togglePage(n);
     col.appendChild(wrap);
 
+    // Status badge — reads the authoritative pages.status ('ready' | 'running' |
+    // 'done' | 'error'), not an inferred proxy like "does this page have any
+    // device_instances." A page can legitimately have zero devices and still be
+    // genuinely done; the DB already knows the difference, so use it directly.
+    const statusBadge = document.createElement('div');
+    statusBadge.className = 'pg-status-badge';
+    statusBadge.dataset.page = n;
+    col.appendChild(statusBadge);
+    updateThumbStatusBadge(n);
+
     // Enlarge-and-review: open the carousel at this page to see it big and set its role.
     const viewBtn = document.createElement('button');
     viewBtn.textContent = '🔍 view';
@@ -1135,6 +1145,37 @@ async function renderThumbnails() {
     grid.appendChild(col);
   }
   markThumbRoleState();
+}
+
+// Updates one page's status badge in place — called on initial thumbnail
+// render, and again right after a live pass-batch run so the badge reflects
+// the new state immediately without re-rendering the whole (PDF.js-canvas-
+// heavy) thumbnail grid. Reads pageCache[n].status/.status_msg, kept in sync
+// with the DB's pages.status by both restoreFromSupabase and runBatch().
+function updateThumbStatusBadge(n) {
+  const el = document.querySelector(`.pg-status-badge[data-page="${n}"]`);
+  if (!el) return;
+  const status = pageCache[n]?.status ?? null;
+  const msg    = pageCache[n]?.status_msg ?? '';
+  const STYLES = {
+    done:    { text: '✓ done',     bg: '#0f2a14', border: '#2a7a4a', color: '#7af07a' },
+    error:   { text: '⚠ error',    bg: '#2a1414', border: '#7a3a3a', color: '#f07a7a' },
+    running: { text: '… running',  bg: '#2a2410', border: '#7a6a2a', color: '#f0c060' },
+  };
+  const s = STYLES[status];
+  if (!s) {
+    // 'ready' or unset — page exists but hasn't been scanned yet. Deliberately
+    // no badge here rather than a noisy "— not run" on every page before a
+    // project's first scan; the badge earns its place once there's a real
+    // state to report.
+    el.style.display = 'none';
+    el.textContent = '';
+    el.title = '';
+    return;
+  }
+  el.style.cssText = `display:block; font-size:9px; text-align:center; padding:2px 4px; margin-top:2px; border-radius:3px; background:${s.bg}; border:1px solid ${s.border}; color:${s.color};`;
+  el.textContent = s.text;
+  el.title = status === 'error' && msg ? msg : '';
 }
 
 // Persist a human-assigned page role. Updates client state immediately (the gate
@@ -3356,6 +3397,14 @@ async function runBatch(quiet = false) {
         devices: j.devices ?? [],
         device_count: (j.devices ?? []).length
       };
+      // Keep the thumbnail status badge in sync immediately after a live run —
+      // it reads pageCache[n].status, which otherwise only updates on the next
+      // restore/reload. pass-batch.js itself already writes 'done'/'error' to
+      // the pages row; this just mirrors that onto the client's copy right away.
+      if (!pageCache[pageNum]) pageCache[pageNum] = {};
+      pageCache[pageNum].status     = r.ok ? 'done' : 'error';
+      pageCache[pageNum].status_msg = r.ok ? null : (j.error ?? null);
+      updateThumbStatusBadge(pageNum);
       const msg = r.ok
         ? `pg${pageNum}: ${j.device_count} devices${j.tia_violations ? ' ⚠'+j.tia_violations+' TIA' : ''}${j.excluded_out_of_scope ? ` · ${j.excluded_out_of_scope} excluded (out of scope)` : ''}`
         : `pg${pageNum}: ERROR — ${j.error}`;
@@ -4937,6 +4986,8 @@ async function restoreFromSupabase(pid) {
           tr_name_secondary: pg.tr_name_secondary ?? null,
           suggest_skip:   pg.suggest_skip ?? false,
           suggest_reason: pg.suggest_reason ?? null,
+          status:         pg.status ?? null,       // 'ready' | 'running' | 'done' | 'error'
+          status_msg:     pg.status_msg ?? null,
           passBResult: {
             page_id:     pg.page_id,
             sheet_title: pg.sheet_title ?? pg.drawing_number ?? `Page ${pg.eval_page_num}`,
