@@ -21,7 +21,7 @@ async function fetchAllCatalogParts(supabase, catalogId, orgId) {
   for (;;) {
     const { data, error } = await supabase
       .from("parts_priced")
-      .select("part_number, manufacturer, description, category, unit, cost_unit, material_margin, sale_unit, active")
+      .select("part_number, manufacturer, description, category, device_role, unit, cost_unit, material_margin, sale_unit, active")
       .eq("catalog_id", catalogId)
       .eq("org_id", orgId)
       .order("part_number")

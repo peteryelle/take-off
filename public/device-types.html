@@ -426,12 +426,11 @@ button.kit:hover { background: #163138; }
 <div class="modal-overlay" id="asm-modal">
   <div class="modal asm">
     <h2 id="asm-title">⊞ Assembly</h2>
-    <div class="asm-sub">Supporting parts pulled together as a kit. Quantity = parts per assembly, or a waste-factor multiplier for TR Run cable (e.g. 1.05 = 5% waste). Pick a catalog part to price this line — free-text-only rows stay unpriced on the report.</div>
+    <div class="asm-sub">Supporting parts pulled together as a kit. Quantity = parts per assembly, or a waste-factor multiplier for TR Run cable (e.g. 1.05 = 5% waste). Narrow by Role → Manufacturer, then search to pick a catalog part and price this line. Free-text-only rows stay unpriced on the report.</div>
     <div class="asm-tabs" id="asm-tabs"></div>
-    <datalist id="asm-catalog-list"></datalist>
     <table class="asm-table">
       <thead><tr>
-        <th>#</th><th>Device Name</th><th title="Pick from this project's parts catalog to price this line. Type to search by part # or description.">Catalog Part</th><th>Manufacturer</th><th>Part Name</th><th>Model #</th><th>Qty</th><th title="Scale this part by the device's routed distance back to its TR, instead of a flat count per device">TR Run</th><th></th>
+        <th>#</th><th>Device Name</th><th>Role</th><th>Mfr</th><th title="Type to search by part # or description, within the Role/Mfr picked at left.">Catalog Part</th><th>Manufacturer</th><th>Part Name</th><th>Model #</th><th>Qty</th><th title="Scale this part by the device's routed distance back to its TR, instead of a flat count per device">TR Run</th><th></th>
       </tr></thead>
       <tbody id="asm-tbody"></tbody>
     </table>
@@ -686,16 +685,44 @@ let asmDeviceId   = null;
 let asmKinds      = [];
 let asmActiveKind = null;
 let asmData       = {};
+let asmFilters    = {};   // per-row transient picker state: { [rowIndex]: { role, mfr } } — not persisted, reset on modal open/kind switch
 
 function asmBlankRow() { return { device_name:'', manufacturer:'', part_name:'', model:'', part_number:'', qty:1, per_run_ft:false }; }
 
-// Catalog datalist — populated once per modal open (openAssembly), reused across
-// every row/kind. Keyed for exact-match lookup on pick (asmPickCatalog below).
-function renderAsmCatalogList() {
-  const el = document.getElementById('asm-catalog-list');
-  el.innerHTML = catalogParts.map(p =>
-    `<option value="${escHtml(p.part_number)}">${escHtml(p.part_number)} — ${escHtml(p.description || '')}</option>`
-  ).join('');
+// ── Catalog picker cascade: device_role -> manufacturer -> part_number search.
+// Each step narrows the next, so the search box never has to filter 1,000+
+// options at once. Un-set filters are treated as "any" (no narrowing yet).
+function asmCatalogRoles() {
+  const counts = new Map();
+  for (const p of catalogParts) {
+    const r = p.device_role || 'Other / Uncategorized';
+    counts.set(r, (counts.get(r) || 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]);   // biggest bucket first
+}
+function asmCatalogManufacturers(role) {
+  const counts = new Map();
+  for (const p of catalogParts) {
+    if (role && (p.device_role || 'Other / Uncategorized') !== role) continue;
+    const m = p.manufacturer || '(none)';
+    counts.set(m, (counts.get(m) || 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+}
+function asmFilteredParts(role, mfr) {
+  return catalogParts.filter(p =>
+    (!role || (p.device_role || 'Other / Uncategorized') === role) &&
+    (!mfr  || (p.manufacturer || '(none)') === mfr)
+  );
+}
+
+function asmSetRole(i, role) {
+  asmFilters[i] = { role, mfr: '' };   // picking a role clears any manufacturer choice — it may no longer apply
+  renderAsmTable();
+}
+function asmSetMfr(i, mfr) {
+  asmFilters[i] = { role: (asmFilters[i]?.role || ''), mfr };
+  renderAsmTable();
 }
 
 // Fires on the Catalog Part input. If the typed value exactly matches a
@@ -752,12 +779,12 @@ function openAssembly(id) {
     asmData[k] = rows.length ? rows : [asmBlankRow()];   // opens with one row
   }
   asmActiveKind = asmKinds[0];
+  asmFilters = {};
   document.getElementById('asm-title').textContent =
     `⊞ Assembly — ${dt.legend_id ?? ''} · ${dt.name ?? ''}`;
   const catNote = catalogId ? '' : ' — no parts catalog assigned to this project, rows will price as unresolved';
   setStatus('asm-status', (asmKinds.length > 1
     ? `${asmKinds.length} kinds on this device — one kit each` : '') + catNote, catalogId ? '' : 'warn');
-  renderAsmCatalogList();
   renderAsmTabs();
   renderAsmTable();
   document.getElementById('asm-modal').classList.add('open');
@@ -780,14 +807,31 @@ function renderAsmTabs() {
 
 function renderAsmTable() {
   const rows = asmData[asmActiveKind] || [];
-  document.getElementById('asm-tbody').innerHTML = rows.map((r, i) => `
+  document.getElementById('asm-tbody').innerHTML = rows.map((r, i) => {
+    const filt = asmFilters[i] || { role: '', mfr: '' };
+    return `
     <tr>
       <td class="num">${i + 1}</td>
       <td><input value="${escHtml(r.device_name)}"  oninput="asmUpd(${i},'device_name',this.value)"  placeholder="component"></td>
-      <td><input value="${escHtml(r.part_number)}" list="asm-catalog-list"
+      <td><select onchange="asmSetRole(${i}, this.value)" style="width:100%; background:#1a1a1a; border:1px solid #333; color:#ccc; font-size:12px; padding:4px;">
+        <option value="">any (${catalogParts.length})</option>
+        ${asmCatalogRoles().map(([role, n]) => `<option value="${escHtml(role)}" ${filt.role === role ? 'selected' : ''}>${escHtml(role)} (${n})</option>`).join('')}
+      </select></td>
+      <td><select onchange="asmSetMfr(${i}, this.value)" style="width:100%; background:#1a1a1a; border:1px solid #333; color:#ccc; font-size:12px; padding:4px;">
+        <option value="">any</option>
+        ${asmCatalogManufacturers(filt.role).map(([m, n]) => `<option value="${escHtml(m)}" ${filt.mfr === m ? 'selected' : ''}>${escHtml(m)} (${n})</option>`).join('')}
+      </select></td>
+      <td><input value="${escHtml(r.part_number)}" list="asm-catalog-list-${i}"
                  oninput="asmUpd(${i},'part_number',this.value)" onchange="asmPickCatalog(${i},this.value)"
-                 placeholder="search part #…" title="${r.part_number ? 'Priced from catalog: ' + escHtml(r.part_number) : 'No catalog part linked — this line will price as unresolved'}"
-                 style="${r.part_number ? '' : 'color:#a55;'}"></td>
+                 placeholder="${filt.role ? 'search part #…' : 'pick a role first…'}"
+                 title="${r.part_number ? 'Priced from catalog: ' + escHtml(r.part_number) : 'No catalog part linked — this line will price as unresolved'}"
+                 style="${r.part_number ? '' : 'color:#a55;'}">
+        <datalist id="asm-catalog-list-${i}">
+          ${asmFilteredParts(filt.role, filt.mfr).map(p =>
+            `<option value="${escHtml(p.part_number)}">${escHtml(p.part_number)} — ${escHtml(p.description || '')}</option>`
+          ).join('')}
+        </datalist>
+      </td>
       <td><input value="${escHtml(r.manufacturer)}" oninput="asmUpd(${i},'manufacturer',this.value)" placeholder="manufacturer"></td>
       <td><input value="${escHtml(r.part_name)}"    oninput="asmUpd(${i},'part_name',this.value)"    placeholder="part name"></td>
       <td><input value="${escHtml(r.model)}"        oninput="asmUpd(${i},'model',this.value)"        placeholder="model #"></td>
@@ -798,7 +842,8 @@ function renderAsmTable() {
                onchange="asmUpd(${i},'per_run_ft',this.checked); renderAsmTable();">
       </td>
       <td class="rm"><button class="asm-x" title="remove" onclick="rmAsmRow(${i})">✕</button></td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
 }
 
 function asmUpd(i, field, val) {
@@ -822,6 +867,7 @@ function rmAsmRow(i) {
 
 function switchAsmKind(k) {
   asmActiveKind = k;
+  asmFilters = {};
   renderAsmTabs();
   renderAsmTable();
 }
