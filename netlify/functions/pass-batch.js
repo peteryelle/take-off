@@ -16,10 +16,10 @@ import { buildDeviceList } from "../../public/lib/pipeline.js";
 import { parseSchedule } from "../../public/lib/schedule.js";
 import { buildGreedyPath } from "../../public/lib/waypoint-path.js";
 import { toIdentityXY } from "../../public/lib/frame.js";
+import { hasUsableScale, resolveTiaLimit } from "../../public/lib/pipeline-guards.js";
 
 const ROUTE_FACTOR  = 1.35;
-const TIA_OUTLET_FT = 295;
-const TIA_WAP_FT    = 270;
+const TIA_OUTLET_FT = 295;   // fallback when a device type has no tia_limit_ft override set
 
 function portsFromFamilies(fams = []) {
   const F = fams.map((f) => String(f).toUpperCase());
@@ -79,7 +79,7 @@ export default async function handler(req) {
     const [{ data: page }, { data: deviceTypes }] = await Promise.all([
       supabase.from("pages").select("*").eq("id", page_id).single(),
       supabase.from("device_types")
-        .select("id, legend_id, name, detection_config")
+        .select("id, legend_id, name, detection_config, tia_limit_ft")
         .eq("project_id", project_id)
         .not("detection_config", "is", null)
     ]);
@@ -99,12 +99,8 @@ export default async function handler(req) {
     // later. The scale_override persist block below still runs AFTER
     // this gate on a normal call, so a page can be unblocked by simply
     // supplying scale_override on the next run — no separate save step.
-    const hasExistingScale = Number.isFinite(page.scale_pts_per_ft) && page.scale_pts_per_ft > 0;
-    const hasOverrideScale = scale_override
-      && Number.isFinite(scale_override.paper_value)
-      && Number.isFinite(scale_override.real_value)
-      && scale_override.real_value > 0;
-    if (!hasExistingScale && !hasOverrideScale) {
+    // See public/lib/pipeline-guards.js for the (now fixture-tested) check.
+    if (!hasUsableScale(page, scale_override)) {
       await supabase.from("pages").update({
         status: "error",
         status_msg: "Scale not set — set the page scale before running detection"
@@ -414,7 +410,8 @@ export default async function handler(req) {
           if (routed.waypoint_ids_used?.length) routedViaWaypoints = routed.waypoint_ids_used;
           runLengthFt = parseFloat((distPts * ROUTE_FACTOR / ptsPerFt).toFixed(1));
           totalFt     = parseFloat((runLengthFt + (pin.stub_ft ?? 0)).toFixed(1));
-          const limit = /WAP/i.test(dt.name || "") ? TIA_WAP_FT : TIA_OUTLET_FT;
+          // See public/lib/pipeline-guards.js for the (now fixture-tested) resolver.
+          const limit = resolveTiaLimit(dt.tia_limit_ft, TIA_OUTLET_FT);
           if (totalFt > limit) { tiaFlag = true; tiaReason = `${totalFt}ft exceeds ${limit}ft TIA limit`; }
         }
       }
