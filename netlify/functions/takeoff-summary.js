@@ -39,9 +39,26 @@ export default async function handler(req) {
       .order("pdf_page_number"),
 
     // Views
+    // SECURITY FIX: v_page_summary and v_tia_violations are LIVE views built
+    // on device_instances — both were previously queried as unscoped
+    // select("*") with NO project filter, and the full unfiltered result set
+    // was returned verbatim in this endpoint's response (page_summary,
+    // tia_violations below). Every call leaked every OTHER project's sheet
+    // titles, device names, run lengths, and TIA data across org boundaries
+    // — this endpoint is authorized per-project (assertProjectInOrg above)
+    // but nothing scoped these two queries to match. Nothing in the current
+    // frontend happened to render these fields, but the data was present in
+    // the raw response body regardless. Both views expose project_id
+    // directly, so scoping them here is sufficient — no view change needed.
+    //
+    // v_project_rollup and v_flagged are left unscoped: both are dead
+    // (0 rows — v_project_rollup points at the orphaned bom_items table,
+    // v_flagged still points at the abandoned detections table), so there is
+    // no live data to leak from them today. They're slated for removal
+    // separately, not fixed here, so this isn't a partial/silent fix.
     supabase.from("v_project_rollup").select("*"),
-    supabase.from("v_page_summary").select("*"),
-    supabase.from("v_tia_violations").select("*"),
+    supabase.from("v_page_summary").select("*").eq("project_id", project_id),
+    supabase.from("v_tia_violations").select("*").eq("project_id", project_id),
     supabase.from("v_flagged").select("*"),
 
     // ── Restore fields — what multi-page restore function reads ───
