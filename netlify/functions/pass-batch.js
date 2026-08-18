@@ -252,11 +252,19 @@ export default async function handler(req) {
     for (const m of (manualRows ?? [])) {
       const dt = deviceTypes.find((x) => x.id === m.device_type_id);
       if (!dt) continue;   // type deleted/renamed since the manual add — skip rather than crash the run
+      // hasRealUin distinguishes a genuine user-entered UIN from the synthetic
+      // `_manual{id}` placeholder below. The placeholder exists only so every
+      // manual row has SOME uin value for schedule-join/display purposes — it
+      // must never reach raw_labels (see below), or every manually-added device
+      // becomes its own unique, unmatchable BOM family (each carries a different
+      // id), permanently unable to expand through its type's real assembly even
+      // when one exists. See the "Counted but Unmodeled" report investigation.
+      const hasRealUin = !!(m.uin && String(m.uin).trim());
       reconciled.push({
         uin: m.uin || `_manual${m.id}`, type: resolveTypeKey(dt),
         x: m.x_norm, y: m.y_norm, xy_source: 'manual', symbol_via: null,
         sources: ['manual'], attributes: { families: [], codes: [] },
-        confidence: 'high', flags: ['manual_added'], _manual: true
+        confidence: 'high', flags: ['manual_added'], _manual: true, _hasRealUin: hasRealUin
       });
     }
 
@@ -354,7 +362,12 @@ export default async function handler(req) {
       const hasXY = cx != null && cy != null;
       // Label: anchor leads (N2), then the detail-numbered family codes in detected order.
       // UIN'd (prefix) types lead with the UIN; standalone (WAP/180) just the type.
-      const rawLabels = dev.uin
+      // A manual add without a real UIN (dev._manual && !dev._hasRealUin) must NOT
+      // use dev.uin here — that's the internal-only `_manual{id}` placeholder, unique
+      // per instance, which would otherwise become its own unmatchable BOM family.
+      // Falls through to the same anchor/type label any other UIN-less device gets.
+      const useUin = dev.uin && (!dev._manual || dev._hasRealUin);
+      const rawLabels = useUin
         ? [dev.uin, ...codes]
         : (codes.length ? (anchor ? [anchor, ...codes] : codes)
                         : (anchor ? [anchor] : [dev.type]));
