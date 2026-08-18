@@ -3576,7 +3576,16 @@ function renderResults() {
 
 function renderByPage() {
   const el = document.getElementById('by-page-content');
-  const sortedPages = [...selectedPages].sort((a,b)=>a-b);
+  // Results reflects everything actually computed (batchResults), NOT what's
+  // currently selected in Step 2 — selection is "what to run next," a
+  // completely separate concept from "what's already been computed." Using
+  // selectedPages here meant this tab showed nothing on a fresh restore
+  // (restore deliberately never auto-selects pages) even though batchResults
+  // was fully populated, and showed ONLY a just-rescanned page instead of it
+  // alongside every other page's already-computed results. renderByTR() and
+  // renderProjectTotal() already iterate batchResults directly — this brings
+  // renderByPage() in line with them.
+  const sortedPages = Object.keys(batchResults).map(Number).sort((a,b)=>a-b);
   let html = '';
 
   // Resolve a device's demarc_id → its TR name (covers both main pins and exit pins),
