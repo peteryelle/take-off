@@ -429,8 +429,13 @@ button.kit:hover { background: #163138; }
     <div class="asm-sub">Supporting parts pulled together as a kit. Quantity = parts per assembly, or a waste-factor multiplier for TR Run cable (e.g. 1.05 = 5% waste). Narrow by Role → Manufacturer, then search to pick a catalog part and price this line. Free-text-only rows stay unpriced on the report.</div>
     <div class="asm-tabs" id="asm-tabs"></div>
     <table class="asm-table">
+      <colgroup>
+        <col style="width:3%"><col style="width:12%"><col style="width:11%"><col style="width:9%">
+        <col style="width:19%"><col style="width:14%"><col style="width:19%">
+        <col style="width:6%"><col style="width:4%"><col style="width:3%">
+      </colgroup>
       <thead><tr>
-        <th>#</th><th>Device Name</th><th>Role</th><th>Mfr</th><th title="Type to search by part # or description, within the Role/Mfr picked at left.">Catalog Part</th><th>Manufacturer</th><th>Part Name</th><th>Model #</th><th>Qty</th><th title="Scale this part by the device's routed distance back to its TR, instead of a flat count per device">TR Run</th><th></th>
+        <th>#</th><th>Device Name</th><th>Role</th><th>Mfr</th><th title="Type to search by part # or description, within the Role/Mfr picked at left.">Catalog Part</th><th>Manufacturer</th><th>Part Name</th><th>Qty</th><th title="Scale this part by the device's routed distance back to its TR, instead of a flat count per device">TR Run</th><th></th>
       </tr></thead>
       <tbody id="asm-tbody"></tbody>
     </table>
@@ -834,7 +839,6 @@ function renderAsmTable() {
       </td>
       <td><input value="${escHtml(r.manufacturer)}" oninput="asmUpd(${i},'manufacturer',this.value)" placeholder="manufacturer"></td>
       <td><input value="${escHtml(r.part_name)}"    oninput="asmUpd(${i},'part_name',this.value)"    placeholder="part name"></td>
-      <td><input value="${escHtml(r.model)}"        oninput="asmUpd(${i},'model',this.value)"        placeholder="model #"></td>
       <td><input class="qty" type="number" min="0" step="0.01" value="${Number(r.qty) || 1}" oninput="asmUpd(${i},'qty',parseFloat(this.value)||0)"
                  title="${r.per_run_ft ? 'Waste-factor multiplier applied to routed feet (e.g. 1.05 = 5% waste)' : 'Fixed qty per device'}"></td>
       <td class="rm" style="text-align:center;">
