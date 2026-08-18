@@ -4968,78 +4968,99 @@ async function restoreFromSupabase(pid) {
     }
 
     // ── Restore TR map from demarcs ────────────────────────────────
-    trMap = {};
-    for (const d of demarcs) {
-      const isExit = d.name?.includes('_exit_pg');
-      if (isExit) {
-        const parts  = d.name.split('_exit_pg');
-        const trName = parts[0];
-        const pgNum  = parseInt(parts[1]);
-        if (trName && pgNum) {
-          trMap[trName] = trMap[trName] ?? { name: trName, pages: [], extra_pins: {} };
-          trMap[trName].extra_pins = trMap[trName].extra_pins ?? {};
-          trMap[trName].extra_pins[pgNum] = {
-            x_norm: d.x_norm, y_norm: d.y_norm,
-            stub_ft: d.stub_ft, demarc_id: d.id
-          };
+    // Isolated in its own try/catch: this section does string parsing on
+    // demarc names (split/parseInt with no guaranteed-valid input) and is
+    // the most plausible place for a single malformed row to throw. Before
+    // this fix, an exception ANYWHERE in restoreFromSupabase's single
+    // outer try/catch silently aborted the rest of the function too —
+    // including the batch-results restoration below, which had nothing to
+    // do with the failure. A user would see "Restore error: ..." (or
+    // nothing) with zero results shown, even though their device data was
+    // completely fine, with no way to tell the two apart.
+    try {
+      trMap = {};
+      for (const d of demarcs) {
+        const isExit = d.name?.includes('_exit_pg');
+        if (isExit) {
+          const parts  = d.name.split('_exit_pg');
+          const trName = parts[0];
+          const pgNum  = parseInt(parts[1]);
+          if (trName && pgNum) {
+            trMap[trName] = trMap[trName] ?? { name: trName, pages: [], extra_pins: {} };
+            trMap[trName].extra_pins = trMap[trName].extra_pins ?? {};
+            trMap[trName].extra_pins[pgNum] = {
+              x_norm: d.x_norm, y_norm: d.y_norm,
+              stub_ft: d.stub_ft, demarc_id: d.id
+            };
+          }
+        } else {
+          trMap[d.name] = trMap[d.name] ?? {};
+          // The TR's schematic (region) determines its home page; fall back to the
+          // page the pin was placed on for legacy / unscoped demarcs.
+          const region     = d.region_id != null ? regionById.get(d.region_id) : null;
+          const homePageId = region?.page_id ?? d.page_id;
+          const pageForDemarc = projPages.find(p => p.page_id === homePageId);
+          // Served pages: tr_name match (written by reassignPage/ensureServedPage
+          // via setPageTR), else at least the home page itself as a fallback for
+          // demarcs written before this field existed.
+          let pages = projPages
+            .filter(p => p.tr_name === d.name)
+            .map(p => ({ page_id: p.page_id, eval_page_num: p.eval_page_num,
+                         building: p.building, floor: p.level ?? p.floor }));
+          if (!pages.length && pageForDemarc) {
+            pages = [{ page_id: homePageId, eval_page_num: pageForDemarc.eval_page_num,
+                       building: pageForDemarc.building, floor: pageForDemarc.level ?? pageForDemarc.floor }];
+          }
+          Object.assign(trMap[d.name], {
+            name:            d.name,
+            demarc_id:       d.id,
+            pin_x:           d.x_norm,   pin_y: d.y_norm,
+            demarc_x:        d.x_norm,   demarc_y: d.y_norm,
+            stub_ft:         d.stub_ft   ?? 0,
+            building:        d.building,
+            floor:           d.floor,
+            on_sheet:        d.source !== 'off_sheet',
+            status:          d.source !== 'off_sheet' ? 'on this page' : 'OFF-SHEET / unscoped',
+            region_id:       d.region_id ?? null,
+            schematic_id:    d.region_id ?? null,
+            schematic:       region?.label ?? null,
+            is_primary:      !!d.is_primary,
+            pinned:          d.x_norm != null,
+            runs:            0,
+            demarc_page_num: pageForDemarc?.eval_page_num ?? null,
+            demarc_page_id:  homePageId,
+            pages,
+            extra_pins: trMap[d.name]?.extra_pins ?? {}
+          });
         }
-      } else {
-        trMap[d.name] = trMap[d.name] ?? {};
-        // The TR's schematic (region) determines its home page; fall back to the
-        // page the pin was placed on for legacy / unscoped demarcs.
-        const region     = d.region_id != null ? regionById.get(d.region_id) : null;
-        const homePageId = region?.page_id ?? d.page_id;
-        const pageForDemarc = projPages.find(p => p.page_id === homePageId);
-        // Served pages: tr_name match (written by reassignPage/ensureServedPage
-        // via setPageTR), else at least the home page itself as a fallback for
-        // demarcs written before this field existed.
-        let pages = projPages
-          .filter(p => p.tr_name === d.name)
-          .map(p => ({ page_id: p.page_id, eval_page_num: p.eval_page_num,
-                       building: p.building, floor: p.level ?? p.floor }));
-        if (!pages.length && pageForDemarc) {
-          pages = [{ page_id: homePageId, eval_page_num: pageForDemarc.eval_page_num,
-                     building: pageForDemarc.building, floor: pageForDemarc.level ?? pageForDemarc.floor }];
-        }
-        Object.assign(trMap[d.name], {
-          name:            d.name,
-          demarc_id:       d.id,
-          pin_x:           d.x_norm,   pin_y: d.y_norm,
-          demarc_x:        d.x_norm,   demarc_y: d.y_norm,
-          stub_ft:         d.stub_ft   ?? 0,
-          building:        d.building,
-          floor:           d.floor,
-          on_sheet:        d.source !== 'off_sheet',
-          status:          d.source !== 'off_sheet' ? 'on this page' : 'OFF-SHEET / unscoped',
-          region_id:       d.region_id ?? null,
-          schematic_id:    d.region_id ?? null,
-          schematic:       region?.label ?? null,
-          is_primary:      !!d.is_primary,
-          pinned:          d.x_norm != null,
-          runs:            0,
-          demarc_page_num: pageForDemarc?.eval_page_num ?? null,
-          demarc_page_id:  homePageId,
-          pages,
-          extra_pins: trMap[d.name]?.extra_pins ?? {}
-        });
       }
-    }
 
-    if (Object.keys(trMap).length) {
-      document.getElementById('tr-map-section').style.display = 'block';
-      // Only pre-render the page→TR table if a selection exists; otherwise leave Step 3
-      // clean until the user selects pages and scans (the table filters to selection).
-      if (selectedPages.size) renderPageAssignmentTable(Object.values(trMap));
-      renderTRMap(Object.values(trMap));
-    } else {
-      // Every TR was deleted (or none exist yet) — clear stale cards rather than
-      // leaving the last-rendered set on screen.
-      const container = document.getElementById('tr-cards');
-      if (container) container.innerHTML = '';
-      document.getElementById('tr-map-section').style.display = 'none';
+      if (Object.keys(trMap).length) {
+        document.getElementById('tr-map-section').style.display = 'block';
+        // Only pre-render the page→TR table if a selection exists; otherwise leave Step 3
+        // clean until the user selects pages and scans (the table filters to selection).
+        if (selectedPages.size) renderPageAssignmentTable(Object.values(trMap));
+        renderTRMap(Object.values(trMap));
+      } else {
+        // Every TR was deleted (or none exist yet) — clear stale cards rather than
+        // leaving the last-rendered set on screen.
+        const container = document.getElementById('tr-cards');
+        if (container) container.innerHTML = '';
+        document.getElementById('tr-map-section').style.display = 'none';
+      }
+    } catch (e) {
+      console.error('restoreFromSupabase: TR map restoration failed, continuing to results —', e);
     }
 
     // ── Restore batch results ─────────────────────────────────────
+    // Isolated in its own try/catch for the same reason as TR-map above —
+    // this is the block that actually answers "does the user see their
+    // finished project when they open it," so it must run and render
+    // whatever it can even if something else in this function had a
+    // problem, and its own failure (if any) must not block the status
+    // line / PDF reattach logic that follows it.
+    let resultsRestoreFailed = false;
+    try {
     if (instances.length) {
       const byPage = {};
       for (const inst of instances) {
@@ -5075,6 +5096,12 @@ async function restoreFromSupabase(pid) {
         renderResults();
       }
     }
+    } catch (e) {
+      console.error('restoreFromSupabase: batch-results restoration failed —', e);
+      resultsRestoreFailed = true;
+      setStatus('project-status',
+        `⚠ Restored project data, but results display failed (${e.message}) — device data is intact, this is a display issue only`, 'err');
+    }
 
     // Counts — use restored in-memory state; fall back to raw array lengths
     // if batchResults wasn't populated (e.g. takeoff-summary returned no instances)
@@ -5083,9 +5110,11 @@ async function restoreFromSupabase(pid) {
     const pageCount = selectedPages.size || projPages.length;
     const trCount   = Object.keys(trMap).length
                       || demarcs.filter(d => !d.name?.includes('_exit_pg')).length;
-    setStatus('project-status',
-      `✓ Project ${pid} restored — ${pageCount} page${pageCount !== 1 ? 's' : ''} · ${trCount} TR room${trCount !== 1 ? 's' : ''} · ${devTotal} device${devTotal !== 1 ? 's' : ''}`,
-      'ok');
+    if (!resultsRestoreFailed) {
+      setStatus('project-status',
+        `✓ Project ${pid} restored — ${pageCount} page${pageCount !== 1 ? 's' : ''} · ${trCount} TR room${trCount !== 1 ? 's' : ''} · ${devTotal} device${devTotal !== 1 ? 's' : ''}`,
+        'ok');
+    }
 
     // Show device type bar in quiet ready state if types are configured.
     // takeoff-summary already returns device_types — use j directly.
