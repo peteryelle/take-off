@@ -6,6 +6,34 @@
 import { getSupabase, ok, err, CORS } from "./utils/clients.js";
 
 import { requireOrg, assertProjectInOrg, assertPageInOrg } from "./utils/auth.js";
+
+// Supabase/PostgREST caps a single unpaginated request at 1000 rows by
+// default. parts_priced for a real catalog can exceed that (BOM A alone is
+// 1,231), and without explicit ordering the truncated 1000 is arbitrary —
+// so a part could silently vanish from the picker depending on row order,
+// not because it isn't in the catalog. Page through in fixed-size chunks
+// until a page comes back short, rather than trusting a single request.
+async function fetchAllCatalogParts(supabase, catalogId, orgId) {
+  if (!catalogId) return [];
+  const PAGE = 1000;
+  let offset = 0;
+  let all = [];
+  for (;;) {
+    const { data, error } = await supabase
+      .from("parts_priced")
+      .select("part_number, manufacturer, description, category, unit, cost_unit, material_margin, sale_unit, active")
+      .eq("catalog_id", catalogId)
+      .eq("org_id", orgId)
+      .order("part_number")
+      .range(offset, offset + PAGE - 1);
+    if (error) throw error;
+    all = all.concat(data || []);
+    if (!data || data.length < PAGE) break;
+    offset += PAGE;
+  }
+  return all;
+}
+
 export default async function handler(req) {
   if (req.method === "OPTIONS") return new Response("", { headers: CORS });
   if (req.method !== "GET")     return err("GET required", 405);
@@ -122,17 +150,12 @@ export default async function handler(req) {
       .order("page_id"),
 
     // Catalog parts — for the assembly picker (device-types.html) and BOM
-    // pricing (report.html). Scoped to org_id even though the service-role
-    // client bypasses RLS — belt and suspenders per the auth.js pattern.
-    // catalog_id null (no catalog assigned to this project yet) yields an
-    // empty result rather than an error; both consumers already treat an
-    // empty catalog as "everything unresolved, flag it."
-    catalog_id
-      ? supabase.from("parts_priced")
-          .select("part_number, manufacturer, description, category, unit, cost_unit, material_margin, sale_unit, active")
-          .eq("catalog_id", catalog_id)
-          .eq("org_id", orgId)
-      : Promise.resolve({ data: [] })
+    // pricing (report.html). Paginated (see fetchAllCatalogParts above) so a
+    // catalog over 1,000 rows doesn't silently truncate. catalog_id null (no
+    // catalog assigned to this project yet) yields an empty result rather
+    // than an error; both consumers already treat an empty catalog as
+    // "everything unresolved, flag it."
+    fetchAllCatalogParts(supabase, catalog_id, orgId).then(data => ({ data }))
   ]);
 
   // Flatten project_pages rows — lift nested pages fields to top level
