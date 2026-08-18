@@ -426,11 +426,11 @@ button.kit:hover { background: #163138; }
 <div class="modal-overlay" id="asm-modal">
   <div class="modal asm">
     <h2 id="asm-title">⊞ Assembly</h2>
-    <div class="asm-sub">Supporting parts pulled together as a kit. Quantity = parts per assembly.</div>
+    <div class="asm-sub">Supporting parts pulled together as a kit. Quantity = parts per assembly, or a waste-factor multiplier for TR Run cable (e.g. 1.05 = 5% waste).</div>
     <div class="asm-tabs" id="asm-tabs"></div>
     <table class="asm-table">
       <thead><tr>
-        <th>#</th><th>Device Name</th><th>Manufacturer</th><th>Part Name</th><th>Model #</th><th>Qty</th><th></th>
+        <th>#</th><th>Device Name</th><th>Manufacturer</th><th>Part Name</th><th>Model #</th><th>Qty</th><th title="Scale this part by the device's routed distance back to its TR, instead of a flat count per device">TR Run</th><th></th>
       </tr></thead>
       <tbody id="asm-tbody"></tbody>
     </table>
@@ -481,7 +481,7 @@ async function loadDeviceTypes() {
 // save_device_assembly path the modal uses. Replace-per-device, but only for devices
 // whose rows carry at least one filled component — a partly-filled export never wipes
 // the assemblies you didn't touch, and re-importing an unedited export is a no-op.
-const ASM_COLS = ['device_id','type_name','legend_id','kind','component','manufacturer','part_name','model','qty'];
+const ASM_COLS = ['device_id','type_name','legend_id','kind','component','manufacturer','part_name','model','qty','tr_run'];
 
 function exportAssembliesXlsx() {
   if (typeof XLSX === 'undefined') { setStatus('load-status','Excel library not loaded — check connection','err'); return; }
@@ -494,14 +494,16 @@ function exportAssembliesXlsx() {
       const parts = Array.isArray(saved[k]) ? saved[k] : [];
       if (parts.length) {
         for (const p of parts) rows.push([dt.id, dt.name ?? '', dt.legend_id ?? '', k,
-          p.device_name ?? '', p.manufacturer ?? '', p.part_name ?? '', p.model ?? '', Math.max(1, parseInt(p.qty) || 1)]);
+          p.device_name ?? '', p.manufacturer ?? '', p.part_name ?? '', p.model ?? '',
+          Number.isFinite(parseFloat(p.qty)) ? parseFloat(p.qty) : 1,
+          p.per_run_ft ? 'yes' : '']);
       } else {
-        rows.push([dt.id, dt.name ?? '', dt.legend_id ?? '', k, '', '', '', '', 1]);   // blank slot to fill
+        rows.push([dt.id, dt.name ?? '', dt.legend_id ?? '', k, '', '', '', '', 1, '']);   // blank slot to fill
       }
     }
   }
   const ws = XLSX.utils.aoa_to_sheet(rows);
-  ws['!cols'] = [{wch:9},{wch:18},{wch:14},{wch:6},{wch:22},{wch:18},{wch:22},{wch:16},{wch:5}];
+  ws['!cols'] = [{wch:9},{wch:18},{wch:14},{wch:6},{wch:22},{wch:18},{wch:22},{wch:16},{wch:5},{wch:7}];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Assemblies');
   const stamp = new Date().toISOString().slice(0,16).replace(/[:T]/g,'-');
@@ -532,12 +534,21 @@ async function importAssembliesXlsx(file) {
     if (!known.has(id)) { unknown.add(id); continue; }
     const kind = String(r.kind ?? '').trim();
     if (!kind) continue;
+    const perRunFt = /^\s*(yes|y|true|1|x)\s*$/i.test(String(r.tr_run ?? ''));
+    // qty is a decimal waste-factor multiplier for TR-run rows (1.05 = 5%
+    // waste) — parseInt here would truncate 1.05 -> 1 and silently erase the
+    // waste allowance on every re-import. parseFloat preserves it for both
+    // row types; fixed-qty rows still floor at 1 part.
+    const q = parseFloat(r.qty);
+    const qty = perRunFt
+      ? (Number.isFinite(q) && q > 0 ? q : 1)
+      : Math.max(1, Number.isFinite(q) ? q : 1);
     const part = {
       device_name:  String(r.component    ?? '').trim(),
       manufacturer: String(r.manufacturer ?? '').trim(),
       part_name:    String(r.part_name    ?? '').trim(),
       model:        String(r.model        ?? '').trim(),
-      qty:          Math.max(1, parseInt(r.qty) || 1)
+      qty, per_run_ft: perRunFt,
     };
     if ((part.device_name + part.manufacturer + part.part_name + part.model).trim() === '') continue;  // blank slot
     filledRows++;
@@ -667,7 +678,7 @@ let asmKinds      = [];
 let asmActiveKind = null;
 let asmData       = {};
 
-function asmBlankRow() { return { device_name:'', manufacturer:'', part_name:'', model:'', qty:1 }; }
+function asmBlankRow() { return { device_name:'', manufacturer:'', part_name:'', model:'', qty:1, per_run_ft:false }; }
 
 function asmKindOf(anchor) {
   const k = String(anchor).replace(/\d+$/, '');
@@ -737,7 +748,12 @@ function renderAsmTable() {
       <td><input value="${escHtml(r.manufacturer)}" oninput="asmUpd(${i},'manufacturer',this.value)" placeholder="manufacturer"></td>
       <td><input value="${escHtml(r.part_name)}"    oninput="asmUpd(${i},'part_name',this.value)"    placeholder="part name"></td>
       <td><input value="${escHtml(r.model)}"        oninput="asmUpd(${i},'model',this.value)"        placeholder="model #"></td>
-      <td><input class="qty" type="number" min="1" step="1" value="${Number(r.qty) || 1}" oninput="asmUpd(${i},'qty',Math.max(1,parseInt(this.value)||1))"></td>
+      <td><input class="qty" type="number" min="0" step="0.01" value="${Number(r.qty) || 1}" oninput="asmUpd(${i},'qty',parseFloat(this.value)||0)"
+                 title="${r.per_run_ft ? 'Waste-factor multiplier applied to routed feet (e.g. 1.05 = 5% waste)' : 'Fixed qty per device'}"></td>
+      <td class="rm" style="text-align:center;">
+        <input type="checkbox" ${r.per_run_ft ? 'checked' : ''} title="Scale by this device's routed distance back to its TR"
+               onchange="asmUpd(${i},'per_run_ft',this.checked); renderAsmTable();">
+      </td>
       <td class="rm"><button class="asm-x" title="remove" onclick="rmAsmRow(${i})">✕</button></td>
     </tr>`).join('');
 }
@@ -771,13 +787,24 @@ async function saveAssembly() {
   if (!projId()) { setStatus('asm-status', 'Enter Project ID', 'err'); return; }
   const clean = {};
   for (const k of asmKinds) {
-    const rows = (asmData[k] || []).filter(asmRowFilled).map(r => ({
-      device_name:  (r.device_name  || '').trim(),
-      manufacturer: (r.manufacturer || '').trim(),
-      part_name:    (r.part_name    || '').trim(),
-      model:        (r.model        || '').trim(),
-      qty:          Math.max(1, parseInt(r.qty) || 1)
-    }));
+    const rows = (asmData[k] || []).filter(asmRowFilled).map(r => {
+      const perRunFt = !!r.per_run_ft;
+      const q = parseFloat(r.qty);
+      // TR-run rows are a waste-factor multiplier (1.05 = 5% waste) — decimals
+      // matter, so parseInt here would silently truncate 1.05 -> 1. Fixed-qty
+      // rows keep the old "at least 1 part" floor; TR-run rows just need a
+      // sane positive multiplier.
+      const qty = perRunFt
+        ? (Number.isFinite(q) && q > 0 ? q : 1)
+        : Math.max(1, Number.isFinite(q) ? q : 1);
+      return {
+        device_name:  (r.device_name  || '').trim(),
+        manufacturer: (r.manufacturer || '').trim(),
+        part_name:    (r.part_name    || '').trim(),
+        model:        (r.model        || '').trim(),
+        qty, per_run_ft: perRunFt,
+      };
+    });
     if (rows.length) clean[k] = rows;
   }
 

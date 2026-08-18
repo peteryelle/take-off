@@ -4776,6 +4776,12 @@ async function renderBom() {
 
   // Every detected device, across all pages, is a BOM input. Resolve each to a
   // type key the assembly map knows (legend_id first, then name).
+  //
+  // Culled devices are marked via flags containing 'manual_excluded' (see
+  // submitCull above) — NOT d.removed_by_user, which is never actually
+  // written anywhere in the live cull path. Using the always-false
+  // removed_by_user here meant culled devices were silently still counted
+  // in this BOM panel despite showing struck-through in the device table.
   const instances = [];
   for (const res of Object.values(batchResults)) {
     for (const d of (res.devices ?? [])) {
@@ -4783,7 +4789,8 @@ async function renderBom() {
       instances.push({
         device_type_id:  key,
         raw_labels:      d.raw_labels ?? [],
-        removed_by_user: d.removed_by_user ?? false,
+        removed_by_user: Array.isArray(d.flags) && d.flags.includes('manual_excluded'),
+        total_ft:        d.total_ft ?? null,
       });
     }
   }
@@ -4791,7 +4798,7 @@ async function renderBom() {
   const bom = window.TakeoffVec.aggregateBom(instances, typesByKey);
   lastBom = bom;
 
-  if (!bom.components.length && !bom.unmodeled.length) {
+  if (!bom.components.length && !bom.unmodeled.length && !bom.missing_distance.length) {
     el.innerHTML = '<div style="color:#555; font-size:12px;">No assemblies defined yet — nothing to compile.</div>';
     return;
   }
@@ -4819,8 +4826,17 @@ async function renderBom() {
     html += '</ul>';
   }
 
+  if (bom.missing_distance.length) {
+    html += '<div style="margin-top:14px; font-size:12px; color:#f0a050;">⚑ TR-run cable modeled, but no routed distance yet (not assigned a TR):</div>';
+    html += '<ul style="margin:6px 0 0 0; padding-left:18px; color:#c89060; font-size:12px;">';
+    for (const u of bom.missing_distance) {
+      html += `<li>${u.name} · family <b>${u.family}</b> — ${u.instances} ${u.instances === 1 ? 'device' : 'devices'}</li>`;
+    }
+    html += '</ul>';
+  }
+
   const cov = bom.coverage;
-  html += `<div style="margin-top:10px; font-size:11px; color:#666;">${cov.expanded_instances} of ${cov.total_instances} devices expanded · ${cov.flagged_instances} carry an unmodeled family</div>`;
+  html += `<div style="margin-top:10px; font-size:11px; color:#666;">${cov.expanded_instances} of ${cov.total_instances} devices expanded · ${cov.flagged_instances} carry an unmodeled or distance-less family</div>`;
 
   el.innerHTML = html;
 }

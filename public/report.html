@@ -195,6 +195,7 @@ window.loadReport = async function loadReport() {
     device_type_id:  inst.device_type_id,
     raw_labels:      inst.raw_labels ?? [],
     removed_by_user: isCulled(inst),
+    total_ft:        inst.total_ft ?? null,
   }));
 
   const activeInstances = rawInstances.filter(i => !isCulled(i));
@@ -211,6 +212,7 @@ window.loadReport = async function loadReport() {
   html += statCard(tiaCount, 'TIA Flags', tiaCount ? 'warn' : '');
   html += statCard(demarcs.length, 'Demarcs / TRs');
   html += statCard(bom.coverage.flagged_instances, 'Unmodeled', bom.coverage.flagged_instances ? 'warn' : '');
+  html += statCard(bom.missing_distance.reduce((n, u) => n + u.instances, 0), 'No TR Distance', bom.missing_distance.length ? 'warn' : '');
   html += '</div>';
 
   // ── Device counts by type ──
@@ -263,7 +265,19 @@ window.loadReport = async function loadReport() {
     html += '</ul></div>';
   }
 
-  html += `<div style="font-size:12px; color:#777;">${bom.coverage.expanded_instances} of ${bom.coverage.total_instances} counted devices expanded into parts · ${bom.coverage.flagged_instances} carry an unmodeled family · ${culledCount} culled device(s) excluded</div>`;
+  // ── Missing TR distance — device has a TR-run cable modeled, but no
+  // routed distance to scale it by (not yet assigned a demarc, or the
+  // distance was never computed for that instance). Cable qty for these
+  // instances is NOT included in the BOM above — flagged, not fabricated. ──
+  if (bom.missing_distance.length) {
+    html += '<div class="section"><div class="section-title">⚑ TR-Run Cable — No Distance Yet</div><ul class="flag-list">';
+    for (const u of bom.missing_distance) {
+      html += `<li><span class="badge badge-bad">${escHtml(u.family)}</span> ${escHtml(u.name)} — ${u.instances} ${u.instances === 1 ? 'device' : 'devices'} not yet assigned a TR / distance</li>`;
+    }
+    html += '</ul></div>';
+  }
+
+  html += `<div style="font-size:12px; color:#777;">${bom.coverage.expanded_instances} of ${bom.coverage.total_instances} counted devices expanded into parts · ${bom.coverage.flagged_instances} carry an unmodeled or distance-less family · ${culledCount} culled device(s) excluded</div>`;
 
   document.getElementById('report-body').innerHTML = html;
   setStatus(`✓ Loaded — ${activeInstances.length} devices, ${bom.components.length} part line(s)`, 'ok');
