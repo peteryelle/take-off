@@ -85,6 +85,33 @@ export default async function handler(req) {
     ]);
 
     if (!page) return err("Page not found", 404);
+
+    // ── Scale gate ──────────────────────────────────────────────────
+    // Distance (and any TR-run cable line item) silently comes out null
+    // when a page has no scale — confirmed on a real project: page 8 had
+    // 31 devices correctly detected and TR-assigned, but total_ft stayed
+    // null for every one of them because scale was never set, with
+    // nothing surfacing the gap until the BOM's missing_distance flag
+    // caught it well downstream of the actual cause. Refuse to run
+    // detection at all until a scale exists (already on the page, or
+    // supplied as scale_override in this request) — brittleness triggers
+    // the human immediately, not a silent null discovered three steps
+    // later. The scale_override persist block below still runs AFTER
+    // this gate on a normal call, so a page can be unblocked by simply
+    // supplying scale_override on the next run — no separate save step.
+    const hasExistingScale = Number.isFinite(page.scale_pts_per_ft) && page.scale_pts_per_ft > 0;
+    const hasOverrideScale = scale_override
+      && Number.isFinite(scale_override.paper_value)
+      && Number.isFinite(scale_override.real_value)
+      && scale_override.real_value > 0;
+    if (!hasExistingScale && !hasOverrideScale) {
+      await supabase.from("pages").update({
+        status: "error",
+        status_msg: "Scale not set — set the page scale before running detection"
+      }).eq("id", page_id);
+      return err("Scale not set for this page — set scale (Pass B, or the manual override) before running detection", 422);
+    }
+
     if (!deviceTypes?.length)
       return err("No device types with detection_config — run discovery or backfill the contract", 404);
 
