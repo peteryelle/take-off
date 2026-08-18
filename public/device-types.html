@@ -254,6 +254,20 @@ button.kit:hover { background: #163138; }
 .asm-table input.qty { width: 54px; text-align: center; }
 .asm-x { background: none; border: none; color: #555; cursor: pointer; font-size: 13px; padding: 0 4px; }
 .asm-x:hover { color: #f07a7a; }
+
+.asm-dropdown {
+  position: fixed; z-index: 500; display: none;
+  background: #161616; border: 1px solid #3a3a3a; border-radius: 4px;
+  max-height: 280px; overflow-y: auto; box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+  font-family: monospace; font-size: 12px;
+}
+.asm-dd-opt {
+  padding: 6px 10px; cursor: pointer; color: #ddd;
+  border-bottom: 1px solid #222; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.asm-dd-opt:hover { background: #223244; }
+.asm-dd-pn { color: #7ad0e0; font-weight: bold; margin-right: 8px; }
+.asm-dd-more { padding: 6px 10px; color: #666; font-style: italic; }
 .asm-add { background: none; border: 1px dashed #3a7a3a; color: #7af07a; }
 </style>
 </head>
@@ -448,6 +462,8 @@ button.kit:hover { background: #163138; }
     </div>
   </div>
 </div>
+
+<div id="asm-part-dropdown" class="asm-dropdown"></div>
 
 <script>
 // ── State ────────────────────────────────────────────────────────
@@ -742,6 +758,75 @@ function asmFilteredParts(role, mfr) {
   );
 }
 
+// ── Custom catalog-part dropdown (replaces native <input list>/<datalist>) ──
+// Native datalists proved unreliable across a few rounds of use here — some
+// browsers require typing before showing anything, some silently cap the
+// visible list, and the moment the underlying <option> set changes on every
+// render, behavior got inconsistent. This is a small dropdown we fully
+// control: explicit show/hide, capped result count for the "any (1231)"
+// case, and no dependency on browser-specific datalist quirks.
+let asmDropdownMatches = [];
+
+function asmCloseDropdown() {
+  const el = document.getElementById('asm-part-dropdown');
+  if (el) { el.style.display = 'none'; el.innerHTML = ''; }
+  asmDropdownMatches = [];
+}
+
+function asmShowDropdown(i, inputEl) {
+  const rows = asmData[asmActiveKind];
+  if (!rows || !rows[i]) return;
+  const r = rows[i];
+  const q = (inputEl.value || '').trim().toLowerCase();
+  let matches = asmFilteredParts(r.role || '', r.mfr || '');
+  if (q) {
+    matches = matches.filter(p =>
+      (p.part_number || '').toLowerCase().includes(q) ||
+      (p.description || '').toLowerCase().includes(q)
+    );
+  }
+  const CAP = 50;
+  const shown = matches.slice(0, CAP);
+  asmDropdownMatches = shown;
+
+  const el = document.getElementById('asm-part-dropdown');
+  if (!shown.length) {
+    el.innerHTML = `<div class="asm-dd-opt" style="color:#666; cursor:default;">${r.role ? 'no matches' : 'pick a role first'}</div>`;
+  } else {
+    el.innerHTML = shown.map((p, idx) =>
+      `<div class="asm-dd-opt" onmousedown="asmChoosePart(${i}, ${idx})">
+         <span class="asm-dd-pn">${escHtml(p.part_number)}</span>${escHtml(p.description || '')}
+       </div>`
+    ).join('') + (matches.length > CAP ? `<div class="asm-dd-more">${matches.length - CAP} more — keep typing to narrow</div>` : '');
+  }
+  const rect = inputEl.getBoundingClientRect();
+  el.style.left  = rect.left + 'px';
+  el.style.top   = (rect.bottom + 2) + 'px';
+  el.style.width = Math.max(rect.width, 280) + 'px';
+  el.style.display = 'block';
+}
+
+// mousedown (not click) so this fires before the input's onblur — otherwise
+// blur would close the dropdown a moment before the click registers.
+function asmChoosePart(i, idx) {
+  const p = asmDropdownMatches[idx];
+  if (!p) return;
+  asmCloseDropdown();
+  asmPickCatalog(i, p.part_number);   // fills manufacturer/part_name, re-renders
+}
+
+// On blur: close the dropdown, and if what's typed happens to exactly match
+// a real part_number (typed in full rather than picked from the list),
+// resolve it the same way a dropdown pick would — don't require the click.
+function asmBlurCatalogField(i, inputEl) {
+  const val = (inputEl.value || '').trim();
+  setTimeout(() => {
+    asmCloseDropdown();
+    const match = catalogParts.find(p => p.part_number === val);
+    if (match) asmPickCatalog(i, val);
+  }, 150);   // delay lets a dropdown-option mousedown fire first
+}
+
 function asmSetRole(i, role) {
   const rows = asmData[asmActiveKind];
   if (!rows || !rows[i]) return;
@@ -837,6 +922,7 @@ function renderAsmTabs() {
 }
 
 function renderAsmTable() {
+  asmCloseDropdown();   // its anchor input is about to be destroyed by this re-render
   const rows = asmData[asmActiveKind] || [];
   document.getElementById('asm-tbody').innerHTML = rows.map((r, i) => {
     const filt = { role: r.role || '', mfr: r.mfr || '' };
@@ -851,17 +937,15 @@ function renderAsmTable() {
         <option value="">any</option>
         ${asmCatalogManufacturers(filt.role).map(([m, n]) => `<option value="${escHtml(m)}" ${filt.mfr === m ? 'selected' : ''}>${escHtml(m)} (${n})</option>`).join('')}
       </select></td>
-      <td><input value="${escHtml(r.part_number)}" list="asm-catalog-list-${i}"
-                 oninput="asmUpd(${i},'part_number',this.value)" onchange="asmPickCatalog(${i},this.value)"
+      <td><input value="${escHtml(r.part_number)}"
+                 oninput="asmUpd(${i},'part_number',this.value); asmShowDropdown(${i}, this);"
+                 onfocus="asmShowDropdown(${i}, this)"
+                 onblur="asmBlurCatalogField(${i}, this)"
+                 onkeydown="if(event.key==='Escape'){this.blur();}"
                  placeholder="${filt.role ? 'search part #…' : 'pick a role first…'}"
                  title="${r.part_number ? 'Priced from catalog: ' + escHtml(r.part_number) : 'No catalog part linked — this line will price as unresolved'}"
-                 style="${r.part_number ? '' : 'color:#a55;'}">
-        <datalist id="asm-catalog-list-${i}">
-          ${asmFilteredParts(filt.role, filt.mfr).map(p =>
-            `<option value="${escHtml(p.part_number)}">${escHtml(p.part_number)} — ${escHtml(p.description || '')}</option>`
-          ).join('')}
-        </datalist>
-      </td>
+                 style="${r.part_number ? '' : 'color:#a55;'}"
+                 autocomplete="off"></td>
       <td><input value="${escHtml(r.manufacturer)}" oninput="asmUpd(${i},'manufacturer',this.value)" placeholder="manufacturer"></td>
       <td><input value="${escHtml(r.part_name)}"    oninput="asmUpd(${i},'part_name',this.value)"    placeholder="part name"></td>
       <td><input class="qty" type="number" min="0" step="0.01" value="${Number(r.qty) || 1}" oninput="asmUpd(${i},'qty',parseFloat(this.value)||0)"
