@@ -1092,11 +1092,18 @@ async function renderThumbnails() {
     // 'done' | 'error'), not an inferred proxy like "does this page have any
     // device_instances." A page can legitimately have zero devices and still be
     // genuinely done; the DB already knows the difference, so use it directly.
+    //
+    // Styled directly via the just-created element reference (applyStatusBadge),
+    // NOT via the document.querySelector-based updateThumbStatusBadge() used
+    // elsewhere — at this point in the loop, col/statusBadge are not yet
+    // attached to the live document (grid.appendChild(col) happens at the end
+    // of this iteration), so a query-based lookup here would silently find
+    // nothing and every badge would fail to render, with no error anywhere.
     const statusBadge = document.createElement('div');
     statusBadge.className = 'pg-status-badge';
     statusBadge.dataset.page = n;
     col.appendChild(statusBadge);
-    updateThumbStatusBadge(n);
+    applyStatusBadge(statusBadge, n);
 
     // Enlarge-and-review: open the carousel at this page to see it big and set its role.
     const viewBtn = document.createElement('button');
@@ -1147,14 +1154,10 @@ async function renderThumbnails() {
   markThumbRoleState();
 }
 
-// Updates one page's status badge in place — called on initial thumbnail
-// render, and again right after a live pass-batch run so the badge reflects
-// the new state immediately without re-rendering the whole (PDF.js-canvas-
-// heavy) thumbnail grid. Reads pageCache[n].status/.status_msg, kept in sync
-// with the DB's pages.status by both restoreFromSupabase and runBatch().
-function updateThumbStatusBadge(n) {
-  const el = document.querySelector(`.pg-status-badge[data-page="${n}"]`);
-  if (!el) return;
+// Styles one status badge element in place, given a direct element reference.
+// Pure DOM mutation, no query — safe to call before the element's container
+// has been attached to the document (see renderThumbnails above).
+function applyStatusBadge(el, n) {
   const status = pageCache[n]?.status ?? null;
   const msg    = pageCache[n]?.status_msg ?? '';
   const STYLES = {
@@ -1176,6 +1179,17 @@ function updateThumbStatusBadge(n) {
   el.style.cssText = `display:block; font-size:9px; text-align:center; padding:2px 4px; margin-top:2px; border-radius:3px; background:${s.bg}; border:1px solid ${s.border}; color:${s.color};`;
   el.textContent = s.text;
   el.title = status === 'error' && msg ? msg : '';
+}
+
+// Updates one page's status badge in place by looking it up in the live
+// document — used after a live pass-batch run, well after the thumbnail
+// grid has already been rendered and attached, so a query here is safe
+// (unlike the renderThumbnails call site, which uses applyStatusBadge
+// directly with a fresh element reference instead — see above).
+function updateThumbStatusBadge(n) {
+  const el = document.querySelector(`.pg-status-badge[data-page="${n}"]`);
+  if (!el) return;
+  applyStatusBadge(el, n);
 }
 
 // Persist a human-assigned page role. Updates client state immediately (the gate
