@@ -159,6 +159,9 @@ export function aggregateBom(instances, typesById, opts = {}) {
           model:        ln.model,
           device_name:  ln.device_name,
           qty:          ln.qty,
+          per_run_ft:   ln.per_run_ft,   // for display units (ft vs ea) — a given
+                                          // part identity is consistently one or the
+                                          // other, since they're physically different things
         });
       }
     }

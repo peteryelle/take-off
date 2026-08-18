@@ -125,6 +125,11 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
 .res-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .res-table th { padding: 7px 10px; color: #999; font-weight: normal; text-align: left; border-bottom: 1px solid #2e2e2e; }
 .res-table td { padding: 7px 10px; border-bottom: 1px solid #1a1a1a; }
+/* BOM table only: columns sized to content instead of stretched full-width,
+   so Qty sits close to Part/Model instead of pinned to the far edge of a
+   wide results panel. */
+.res-table.bom-table { width: auto; max-width: 820px; }
+.res-table.bom-table th, .res-table.bom-table td { padding: 7px 20px 7px 10px; }
 </style>
 </head>
 <body>
@@ -4760,6 +4765,15 @@ async function getDeviceTypes() {
   return _typeCache;
 }
 
+// Always round UP, never to nearest — physical material (cable feet, part
+// counts); rounding 86694.3ft down to 86694 under-orders by a foot. Display
+// only — bom.js keeps full precision internally. CSV export (buildCsv below)
+// keeps full precision on purpose, for further spreadsheet math.
+function formatQty(n, perRunFt) {
+  const rounded = Math.ceil(Number(n));
+  return rounded.toLocaleString('en-US') + (perRunFt ? ' ft' : ' ea');
+}
+
 let lastBom = null;   // cached so CSV export can append the same BOM
 async function renderBom() {
   const el = document.getElementById('bom-content');
@@ -4804,7 +4818,7 @@ async function renderBom() {
   }
 
   let html = '<div style="font-size:11px; color:#888; letter-spacing:1px; margin-bottom:8px;">BILL OF MATERIALS · PROJECT TOTAL</div>';
-  html += `<table class="res-table"><thead><tr>
+  html += `<table class="res-table bom-table"><thead><tr>
       <th>Part</th><th>Manufacturer</th><th>Model</th><th style="text-align:right;">Qty</th>
     </tr></thead><tbody>`;
   for (const c of bom.components) {
@@ -4812,7 +4826,7 @@ async function renderBom() {
       <td style="color:#f0c040;">${c.part_name || c.device_name || '—'}</td>
       <td style="color:#bbb;">${c.manufacturer || ''}</td>
       <td style="color:#bbb; font-family:monospace;">${c.model || ''}</td>
-      <td style="text-align:right; color:#e0e0e0;">${c.qty}</td>
+      <td style="text-align:right; color:#e0e0e0;">${formatQty(c.qty, c.per_run_ft)}</td>
     </tr>`;
   }
   html += '</tbody></table>';

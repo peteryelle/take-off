@@ -48,6 +48,8 @@ eq(cable.qty, Math.round((100 * 1.05 + 50 * 1.05) * 10) / 10,
 
 const jack = bom.components.find(c => c.part_name === 'jack');
 eq(jack.qty, 3, 'jack still counts all 3 instances — fixed-qty lines are unaffected by missing distance');
+eq(jack.per_run_ft, false, 'fixed-qty component carries per_run_ft:false, for display units (ea)');
+eq(cable.per_run_ft, true, 'TR-run cable component carries per_run_ft:true, for display units (ft)');
 
 eq(bom.missing_distance, [{ type_id: 1, name: '2D TELEDATA OUTLET', family: '2D', instances: 1 }],
    'one instance surfaces in missing_distance, keyed by type+family like unmodeled');
