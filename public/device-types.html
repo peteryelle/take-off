@@ -426,11 +426,12 @@ button.kit:hover { background: #163138; }
 <div class="modal-overlay" id="asm-modal">
   <div class="modal asm">
     <h2 id="asm-title">⊞ Assembly</h2>
-    <div class="asm-sub">Supporting parts pulled together as a kit. Quantity = parts per assembly, or a waste-factor multiplier for TR Run cable (e.g. 1.05 = 5% waste).</div>
+    <div class="asm-sub">Supporting parts pulled together as a kit. Quantity = parts per assembly, or a waste-factor multiplier for TR Run cable (e.g. 1.05 = 5% waste). Pick a catalog part to price this line — free-text-only rows stay unpriced on the report.</div>
     <div class="asm-tabs" id="asm-tabs"></div>
+    <datalist id="asm-catalog-list"></datalist>
     <table class="asm-table">
       <thead><tr>
-        <th>#</th><th>Device Name</th><th>Manufacturer</th><th>Part Name</th><th>Model #</th><th>Qty</th><th title="Scale this part by the device's routed distance back to its TR, instead of a flat count per device">TR Run</th><th></th>
+        <th>#</th><th>Device Name</th><th title="Pick from this project's parts catalog to price this line. Type to search by part # or description.">Catalog Part</th><th>Manufacturer</th><th>Part Name</th><th>Model #</th><th>Qty</th><th title="Scale this part by the device's routed distance back to its TR, instead of a flat count per device">TR Run</th><th></th>
       </tr></thead>
       <tbody id="asm-tbody"></tbody>
     </table>
@@ -446,6 +447,8 @@ button.kit:hover { background: #163138; }
 <script>
 // ── State ────────────────────────────────────────────────────────
 let deviceTypes   = [];
+let catalogParts  = [];   // this project's parts_priced rows — feeds the Assembly picker
+let catalogId     = null;
 let editingId     = null;   // device_type DB id being edited
 let uploadedImages = [];    // [{ name, base64, thumb }]
 
@@ -466,9 +469,14 @@ async function loadDeviceTypes() {
   try {
     const r = await fetch(`${base()}/api/takeoff-summary?project_id=${projId()}`);
     const j = await r.json();
-    deviceTypes = j.device_types ?? [];
+    deviceTypes  = j.device_types   ?? [];
+    catalogParts = j.catalog_parts  ?? [];
+    catalogId    = j.catalog_id     ?? null;
     renderGrid(deviceTypes);
-    setStatus('load-status', `✓ ${deviceTypes.length} device types`, 'ok');
+    const catNote = catalogId
+      ? ` · ${catalogParts.length} catalog part(s)`
+      : ' · no parts catalog assigned to this project';
+    setStatus('load-status', `✓ ${deviceTypes.length} device types${catNote}`, 'ok');
   } catch(e) {
     setStatus('load-status', 'Error: ' + e.message, 'err');
   }
@@ -481,7 +489,7 @@ async function loadDeviceTypes() {
 // save_device_assembly path the modal uses. Replace-per-device, but only for devices
 // whose rows carry at least one filled component — a partly-filled export never wipes
 // the assemblies you didn't touch, and re-importing an unedited export is a no-op.
-const ASM_COLS = ['device_id','type_name','legend_id','kind','component','manufacturer','part_name','model','qty','tr_run'];
+const ASM_COLS = ['device_id','type_name','legend_id','kind','component','part_number','manufacturer','part_name','model','qty','tr_run'];
 
 function exportAssembliesXlsx() {
   if (typeof XLSX === 'undefined') { setStatus('load-status','Excel library not loaded — check connection','err'); return; }
@@ -494,16 +502,16 @@ function exportAssembliesXlsx() {
       const parts = Array.isArray(saved[k]) ? saved[k] : [];
       if (parts.length) {
         for (const p of parts) rows.push([dt.id, dt.name ?? '', dt.legend_id ?? '', k,
-          p.device_name ?? '', p.manufacturer ?? '', p.part_name ?? '', p.model ?? '',
+          p.device_name ?? '', p.part_number ?? '', p.manufacturer ?? '', p.part_name ?? '', p.model ?? '',
           Number.isFinite(parseFloat(p.qty)) ? parseFloat(p.qty) : 1,
           p.per_run_ft ? 'yes' : '']);
       } else {
-        rows.push([dt.id, dt.name ?? '', dt.legend_id ?? '', k, '', '', '', '', 1, '']);   // blank slot to fill
+        rows.push([dt.id, dt.name ?? '', dt.legend_id ?? '', k, '', '', '', '', '', 1, '']);   // blank slot to fill
       }
     }
   }
   const ws = XLSX.utils.aoa_to_sheet(rows);
-  ws['!cols'] = [{wch:9},{wch:18},{wch:14},{wch:6},{wch:22},{wch:18},{wch:22},{wch:16},{wch:5},{wch:7}];
+  ws['!cols'] = [{wch:9},{wch:18},{wch:14},{wch:6},{wch:22},{wch:14},{wch:18},{wch:22},{wch:16},{wch:5},{wch:7}];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Assemblies');
   const stamp = new Date().toISOString().slice(0,16).replace(/[:T]/g,'-');
@@ -545,12 +553,13 @@ async function importAssembliesXlsx(file) {
       : Math.max(1, Number.isFinite(q) ? q : 1);
     const part = {
       device_name:  String(r.component    ?? '').trim(),
+      part_number:  String(r.part_number  ?? '').trim() || null,   // null (not '') = cleanly unresolved for pricing.js
       manufacturer: String(r.manufacturer ?? '').trim(),
       part_name:    String(r.part_name    ?? '').trim(),
       model:        String(r.model        ?? '').trim(),
       qty, per_run_ft: perRunFt,
     };
-    if ((part.device_name + part.manufacturer + part.part_name + part.model).trim() === '') continue;  // blank slot
+    if ((part.device_name + (part.part_number||'') + part.manufacturer + part.part_name + part.model).trim() === '') continue;  // blank slot
     filledRows++;
     if (!byId.has(id)) byId.set(id, {});
     (byId.get(id)[kind] ||= []).push(part);
@@ -678,7 +687,35 @@ let asmKinds      = [];
 let asmActiveKind = null;
 let asmData       = {};
 
-function asmBlankRow() { return { device_name:'', manufacturer:'', part_name:'', model:'', qty:1, per_run_ft:false }; }
+function asmBlankRow() { return { device_name:'', manufacturer:'', part_name:'', model:'', part_number:'', qty:1, per_run_ft:false }; }
+
+// Catalog datalist — populated once per modal open (openAssembly), reused across
+// every row/kind. Keyed for exact-match lookup on pick (asmPickCatalog below).
+function renderAsmCatalogList() {
+  const el = document.getElementById('asm-catalog-list');
+  el.innerHTML = catalogParts.map(p =>
+    `<option value="${escHtml(p.part_number)}">${escHtml(p.part_number)} — ${escHtml(p.description || '')}</option>`
+  ).join('');
+}
+
+// Fires on the Catalog Part input. If the typed value exactly matches a
+// catalog part_number, auto-fill manufacturer/part_name as display metadata
+// and store part_number as the resolution key the report prices against.
+// A typed value that doesn't match anything is kept as free text (part_number
+// stays '' — row is a legacy/uncataloged line, priced as unresolved on report).
+function asmPickCatalog(i, val) {
+  const rows = asmData[asmActiveKind];
+  if (!rows || !rows[i]) return;
+  const match = catalogParts.find(p => p.part_number === val);
+  if (match) {
+    rows[i].part_number  = match.part_number;
+    rows[i].manufacturer = match.manufacturer || rows[i].manufacturer;
+    rows[i].part_name    = match.description  || rows[i].part_name;
+  } else {
+    rows[i].part_number = '';   // no exact match — treat as free text, unresolved on price
+  }
+  renderAsmTable();
+}
 
 function asmKindOf(anchor) {
   const k = String(anchor).replace(/\d+$/, '');
@@ -697,7 +734,7 @@ function asmKindsForDevice(dt) {
 }
 
 function asmRowFilled(r) {
-  return ((r.device_name || '') + (r.manufacturer || '') + (r.part_name || '') + (r.model || '')).trim() !== '';
+  return ((r.device_name || '') + (r.manufacturer || '') + (r.part_name || '') + (r.model || '') + (r.part_number || '')).trim() !== '';
 }
 
 function openAssembly(id) {
@@ -717,8 +754,10 @@ function openAssembly(id) {
   asmActiveKind = asmKinds[0];
   document.getElementById('asm-title').textContent =
     `⊞ Assembly — ${dt.legend_id ?? ''} · ${dt.name ?? ''}`;
-  setStatus('asm-status', asmKinds.length > 1
-    ? `${asmKinds.length} kinds on this device — one kit each` : '', '');
+  const catNote = catalogId ? '' : ' — no parts catalog assigned to this project, rows will price as unresolved';
+  setStatus('asm-status', (asmKinds.length > 1
+    ? `${asmKinds.length} kinds on this device — one kit each` : '') + catNote, catalogId ? '' : 'warn');
+  renderAsmCatalogList();
   renderAsmTabs();
   renderAsmTable();
   document.getElementById('asm-modal').classList.add('open');
@@ -745,6 +784,10 @@ function renderAsmTable() {
     <tr>
       <td class="num">${i + 1}</td>
       <td><input value="${escHtml(r.device_name)}"  oninput="asmUpd(${i},'device_name',this.value)"  placeholder="component"></td>
+      <td><input value="${escHtml(r.part_number)}" list="asm-catalog-list"
+                 oninput="asmUpd(${i},'part_number',this.value)" onchange="asmPickCatalog(${i},this.value)"
+                 placeholder="search part #…" title="${r.part_number ? 'Priced from catalog: ' + escHtml(r.part_number) : 'No catalog part linked — this line will price as unresolved'}"
+                 style="${r.part_number ? '' : 'color:#a55;'}"></td>
       <td><input value="${escHtml(r.manufacturer)}" oninput="asmUpd(${i},'manufacturer',this.value)" placeholder="manufacturer"></td>
       <td><input value="${escHtml(r.part_name)}"    oninput="asmUpd(${i},'part_name',this.value)"    placeholder="part name"></td>
       <td><input value="${escHtml(r.model)}"        oninput="asmUpd(${i},'model',this.value)"        placeholder="model #"></td>
@@ -802,6 +845,7 @@ async function saveAssembly() {
         manufacturer: (r.manufacturer || '').trim(),
         part_name:    (r.part_name    || '').trim(),
         model:        (r.model        || '').trim(),
+        part_number:  (r.part_number  || '').trim() || null,   // null (not '') = cleanly unresolved for pricing.js
         qty, per_run_ft: perRunFt,
       };
     });

@@ -20,10 +20,22 @@ export default async function handler(req) {
 
   if (!(await assertProjectInOrg(supabase, project_id, orgId))) return err("Project not found in your organization", 404);
 
+  // Project's active parts catalog — needed before the catalog_parts query
+  // below, so this one runs ahead of the main parallel batch rather than
+  // inside it. Material-only pricing (assembly components -> parts_priced
+  // by part_number) reads this; labor costing is a separate, not-yet-built
+  // layer.
+  const { data: projectRow } = await supabase
+    .from("projects")
+    .select("catalog_id")
+    .eq("id", project_id)
+    .single();
+  const catalog_id = projectRow?.catalog_id ?? null;
+
   // Run all queries in parallel
   const [
     devicesRes, pagesRes, rollupRes, pageSummaryRes, violationsRes, flaggedRes,
-    projectPagesRes, demarcsRes, instancesRes, regionsRes
+    projectPagesRes, demarcsRes, instancesRes, regionsRes, catalogPartsRes
   ] = await Promise.all([
 
     // Device types — full fields needed for detection and restore
@@ -107,7 +119,20 @@ export default async function handler(req) {
     supabase.from("page_regions")
       .select("id, page_id, label, kind, demarc_id, polygon, x0, y0, x1, y1")
       .eq("project_id", project_id)
-      .order("page_id")
+      .order("page_id"),
+
+    // Catalog parts — for the assembly picker (device-types.html) and BOM
+    // pricing (report.html). Scoped to org_id even though the service-role
+    // client bypasses RLS — belt and suspenders per the auth.js pattern.
+    // catalog_id null (no catalog assigned to this project yet) yields an
+    // empty result rather than an error; both consumers already treat an
+    // empty catalog as "everything unresolved, flag it."
+    catalog_id
+      ? supabase.from("parts_priced")
+          .select("part_number, manufacturer, description, category, unit, cost_unit, material_margin, sale_unit, active")
+          .eq("catalog_id", catalog_id)
+          .eq("org_id", orgId)
+      : Promise.resolve({ data: [] })
   ]);
 
   // Flatten project_pages rows — lift nested pages fields to top level
@@ -182,7 +207,11 @@ export default async function handler(req) {
     project_pages:    projectPages,
     demarcs:          demarcsRes.data   ?? [],
     page_regions:     regionsRes.data   ?? [],
-    device_instances: instances
+    device_instances: instances,
+    // Material pricing — catalog_id null means this project has no parts
+    // catalog assigned yet; catalog_parts is [] in that case, not an error.
+    catalog_id,
+    catalog_parts:    catalogPartsRes.data ?? []
   });
 }
 

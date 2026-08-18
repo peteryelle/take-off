@@ -137,6 +137,13 @@ tr:hover td { background: #131313; }
 
 <script type="module">
 import { aggregateBom } from './lib/bom.js';
+import { priceBom } from './lib/pricing.js';
+
+// $ formatting — material only. No labor cost/rate layer exists yet, so
+// every dollar figure on this page is material cost/sale, labeled as such.
+function formatMoney(n) {
+  return n == null ? '—' : n.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+}
 
 function base()  { return document.getElementById('netlify-url').value.replace(/\/$/, ''); }
 function projId(){ return document.getElementById('project-id').value.trim(); }
@@ -212,6 +219,15 @@ window.loadReport = async function loadReport() {
 
   const bom = aggregateBom(instances, typesById);
 
+  // Material pricing — joins bom.components against this project's parts
+  // catalog by part_number. catalog_id null (no catalog assigned) or an
+  // empty catalog_parts list both fall through cleanly: every line comes
+  // back unresolved rather than erroring, same as pricing.js's own
+  // no-part_number handling.
+  const catalogId    = j.catalog_id ?? null;
+  const catalogParts = j.catalog_parts ?? [];
+  const priced       = priceBom(bom, catalogParts);
+
   // ── Stat strip ──
   let html = '<div class="stat-strip">';
   html += statCard(pages.length, 'Pages');
@@ -221,7 +237,13 @@ window.loadReport = async function loadReport() {
   html += statCard(demarcs.length, 'Demarcs / TRs');
   html += statCard(bom.coverage.flagged_instances, 'Unmodeled', bom.coverage.flagged_instances ? 'warn' : '');
   html += statCard(bom.missing_distance.reduce((n, u) => n + u.instances, 0), 'No TR Distance', bom.missing_distance.length ? 'warn' : '');
+  html += statCard(formatMoney(priced.totals.cost_total), 'Material Cost');
+  html += statCard(formatMoney(priced.totals.sale_total), 'Material Sale');
+  html += statCard(priced.unresolved.length, 'Unpriced Line(s)', priced.unresolved.length ? 'warn' : '');
   html += '</div>';
+  if (!catalogId) {
+    html += '<div class="empty" style="margin:-8px 0 16px;">No parts catalog assigned to this project — every line below is unpriced.</div>';
+  }
 
   // ── Device counts by type ──
   const countsByType = new Map();
@@ -246,18 +268,27 @@ window.loadReport = async function loadReport() {
   }
   html += '</div>';
 
-  // ── Bill of materials ──
-  html += '<div class="section"><div class="section-title">Bill of Materials — Project Total</div>';
-  if (bom.components.length) {
-    html += '<table><thead><tr><th>Part</th><th>Manufacturer</th><th>Model</th><th style="text-align:right;">Qty</th></tr></thead><tbody>';
-    for (const c of bom.components) {
-      html += `<tr>
-        <td class="part-cell">${escHtml(c.part_name || c.device_name || '—')}</td>
+  // ── Bill of materials ── (material cost/sale only — see stat strip note on labor)
+  html += '<div class="section"><div class="section-title">Bill of Materials — Project Total</div><div style="font-size:12px; color:#777; margin:-4px 0 8px;">Material only — labor cost is not yet modeled.</div>';
+  if (priced.components.length) {
+    html += '<table><thead><tr><th>Part</th><th>Manufacturer</th><th>Model</th><th style="text-align:right;">Qty</th><th style="text-align:right;">Cost/Unit</th><th style="text-align:right;">Line Cost</th><th style="text-align:right;">Line Sale</th></tr></thead><tbody>';
+    for (const c of priced.components) {
+      const unpriced = !c.priced;
+      html += `<tr${unpriced ? ' style="opacity:.6;"' : ''}>
+        <td class="part-cell">${escHtml(c.part_name || c.device_name || '—')}${unpriced ? ' <span class="badge badge-warn" title="No catalog part linked or not found in this project\'s catalog">unpriced</span>' : ''}</td>
         <td style="color:#bbb;">${escHtml(c.manufacturer)}</td>
         <td style="color:#bbb; font-family:monospace;">${escHtml(c.model)}</td>
         <td class="num-cell">${formatQty(c.qty, c.per_run_ft)}</td>
+        <td class="num-cell">${c.cost_unit != null ? formatMoney(c.cost_unit) : '—'}</td>
+        <td class="num-cell">${c.line_cost != null ? formatMoney(c.line_cost) : '—'}</td>
+        <td class="num-cell">${c.line_sale != null ? formatMoney(c.line_sale) : '—'}</td>
       </tr>`;
     }
+    html += `<tr style="font-weight:600; border-top:2px solid #444;">
+      <td colspan="5" style="text-align:right;">Material Total</td>
+      <td class="num-cell">${formatMoney(priced.totals.cost_total)}</td>
+      <td class="num-cell">${formatMoney(priced.totals.sale_total)}</td>
+    </tr>`;
     html += '</tbody></table>';
   } else {
     html += '<div class="empty">No assemblies defined yet — nothing to compile</div>';
@@ -285,7 +316,19 @@ window.loadReport = async function loadReport() {
     html += '</ul></div>';
   }
 
-  html += `<div style="font-size:12px; color:#777;">${bom.coverage.expanded_instances} of ${bom.coverage.total_instances} counted devices expanded into parts · ${bom.coverage.flagged_instances} carry an unmodeled or distance-less family · ${culledCount} culled device(s) excluded</div>`;
+  // ── Unpriced lines — a BOM line with no catalog part linked, or a
+  // part_number not found (or inactive) in this project's catalog. Not
+  // zeroed out above; surfaced here so it gets fixed rather than missed. ──
+  if (priced.unresolved.length) {
+    html += '<div class="section"><div class="section-title">⚑ Unpriced Line(s)</div><ul class="flag-list">';
+    const reasonLabel = { no_part_number: 'no catalog part linked', not_in_catalog: 'part # not in this catalog', inactive: 'catalog part is inactive' };
+    for (const u of priced.unresolved) {
+      html += `<li><span class="badge badge-warn">${escHtml(reasonLabel[u.reason] || u.reason)}</span> ${escHtml(u.part_name || u.device_name || '—')}${u.part_number ? ` (${escHtml(u.part_number)})` : ''} — qty ${formatQty(u.qty, u.per_run_ft)}</li>`;
+    }
+    html += '</ul></div>';
+  }
+
+  html += `<div style="font-size:12px; color:#777;">${bom.coverage.expanded_instances} of ${bom.coverage.total_instances} counted devices expanded into parts · ${bom.coverage.flagged_instances} carry an unmodeled or distance-less family · ${priced.unresolved.length} unpriced line(s) · ${culledCount} culled device(s) excluded</div>`;
 
   document.getElementById('report-body').innerHTML = html;
   setStatus(`✓ Loaded — ${activeInstances.length} devices, ${bom.components.length} part line(s)`, 'ok');

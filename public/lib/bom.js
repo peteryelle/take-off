@@ -51,7 +51,14 @@ export function deviceKinds(rawLabels) {
 }
 
 // Stable aggregation key for a component line.
+// A component linked to a real catalog part (part_number set, from the
+// device-types.html picker against parts_priced) is keyed on part_number —
+// that's the actual identity once a part is catalog-resolved, and it keeps
+// two rows from splitting into separate BOM lines over minor manufacturer/
+// part_name text drift. Uncataloged rows (free-text only, no part_number)
+// fall back to the old manufacturer+part_name+model key.
 export function componentKey(c) {
+  if (c.part_number) return 'PN\u0001' + String(c.part_number).trim();
   return [
     (c.manufacturer || '').trim(),
     (c.part_name    || '').trim(),
@@ -99,6 +106,7 @@ export function expandInstance(instance, assembly) {
           part_name:    c.part_name    || '',
           model:        c.model        || '',
           device_name:  c.device_name  || '',
+          part_number:  c.part_number  || null,
           qty:          Math.round(mult * totalFt * 10) / 10,
           kind, per_run_ft: true,
         });
@@ -109,6 +117,7 @@ export function expandInstance(instance, assembly) {
           part_name:    c.part_name    || '',
           model:        c.model        || '',
           device_name:  c.device_name  || '',
+          part_number:  c.part_number  || null,
           qty:          mult,
           kind, per_run_ft: false,
         });
@@ -158,6 +167,7 @@ export function aggregateBom(instances, typesById, opts = {}) {
           part_name:    ln.part_name,
           model:        ln.model,
           device_name:  ln.device_name,
+          part_number:  ln.part_number,
           qty:          ln.qty,
           per_run_ft:   ln.per_run_ft,   // for display units (ft vs ea) — a given
                                           // part identity is consistently one or the
