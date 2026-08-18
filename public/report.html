@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Report — Take-off</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="auth.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: monospace;
+  background: #0d0d0d;
+  color: #e0e0e0;
+  padding: 20px;
+  font-size: 13px;
+}
+h1 { color: #f0c040; font-size: 16px; margin-bottom: 4px; letter-spacing: 2px; text-transform: uppercase; }
+.subtitle { color: #666; font-size: 11px; margin-bottom: 20px; }
+a { color: #7ac0f0; text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ── Config bar ── */
+.config-bar {
+  display: flex; gap: 10px; align-items: center;
+  background: #111; border: 1px solid #2a2a2a;
+  border-radius: 4px; padding: 10px 14px;
+  margin-bottom: 16px; flex-wrap: wrap;
+}
+.config-bar label { color: #888; font-size: 11px; margin-right: 4px; }
+input[type="text"] {
+  background: #1a1a1a; border: 1px solid #333;
+  color: #e0e0e0; padding: 5px 8px; width: 160px;
+  border-radius: 3px; font-family: monospace; font-size: 12px;
+}
+button {
+  background: #1e3a1e; border: 1px solid #3a7a3a;
+  color: #7af07a; padding: 6px 12px;
+  border-radius: 3px; cursor: pointer;
+  font-family: monospace; font-size: 12px;
+  transition: background 0.15s; white-space: nowrap;
+}
+button:hover { background: #2a4a2a; }
+button:disabled { opacity: 0.3; cursor: not-allowed; }
+
+.status { font-size: 11px; color: #aaa; padding: 3px 0; min-height: 16px; }
+.status.ok  { color: #7af07a; }
+.status.err { color: #f07a7a; }
+.status.running { color: #f0c040; }
+
+.note {
+  background: #0f1822; border: 1px solid #2a3a4a; border-radius: 4px;
+  padding: 8px 12px; font-size: 11px; color: #7ac0f0; margin-bottom: 16px;
+}
+
+/* ── Stat strip ── */
+.stat-strip { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px; }
+.stat-card {
+  background: #111; border: 1px solid #2a2a2a; border-radius: 4px;
+  padding: 10px 16px; min-width: 110px;
+}
+.stat-card .num { font-size: 20px; color: #f0c040; font-weight: bold; }
+.stat-card .lbl { font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 1px; margin-top: 2px; }
+.stat-card.warn .num { color: #f0a050; }
+.stat-card.bad  .num { color: #f07a7a; }
+
+/* ── Sections ── */
+.section { margin-bottom: 24px; }
+.section-title {
+  color: #f0c040; font-size: 12px; text-transform: uppercase; letter-spacing: 1px;
+  margin-bottom: 8px; border-bottom: 1px solid #222; padding-bottom: 4px;
+}
+
+table { width: 100%; border-collapse: collapse; }
+th {
+  text-align: left; color: #666; font-size: 10px; text-transform: uppercase;
+  letter-spacing: 1px; padding: 5px 8px; border-bottom: 1px solid #222; font-weight: normal;
+}
+td { padding: 5px 8px; border-bottom: 1px solid #141414; font-size: 12px; }
+tr:hover td { background: #111; }
+.num-cell { text-align: right; color: #e0e0e0; }
+
+.flag-list { list-style: none; padding: 0; }
+.flag-list li {
+  padding: 6px 10px; margin-bottom: 4px; background: #1a1408;
+  border: 1px solid #3a2e0a; border-radius: 3px; color: #c89060; font-size: 12px;
+}
+.flag-list b { color: #f0c040; }
+
+.empty { color: #555; font-size: 12px; padding: 16px; text-align: center; }
+</style>
+</head>
+<body>
+
+<h1>📋 Report</h1>
+<nav id="to-nav"></nav>
+<script src="nav.js"></script>
+<p class="subtitle">Bill of materials &amp; device counts — persisted results only</p>
+
+<div class="note">
+  Read-only. Pulled straight from stored device instances &amp; device types — no Take-off run required to view this.
+</div>
+
+<!-- ── Config bar ── -->
+<div class="config-bar">
+  <label>Netlify URL</label>
+  <input type="text" id="netlify-url" value="https://winquest-take-off.netlify.app">
+  <label>Project ID</label>
+  <input type="text" id="project-id" placeholder="e.g. 12" style="width:80px;">
+  <button onclick="loadReport()">↓ Load</button>
+  <div class="status" id="load-status">—</div>
+</div>
+
+<div id="report-body">
+  <div class="empty">Enter a Project ID and click Load</div>
+</div>
+
+<script type="module">
+import { aggregateBom } from './lib/bom.js';
+
+function base()  { return document.getElementById('netlify-url').value.replace(/\/$/, ''); }
+function projId(){ return document.getElementById('project-id').value.trim(); }
+
+function setStatus(msg, type = '') {
+  const el = document.getElementById('load-status');
+  el.textContent = msg;
+  el.className = 'status ' + type;
+}
+
+function escHtml(str) {
+  return String(str ?? '')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// Culled devices are marked via flags containing 'manual_excluded' (set by
+// submitCull for both 'junk' and 'excluded' categories) — NOT the
+// device_instances.removed_by_user column, which is never actually written
+// anywhere in the live cull path. aggregateBom()/expandInstance() check
+// `removed_by_user`, so translate the real signal onto that property here
+// rather than teaching bom.js a second exclusion field.
+function isCulled(inst) {
+  return Array.isArray(inst.flags) && inst.flags.includes('manual_excluded');
+}
+
+window.loadReport = async function loadReport() {
+  const pid = projId();
+  if (!pid) { setStatus('Enter a Project ID', 'err'); return; }
+  setStatus('Loading…', 'running');
+  document.getElementById('report-body').innerHTML = '<div class="empty">Loading…</div>';
+
+  let j;
+  try {
+    const r = await fetch(`${base()}/api/takeoff-summary?project_id=${encodeURIComponent(pid)}`);
+    j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.status);
+  } catch (e) {
+    setStatus('Error: ' + e.message, 'err');
+    document.getElementById('report-body').innerHTML = '<div class="empty">Failed to load</div>';
+    return;
+  }
+
+  const deviceTypes = j.device_types ?? [];
+  const rawInstances = j.device_instances ?? [];
+  const demarcs = j.demarcs ?? [];
+  const pages = j.pages ?? [];
+
+  // typesById keyed by the real numeric FK — device_instances.device_type_id
+  // already matches device_types.id directly from the DB, so (unlike the live
+  // batchResults path in multi-page.html, which has to key off legend_id/name
+  // as a string workaround) no key-translation hack is needed here.
+  const typesById = {};
+  for (const dt of deviceTypes) typesById[dt.id] = { name: dt.name, assembly: dt.assembly };
+
+  const instances = rawInstances.map(inst => ({
+    device_type_id:  inst.device_type_id,
+    raw_labels:      inst.raw_labels ?? [],
+    removed_by_user: isCulled(inst),
+  }));
+
+  const activeInstances = rawInstances.filter(i => !isCulled(i));
+  const tiaCount = activeInstances.filter(i => i.tia_flag).length;
+  const culledCount = rawInstances.length - activeInstances.length;
+
+  const bom = aggregateBom(instances, typesById);
+
+  // ── Stat strip ──
+  let html = '<div class="stat-strip">';
+  html += statCard(pages.length, 'Pages');
+  html += statCard(activeInstances.length, 'Devices Counted');
+  html += statCard(culledCount, 'Culled', culledCount ? 'warn' : '');
+  html += statCard(tiaCount, 'TIA Flags', tiaCount ? 'warn' : '');
+  html += statCard(demarcs.length, 'Demarcs / TRs');
+  html += statCard(bom.coverage.flagged_instances, 'Unmodeled', bom.coverage.flagged_instances ? 'warn' : '');
+  html += '</div>';
+
+  // ── Device counts by type ──
+  const countsByType = new Map();
+  for (const inst of activeInstances) {
+    const key = inst.device_type_id;
+    const dt = typesById[key];
+    const name = dt?.name ?? `type ${key}`;
+    if (!countsByType.has(key)) countsByType.set(key, { name, count: 0 });
+    countsByType.get(key).count++;
+  }
+  const countRows = [...countsByType.values()].sort((a, b) => b.count - a.count);
+
+  html += '<div class="section"><div class="section-title">Device Counts</div>';
+  if (countRows.length) {
+    html += '<table><thead><tr><th>Device Type</th><th style="text-align:right;">Count</th></tr></thead><tbody>';
+    for (const r of countRows) {
+      html += `<tr><td>${escHtml(r.name)}</td><td class="num-cell">${r.count}</td></tr>`;
+    }
+    html += '</tbody></table>';
+  } else {
+    html += '<div class="empty">No devices counted yet for this project</div>';
+  }
+  html += '</div>';
+
+  // ── Bill of materials ──
+  html += '<div class="section"><div class="section-title">Bill of Materials — Project Total</div>';
+  if (bom.components.length) {
+    html += '<table><thead><tr><th>Part</th><th>Manufacturer</th><th>Model</th><th style="text-align:right;">Qty</th></tr></thead><tbody>';
+    for (const c of bom.components) {
+      html += `<tr>
+        <td style="color:#f0c040;">${escHtml(c.part_name || c.device_name || '—')}</td>
+        <td style="color:#bbb;">${escHtml(c.manufacturer)}</td>
+        <td style="color:#bbb; font-family:monospace;">${escHtml(c.model)}</td>
+        <td class="num-cell">${c.qty}</td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+  } else {
+    html += '<div class="empty">No assemblies defined yet — nothing to compile</div>';
+  }
+  html += '</div>';
+
+  // ── Unmodeled flags ──
+  if (bom.unmodeled.length) {
+    html += '<div class="section"><div class="section-title">⚑ Counted but Unmodeled</div><ul class="flag-list">';
+    for (const u of bom.unmodeled) {
+      html += `<li>${escHtml(u.name)} · family <b>${escHtml(u.family)}</b> — ${u.instances} ${u.instances === 1 ? 'outlet' : 'outlets'}</li>`;
+    }
+    html += '</ul></div>';
+  }
+
+  html += `<div style="font-size:11px; color:#666;">${bom.coverage.expanded_instances} of ${bom.coverage.total_instances} counted devices expanded into parts · ${bom.coverage.flagged_instances} carry an unmodeled family · ${culledCount} culled device(s) excluded</div>`;
+
+  document.getElementById('report-body').innerHTML = html;
+  setStatus(`✓ Loaded — ${activeInstances.length} devices, ${bom.components.length} part line(s)`, 'ok');
+};
+
+function statCard(num, label, cls = '') {
+  return `<div class="stat-card ${cls}"><div class="num">${num}</div><div class="lbl">${escHtml(label)}</div></div>`;
+}
+
+// ── Auto-load if project_id in URL / sessionStorage ─────────────────
+(function init() {
+  const params = new URLSearchParams(window.location.search);
+  const pid = params.get('project_id') ?? sessionStorage.getItem('to_project_id') ?? '';
+  if (pid) {
+    document.getElementById('project-id').value = pid;
+    const nurl = sessionStorage.getItem('to_netlify_url');
+    if (nurl) document.getElementById('netlify-url').value = nurl;
+    loadReport();
+  }
+})();
+</script>
+
+</body>
+</html>
