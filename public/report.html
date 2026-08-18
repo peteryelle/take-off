@@ -11,12 +11,13 @@
 body {
   font-family: monospace;
   background: #0d0d0d;
-  color: #e0e0e0;
-  padding: 20px;
-  font-size: 13px;
+  color: #e4e4e4;
+  padding: 22px;
+  font-size: 15px;
+  line-height: 1.5;
 }
-h1 { color: #f0c040; font-size: 16px; margin-bottom: 4px; letter-spacing: 2px; text-transform: uppercase; }
-.subtitle { color: #666; font-size: 11px; margin-bottom: 20px; }
+h1 { color: #f0c95f; font-size: 20px; margin-bottom: 6px; letter-spacing: 2px; text-transform: uppercase; }
+.subtitle { color: #777; font-size: 13px; margin-bottom: 22px; }
 a { color: #7ac0f0; text-decoration: none; }
 a:hover { text-decoration: underline; }
 
@@ -24,70 +25,88 @@ a:hover { text-decoration: underline; }
 .config-bar {
   display: flex; gap: 10px; align-items: center;
   background: #111; border: 1px solid #2a2a2a;
-  border-radius: 4px; padding: 10px 14px;
-  margin-bottom: 16px; flex-wrap: wrap;
+  border-radius: 4px; padding: 12px 16px;
+  margin-bottom: 18px; flex-wrap: wrap;
 }
-.config-bar label { color: #888; font-size: 11px; margin-right: 4px; }
+.config-bar label { color: #999; font-size: 13px; margin-right: 4px; }
 input[type="text"] {
   background: #1a1a1a; border: 1px solid #333;
-  color: #e0e0e0; padding: 5px 8px; width: 160px;
-  border-radius: 3px; font-family: monospace; font-size: 12px;
+  color: #e4e4e4; padding: 7px 10px; width: 170px;
+  border-radius: 3px; font-family: monospace; font-size: 14px;
 }
 button {
   background: #1e3a1e; border: 1px solid #3a7a3a;
-  color: #7af07a; padding: 6px 12px;
+  color: #8af08a; padding: 8px 14px;
   border-radius: 3px; cursor: pointer;
-  font-family: monospace; font-size: 12px;
+  font-family: monospace; font-size: 14px;
   transition: background 0.15s; white-space: nowrap;
 }
 button:hover { background: #2a4a2a; }
 button:disabled { opacity: 0.3; cursor: not-allowed; }
 
-.status { font-size: 11px; color: #aaa; padding: 3px 0; min-height: 16px; }
-.status.ok  { color: #7af07a; }
-.status.err { color: #f07a7a; }
-.status.running { color: #f0c040; }
+.status { font-size: 13px; color: #aaa; padding: 3px 0; min-height: 18px; }
+.status.ok  { color: #8af08a; }
+.status.err { color: #f79a9a; }
+.status.running { color: #f0c95f; }
 
 .note {
   background: #0f1822; border: 1px solid #2a3a4a; border-radius: 4px;
-  padding: 8px 12px; font-size: 11px; color: #7ac0f0; margin-bottom: 16px;
+  padding: 10px 14px; font-size: 13px; color: #8fcaf0; margin-bottom: 18px;
 }
+
+/* ── Badges/pills — tinted background + border, not flat bright text on
+   black. Matches the reference dashboard's CFG/EXC/APD and status-dot
+   pattern, which reads far better at a glance than solid color text. ── */
+.badge {
+  display: inline-block; padding: 3px 11px; border-radius: 12px;
+  font-size: 12px; font-weight: 600; border: 1px solid; white-space: nowrap;
+}
+.badge-info { background: rgba(122,192,240,0.12); border-color: #3a6a8a; color: #9fd4ff; }
+.badge-warn { background: rgba(240,180,90,0.14);  border-color: #8a6a2a; color: #f0c060; }
+.badge-bad  { background: rgba(240,122,122,0.14); border-color: #8a3a3a; color: #ff9a9a; }
+.badge-ok   { background: rgba(122,240,150,0.12); border-color: #2a7a4a; color: #9af0b0; }
+.dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+.dot-warn { background: #f0c060; }
+.dot-bad  { background: #ff9a9a; }
+.dot-ok   { background: #7af07a; }
 
 /* ── Stat strip ── */
-.stat-strip { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px; }
+.stat-strip { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; }
 .stat-card {
-  background: #111; border: 1px solid #2a2a2a; border-radius: 4px;
-  padding: 10px 16px; min-width: 110px;
+  background: #111; border: 1px solid #2a2a2a; border-radius: 5px;
+  padding: 12px 18px; min-width: 120px; border-left: 3px solid #2a2a2a;
 }
-.stat-card .num { font-size: 20px; color: #f0c040; font-weight: bold; }
-.stat-card .lbl { font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 1px; margin-top: 2px; }
-.stat-card.warn .num { color: #f0a050; }
-.stat-card.bad  .num { color: #f07a7a; }
+.stat-card .num { font-size: 26px; color: #f0f0f0; font-weight: bold; line-height: 1.2; }
+.stat-card .lbl { font-size: 11px; color: #999; text-transform: uppercase; letter-spacing: 1px; margin-top: 4px; }
+.stat-card.warn { border-left-color: #f0c060; }
+.stat-card.bad  { border-left-color: #ff9a9a; }
+.stat-card.warn .lbl .dot, .stat-card.bad .lbl .dot { display: inline-block; }
 
 /* ── Sections ── */
-.section { margin-bottom: 24px; }
+.section { margin-bottom: 28px; }
 .section-title {
-  color: #f0c040; font-size: 12px; text-transform: uppercase; letter-spacing: 1px;
-  margin-bottom: 8px; border-bottom: 1px solid #222; padding-bottom: 4px;
+  color: #a8b8c8; font-size: 13px; text-transform: uppercase; letter-spacing: 1.5px;
+  font-weight: 600; margin-bottom: 10px; border-bottom: 1px solid #222; padding-bottom: 6px;
 }
 
 table { width: 100%; border-collapse: collapse; }
 th {
-  text-align: left; color: #666; font-size: 10px; text-transform: uppercase;
-  letter-spacing: 1px; padding: 5px 8px; border-bottom: 1px solid #222; font-weight: normal;
+  text-align: left; color: #777; font-size: 11px; text-transform: uppercase;
+  letter-spacing: 1px; padding: 7px 10px; border-bottom: 1px solid #222; font-weight: normal;
 }
-td { padding: 5px 8px; border-bottom: 1px solid #141414; font-size: 12px; }
-tr:hover td { background: #111; }
-.num-cell { text-align: right; color: #e0e0e0; }
+td { padding: 7px 10px; border-bottom: 1px solid #141414; font-size: 14px; }
+tr:hover td { background: #131313; }
+.num-cell { text-align: right; color: #e4e4e4; }
+.part-cell { color: #e4e4e4; font-weight: 600; }
 
 .flag-list { list-style: none; padding: 0; }
 .flag-list li {
-  padding: 6px 10px; margin-bottom: 4px; background: #1a1408;
-  border: 1px solid #3a2e0a; border-radius: 3px; color: #c89060; font-size: 12px;
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; margin-bottom: 6px; background: #151515;
+  border: 1px solid #2a2a2a; border-radius: 4px; color: #ccc; font-size: 14px;
 }
-.flag-list b { color: #f0c040; }
 
-.empty { color: #555; font-size: 12px; padding: 16px; text-align: center; }
+.empty { color: #666; font-size: 14px; padding: 18px; text-align: center; }
 </style>
 </head>
 <body>
@@ -96,6 +115,7 @@ tr:hover td { background: #111; }
 <nav id="to-nav"></nav>
 <script src="nav.js"></script>
 <p class="subtitle">Bill of materials &amp; device counts — persisted results only</p>
+
 
 <div class="note">
   Read-only. Pulled straight from stored device instances &amp; device types — no Take-off run required to view this.
@@ -222,7 +242,7 @@ window.loadReport = async function loadReport() {
     html += '<table><thead><tr><th>Part</th><th>Manufacturer</th><th>Model</th><th style="text-align:right;">Qty</th></tr></thead><tbody>';
     for (const c of bom.components) {
       html += `<tr>
-        <td style="color:#f0c040;">${escHtml(c.part_name || c.device_name || '—')}</td>
+        <td class="part-cell">${escHtml(c.part_name || c.device_name || '—')}</td>
         <td style="color:#bbb;">${escHtml(c.manufacturer)}</td>
         <td style="color:#bbb; font-family:monospace;">${escHtml(c.model)}</td>
         <td class="num-cell">${c.qty}</td>
@@ -238,19 +258,20 @@ window.loadReport = async function loadReport() {
   if (bom.unmodeled.length) {
     html += '<div class="section"><div class="section-title">⚑ Counted but Unmodeled</div><ul class="flag-list">';
     for (const u of bom.unmodeled) {
-      html += `<li>${escHtml(u.name)} · family <b>${escHtml(u.family)}</b> — ${u.instances} ${u.instances === 1 ? 'outlet' : 'outlets'}</li>`;
+      html += `<li><span class="badge badge-warn">${escHtml(u.family)}</span> ${escHtml(u.name)} — ${u.instances} ${u.instances === 1 ? 'outlet' : 'outlets'}</li>`;
     }
     html += '</ul></div>';
   }
 
-  html += `<div style="font-size:11px; color:#666;">${bom.coverage.expanded_instances} of ${bom.coverage.total_instances} counted devices expanded into parts · ${bom.coverage.flagged_instances} carry an unmodeled family · ${culledCount} culled device(s) excluded</div>`;
+  html += `<div style="font-size:12px; color:#777;">${bom.coverage.expanded_instances} of ${bom.coverage.total_instances} counted devices expanded into parts · ${bom.coverage.flagged_instances} carry an unmodeled family · ${culledCount} culled device(s) excluded</div>`;
 
   document.getElementById('report-body').innerHTML = html;
   setStatus(`✓ Loaded — ${activeInstances.length} devices, ${bom.components.length} part line(s)`, 'ok');
 };
 
 function statCard(num, label, cls = '') {
-  return `<div class="stat-card ${cls}"><div class="num">${num}</div><div class="lbl">${escHtml(label)}</div></div>`;
+  const dot = cls ? `<span class="dot dot-${cls}"></span>` : '';
+  return `<div class="stat-card ${cls}"><div class="num">${num}</div><div class="lbl">${dot}${escHtml(label)}</div></div>`;
 }
 
 // ── Auto-load if project_id in URL / sessionStorage ─────────────────
