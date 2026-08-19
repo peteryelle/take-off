@@ -160,6 +160,18 @@ export function aggregateScores(perPage) {
  * diagonal segments — door swing leaves), same classification the wall
  * signature itself was scored by, just without discarding the diagonals.
  *
+ * Output is Y-FLIPPED to match the app's established page-point convention
+ * (top-left origin, y-down) — the SAME convention contentFrame.norm() already
+ * flips into for symbol/text coordinates, and the convention device/demarc
+ * positions arrive in from pass-batch.js (normalized coords × page dimensions,
+ * already y-down since they were normalized via contentFrame in the first
+ * place). extractStrokeSubpaths itself deliberately stays in raw PDF space
+ * (y-up), matching extractFilledSubpaths's existing behavior — this function
+ * is the boundary where that raw space becomes the app's working convention,
+ * so every caller downstream (wall-aware-path.js, pass-batch.js) can treat
+ * walls/doors and device/demarc positions as being in the same space without
+ * each one re-deriving the flip itself.
+ *
  * @param {Array} strokeSubpaths
  * @param {Object} page
  * @param {{color:number[], width:number}} signature
@@ -172,6 +184,9 @@ export async function classifyGeometry(strokeSubpaths, page, signature) {
   const walls = [], doors = [];
   if (!match) return { walls, doors };
 
+  const vp = page.getViewport({ scale: 1 });
+  const flipY = (y) => vp.height - y;
+
   const boxes = await textBoxes(page);
   for (const [x1, y1, x2, y2] of match.segments) {
     const dx = x2 - x1, dy = y2 - y1;
@@ -183,9 +198,9 @@ export async function classifyGeometry(strokeSubpaths, page, signature) {
     const angle = Math.abs((Math.atan2(dy, dx) * 180) / Math.PI) % 90;
     const orthogonal = angle < WALL_ANGLE_TOL || angle > 90 - WALL_ANGLE_TOL;
     if (orthogonal && length > WALL_MIN_LEN) {
-      walls.push([x1, y1, x2, y2]);
+      walls.push([x1, flipY(y1), x2, flipY(y2)]);
     } else if (!orthogonal && length > DOOR_MIN_LEN && length < DOOR_MAX_LEN) {
-      doors.push({ x: (x1 + x2) / 2, y: (y1 + y2) / 2 });
+      doors.push({ x: (x1 + x2) / 2, y: flipY((y1 + y2) / 2) });
     }
   }
   return { walls, doors };
