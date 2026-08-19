@@ -652,7 +652,7 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
   import { runnerWorkForRole, unassignedPages } from './lib/plan-set.js';
   import { aggregateBom } from './lib/bom.js';
   import { buildGreedyPath } from './lib/waypoint-path.js';
-  import { scorePage, classifyGeometry } from './lib/wall-calibration.js';
+  import { scorePage, aggregateScores, classifyGeometry } from './lib/wall-calibration.js';
   import { runWallCalibration, renderCalibrationPreview, confirmWallCalibration,
            rejectWallCalibration, tryNextCandidate, persistAllPageGeometry } from './lib/wall-calibration-client.js';
   import { buildPageRouter } from './lib/wall-aware-path.js';
@@ -661,7 +661,7 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
                         planSymbolDetection, locateVector, blobsToInstances,
                         runnerWorkForRole, unassignedPages,
                         aggregateBom, buildGreedyPath,
-                        extractStrokeSubpaths, scorePage, classifyGeometry,
+                        extractStrokeSubpaths, scorePage, aggregateScores, classifyGeometry,
                         runWallCalibration, renderCalibrationPreview, confirmWallCalibration,
                         rejectWallCalibration, tryNextCandidate, persistAllPageGeometry,
                         buildPageRouter };
