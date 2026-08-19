@@ -111,10 +111,10 @@ export async function renderCalibrationPreview({ canvas, pdfPage, OPS, signature
  * once persistAllPageGeometry has also run (confirming alone doesn't persist
  * geometry — see that function). */
 export async function confirmWallCalibration({ apiBase, projectId }) {
-  const res = await fetch(`${apiBase}/api/pass-wall-calibrate/confirm`, {
+  const res = await fetch(`${apiBase}/api/pass-wall-calibrate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ project_id: projectId }),
+    body: JSON.stringify({ project_id: projectId, action: "confirm" }),
   });
   if (!res.ok) throw new Error(`confirm failed: ${res.status} ${await res.text()}`);
   return res.json();
@@ -124,10 +124,10 @@ export async function confirmWallCalibration({ apiBase, projectId }) {
  * If a prior calibration was 'confirmed', flags every device routed under it
  * as wall_calibration_stale server-side — see pass-wall-calibrate.js. */
 export async function rejectWallCalibration({ apiBase, projectId }) {
-  const res = await fetch(`${apiBase}/api/pass-wall-calibrate/reject`, {
+  const res = await fetch(`${apiBase}/api/pass-wall-calibrate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ project_id: projectId }),
+    body: JSON.stringify({ project_id: projectId, action: "reject" }),
   });
   if (!res.ok) throw new Error(`reject failed: ${res.status} ${await res.text()}`);
   return res.json();
@@ -137,10 +137,10 @@ export async function rejectWallCalibration({ apiBase, projectId }) {
  * the updated row (status back to 'suggested') so the caller can re-render
  * the preview against the new signature and ask for confirmation again. */
 export async function tryNextCandidate({ apiBase, projectId }) {
-  const res = await fetch(`${apiBase}/api/pass-wall-calibrate/try-next`, {
+  const res = await fetch(`${apiBase}/api/pass-wall-calibrate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ project_id: projectId }),
+    body: JSON.stringify({ project_id: projectId, action: "try-next" }),
   });
   if (!res.ok) throw new Error(`try-next failed: ${res.status} ${await res.text()}`);
   return res.json();

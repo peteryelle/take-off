@@ -9,20 +9,26 @@
 // pass-batch.js's routedPts() is gated on status = 'confirmed'. Unconfirmed/
 // rejected -> every page falls back to buildGreedyPath (Tier 1 waypoints).
 //
+// Single exact path, action dispatched from the request body — matching
+// every other multi-verb endpoint in this project (see page-regions.js,
+// which branches on req.method + body fields, not a URL suffix). An earlier
+// version of this file used /api/pass-wall-calibrate/confirm etc. as literal
+// URL paths with a wildcard `config.path`; that 404'd in production because
+// it didn't match this project's routing convention. Fixed here.
+//
 // GET  /api/pass-wall-calibrate?project_id=123   — current calibration (or null)
-// POST /api/pass-wall-calibrate                   — write a 'suggested' row
-//   Body: { project_id, candidates: [{color,width,score}, ...] (ranked, highest first),
-//           pages_evaluated, pages_agreeing, preview_page_id }
-// POST /api/pass-wall-calibrate/confirm            — confirm the current suggestion
-//   Body: { project_id }
-// POST /api/pass-wall-calibrate/reject             — reject; project stays on Tier 1.
-//   Flags every device routed while this calibration was confirmed as
-//   wall_calibration_stale, so a since-rejected signature's output is
-//   findable in the existing audit/cull UI, not silently left on record.
-//   Body: { project_id }
-// POST /api/pass-wall-calibrate/try-next           — advance to the next-ranked
-//   candidate without rescoring (candidates were already computed and stored).
-//   Body: { project_id }
+// POST /api/pass-wall-calibrate
+//   Body: { project_id, action?: 'confirm'|'reject'|'try-next' }
+//   - action omitted: write a new 'suggested' row from
+//       { candidates: [{color,width,score}, ...] (ranked, highest first),
+//         pages_evaluated, pages_agreeing, preview_page_id }
+//   - action: 'confirm'  — confirm the current suggestion
+//   - action: 'reject'   — reject; project stays on Tier 1. Flags every
+//       device routed while this calibration was confirmed as
+//       wall_calibration_stale, so a since-rejected signature's output is
+//       findable in the existing audit/cull UI, not silently left on record.
+//   - action: 'try-next' — advance to the next-ranked candidate without
+//       rescoring (candidates were already computed and stored).
 // ─────────────────────────────────────────────────────────────────
 
 import { getSupabase, ok, err, CORS } from "./utils/clients.js";
@@ -35,7 +41,6 @@ export default async function handler(req) {
   const { supabase, orgId } = gate;
 
   const url = new URL(req.url);
-  const action = url.pathname.split("/").pop(); // 'confirm' | 'reject' | 'try-next' | (default)
 
   // ── GET — current calibration status for a project ─────────────
   if (req.method === "GET") {
@@ -52,12 +57,12 @@ export default async function handler(req) {
   if (req.method !== "POST") return err("Method not allowed", 405);
   let body;
   try { body = await req.json(); } catch { return err("Invalid JSON"); }
-  const { project_id } = body;
+  const { project_id, action } = body;
   if (!project_id) return err("project_id required");
   if (!(await assertProjectInOrg(supabase, project_id, orgId)))
     return err("Project not found in your organization", 404);
 
-  // ── POST /confirm ────────────────────────────────────────────
+  // ── action: 'confirm' ────────────────────────────────────────
   if (action === "confirm") {
     const { data, error } = await supabase
       .from("wall_calibrations")
@@ -68,7 +73,7 @@ export default async function handler(req) {
     return ok(data);
   }
 
-  // ── POST /reject ─────────────────────────────────────────────
+  // ── action: 'reject' ─────────────────────────────────────────
   if (action === "reject") {
     const { data: prior } = await supabase
       .from("wall_calibrations").select("status").eq("project_id", project_id).maybeSingle();
@@ -101,7 +106,7 @@ export default async function handler(req) {
     return ok(data);
   }
 
-  // ── POST /try-next — advance to the next-ranked candidate ──────
+  // ── action: 'try-next' — advance to the next-ranked candidate ──
   if (action === "try-next") {
     const { data: cur, error: curErr } = await supabase
       .from("wall_calibrations").select("*").eq("project_id", project_id).maybeSingle();
@@ -124,7 +129,7 @@ export default async function handler(req) {
     return ok(data);
   }
 
-  // ── POST (default) — write a new 'suggested' row from client-computed scores ──
+  // ── no action — write a new 'suggested' row from client-computed scores ──
   const { candidates, pages_evaluated, pages_agreeing, preview_page_id } = body;
   if (!Array.isArray(candidates) || !candidates.length)
     return err("candidates array required (ranked, highest score first)");
@@ -159,4 +164,4 @@ export default async function handler(req) {
   return ok(data);
 }
 
-export const config = { path: "/api/pass-wall-calibrate/*" };
+export const config = { path: "/api/pass-wall-calibrate" };
