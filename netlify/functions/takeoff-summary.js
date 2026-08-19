@@ -34,6 +34,30 @@ async function fetchAllCatalogParts(supabase, catalogId, orgId) {
   return all;
 }
 
+// Same pagination discipline as fetchAllCatalogParts, even though the labor
+// reference list (152 rows for BOM A) is well under the 1000-row cap today —
+// cheap insurance against the exact silent-truncation bug that hit parts.
+async function fetchAllLaborTasks(supabase, catalogId, orgId) {
+  if (!catalogId) return [];
+  const PAGE = 1000;
+  let offset = 0;
+  let all = [];
+  for (;;) {
+    const { data, error } = await supabase
+      .from("labor_tasks")
+      .select("task_name, section, device_role, hrs_per_unit, setup_hrs, active")
+      .eq("catalog_id", catalogId)
+      .eq("org_id", orgId)
+      .order("task_name")
+      .range(offset, offset + PAGE - 1);
+    if (error) throw error;
+    all = all.concat(data || []);
+    if (!data || data.length < PAGE) break;
+    offset += PAGE;
+  }
+  return all;
+}
+
 export default async function handler(req) {
   if (req.method === "OPTIONS") return new Response("", { headers: CORS });
   if (req.method !== "GET")     return err("GET required", 405);
@@ -63,7 +87,7 @@ export default async function handler(req) {
   // Run all queries in parallel
   const [
     devicesRes, pagesRes, rollupRes, pageSummaryRes, violationsRes, flaggedRes,
-    projectPagesRes, demarcsRes, instancesRes, regionsRes, catalogPartsRes
+    projectPagesRes, demarcsRes, instancesRes, regionsRes, catalogPartsRes, laborTasksRes
   ] = await Promise.all([
 
     // Device types — full fields needed for detection and restore
@@ -155,7 +179,11 @@ export default async function handler(req) {
     // catalog assigned to this project yet) yields an empty result rather
     // than an error; both consumers already treat an empty catalog as
     // "everything unresolved, flag it."
-    fetchAllCatalogParts(supabase, catalog_id, orgId).then(data => ({ data }))
+    fetchAllCatalogParts(supabase, catalog_id, orgId).then(data => ({ data })),
+
+    // Labor task reference list — same catalog_id scope as parts. See
+    // fetchAllLaborTasks above for the pagination note.
+    fetchAllLaborTasks(supabase, catalog_id, orgId).then(data => ({ data }))
   ]);
 
   // Flatten project_pages rows — lift nested pages fields to top level
@@ -234,7 +262,8 @@ export default async function handler(req) {
     // Material pricing — catalog_id null means this project has no parts
     // catalog assigned yet; catalog_parts is [] in that case, not an error.
     catalog_id,
-    catalog_parts:    catalogPartsRes.data ?? []
+    catalog_parts:    catalogPartsRes.data ?? [],
+    labor_tasks:      laborTasksRes.data   ?? []
   });
 }
 

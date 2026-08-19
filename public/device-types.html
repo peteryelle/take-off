@@ -461,19 +461,21 @@ button.kit:hover { background: #163138; }
 
     <div style="margin-top:22px; border-top:1px solid #222; padding-top:14px;">
       <div style="color:#f0c040; font-weight:bold; font-size:13px; margin-bottom:4px;">⏱ Labor</div>
-      <div class="asm-sub">Hours per device, entered directly — not looked up from a catalog. Use a reference rate sheet to inform the number. Qty = task occurrences per device (e.g. 2 terminations for a 2-port outlet). TR Run scales hours by routed distance instead of a flat count.</div>
+      <div class="asm-sub">Hours per device — type directly, or narrow by Role and search the reference rate sheet to pre-fill a row (picking one just copies its numbers in; nothing stays linked, and there's no $/hr conversion yet). Qty = task occurrences per device (e.g. 2 terminations for a 2-port outlet). TR Run scales hours by routed distance instead of a flat count.</div>
       <table class="asm-table">
         <colgroup>
-          <col style="width:4%"><col style="width:34%"><col style="width:14%"><col style="width:14%">
-          <col style="width:10%"><col style="width:10%"><col style="width:5%">
+          <col style="width:4%"><col style="width:12%"><col style="width:32%">
+          <col style="width:10%"><col style="width:10%">
+          <col style="width:9%"><col style="width:9%"><col style="width:5%">
         </colgroup>
         <thead><tr>
-          <th>#</th><th>Task Name</th><th title="Hours per occurrence, or per foot if TR Run is checked">Hrs</th><th title="Fixed hours added once per instance, regardless of qty or distance">Setup Hrs</th><th>Qty</th><th title="Scale by routed distance back to the TR, instead of a flat count per device">TR Run</th><th></th>
+          <th>#</th><th>Role</th><th title="Type to search by task name, within the Role picked at left. Picking one pre-fills Hrs/Setup — you can still edit them.">Task Name</th><th title="Hours per occurrence, or per foot if TR Run is checked">Hrs</th><th title="Fixed hours added once per instance, regardless of qty or distance">Setup Hrs</th><th>Qty</th><th title="Scale by routed distance back to the TR, instead of a flat count per device">TR Run</th><th></th>
         </tr></thead>
         <tbody id="labor-tbody"></tbody>
       </table>
       <button class="asm-add" onclick="addLaborRow()">+ Add Labor Row</button>
     </div>
+    <div id="labor-part-dropdown" class="asm-dropdown"></div>
 
     <div class="status" id="asm-status" style="margin-top:8px;"></div>
     <div class="actions">
@@ -489,6 +491,7 @@ button.kit:hover { background: #163138; }
 // ── State ────────────────────────────────────────────────────────
 let deviceTypes   = [];
 let catalogParts  = [];   // this project's parts_priced rows — feeds the Assembly picker
+let laborTasks    = [];   // this project's labor_tasks reference rows — feeds the Labor tab picker
 let catalogId     = null;
 let editingId     = null;   // device_type DB id being edited
 let uploadedImages = [];    // [{ name, base64, thumb }]
@@ -512,10 +515,11 @@ async function loadDeviceTypes() {
     const j = await r.json();
     deviceTypes  = j.device_types   ?? [];
     catalogParts = j.catalog_parts  ?? [];
+    laborTasks   = j.labor_tasks    ?? [];
     catalogId    = j.catalog_id     ?? null;
     renderGrid(deviceTypes);
     const catNote = catalogId
-      ? ` · ${catalogParts.length} catalog part(s)`
+      ? ` · ${catalogParts.length} catalog part(s) · ${laborTasks.length} labor task(s)`
       : ' · no parts catalog assigned to this project';
     setStatus('load-status', `✓ ${deviceTypes.length} device types${catNote}`, 'ok');
   } catch(e) {
@@ -1008,19 +1012,105 @@ function rmAsmRow(i) {
   renderAsmTabs();
 }
 
-// ── Labor editor — hours per device, typed in directly (no catalog to
-// search; there's no "parts list" for labor). Scoped to the same kind
-// tabs as material. See public/lib/labor.js for how these expand/sum.
+// ── Labor editor — hours per device, typed in directly or pre-filled from
+// the labor_tasks reference list (Role-filtered, same dropdown pattern as
+// the material picker). Nothing stays linked after picking — it's a
+// one-time copy-in, since there's no $/hr conversion or ongoing resolution
+// for labor yet. Scoped to the same kind tabs as material. See
+// public/lib/labor.js for how these rows expand/sum.
 let laborData = {};
-function laborBlankRow() { return { task_name: '', hrs: 0, setup_hrs: 0, qty: 1, per_run_ft: false }; }
+function laborBlankRow() { return { role: '', task_name: '', hrs: 0, setup_hrs: 0, qty: 1, per_run_ft: false }; }
 function laborRowFilled(r) { return (r.task_name || '').trim() !== ''; }
 
+function laborRoles() {
+  const counts = new Map();
+  for (const t of laborTasks) {
+    const r = t.device_role || 'Other / Uncategorized';
+    counts.set(r, (counts.get(r) || 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+}
+function laborFilteredTasks(role, q) {
+  let list = laborTasks.filter(t => !role || (t.device_role || 'Other / Uncategorized') === role);
+  if (q) {
+    const ql = q.toLowerCase();
+    list = list.filter(t => (t.task_name || '').toLowerCase().includes(ql));
+  }
+  return list;
+}
+
+function laborSetRole(i, role) {
+  const rows = laborData[asmActiveKind];
+  if (rows && rows[i]) rows[i].role = role;
+  renderLaborTable();
+}
+
+let laborDropdownMatches = [];
+function laborCloseDropdown() {
+  const el = document.getElementById('labor-part-dropdown');
+  if (el) { el.style.display = 'none'; el.innerHTML = ''; }
+  laborDropdownMatches = [];
+}
+function laborShowDropdown(i, inputEl) {
+  const rows = laborData[asmActiveKind];
+  if (!rows || !rows[i]) return;
+  const r = rows[i];
+  const q = (inputEl.value || '').trim();
+  const matches = laborFilteredTasks(r.role || '', q);
+  const CAP = 50;
+  const shown = matches.slice(0, CAP);
+  laborDropdownMatches = shown;
+
+  const el = document.getElementById('labor-part-dropdown');
+  if (!shown.length) {
+    el.innerHTML = `<div class="asm-dd-opt" style="color:#666; cursor:default;">${r.role ? 'no matches' : 'pick a role first'}</div>`;
+  } else {
+    el.innerHTML = shown.map((t, idx) =>
+      `<div class="asm-dd-opt" onmousedown="laborChooseTask(${i}, ${idx})">
+         <span class="asm-dd-left">${escHtml(t.task_name)}</span>
+         <span class="asm-dd-price">${t.hrs_per_unit ?? '—'} hr${t.setup_hrs ? ' +' + t.setup_hrs + ' su' : ''}</span>
+       </div>`
+    ).join('') + (matches.length > CAP ? `<div class="asm-dd-more">${matches.length - CAP} more — keep typing to narrow</div>` : '');
+  }
+  const rect = inputEl.getBoundingClientRect();
+  el.style.left  = rect.left + 'px';
+  el.style.top   = (rect.bottom + 2) + 'px';
+  el.style.width = Math.max(rect.width, 320) + 'px';
+  el.style.display = 'block';
+}
+function laborChooseTask(i, idx) {
+  const t = laborDropdownMatches[idx];
+  if (!t) return;
+  const rows = laborData[asmActiveKind];
+  if (rows && rows[i]) {
+    rows[i].task_name  = t.task_name;
+    rows[i].hrs        = Number(t.hrs_per_unit) || 0;
+    rows[i].setup_hrs  = Number(t.setup_hrs) || 0;
+  }
+  laborCloseDropdown();
+  renderLaborTable();
+}
+function laborBlurTaskField(i) {
+  setTimeout(() => laborCloseDropdown(), 150);   // delay lets a dropdown-option mousedown fire first
+}
+
 function renderLaborTable() {
+  laborCloseDropdown();   // its anchor input is about to be destroyed by this re-render
   const rows = laborData[asmActiveKind] || [];
   document.getElementById('labor-tbody').innerHTML = rows.map((r, i) => `
     <tr>
       <td class="num">${i + 1}</td>
-      <td><input value="${escHtml(r.task_name)}" oninput="laborUpd(${i},'task_name',this.value)" placeholder="e.g. Terminate + mount faceplate"></td>
+      <td><select onchange="laborSetRole(${i}, this.value)" style="width:100%; background:#1a1a1a; border:1px solid #333; color:#ccc; font-size:12px; padding:4px;">
+        <option value="">any (${laborTasks.length})</option>
+        ${laborRoles().map(([role, n]) => `<option value="${escHtml(role)}" ${(r.role||'') === role ? 'selected' : ''}>${escHtml(role)} (${n})</option>`).join('')}
+      </select></td>
+      <td><input value="${escHtml(r.task_name)}"
+                 oninput="laborUpd(${i},'task_name',this.value); laborShowDropdown(${i}, this);"
+                 onfocus="laborShowDropdown(${i}, this)"
+                 onblur="laborBlurTaskField(${i})"
+                 onkeydown="if(event.key==='Escape'){this.blur();}"
+                 placeholder="${r.role ? 'search or type a task…' : 'pick a role, or type a task…'}"
+                 autocomplete="off"></td>
       <td><input class="qty" type="number" min="0" step="0.001" value="${Number(r.hrs) || 0}" oninput="laborUpd(${i},'hrs',parseFloat(this.value)||0)"
                  title="${r.per_run_ft ? 'Hours per foot of routed distance' : 'Hours per occurrence'}"></td>
       <td><input class="qty" type="number" min="0" step="0.01" value="${Number(r.setup_hrs) || 0}" oninput="laborUpd(${i},'setup_hrs',parseFloat(this.value)||0)"></td>
@@ -1094,6 +1184,7 @@ async function saveAssembly() {
       const q = parseFloat(r.qty);
       return {
         task_name:  (r.task_name || '').trim(),
+        role:       (r.role || '').trim(),   // picker filter state — persisted so it survives a close/reopen, same lesson as material's Role/Mfr
         hrs:        Number.isFinite(parseFloat(r.hrs)) ? parseFloat(r.hrs) : 0,
         setup_hrs:  Number.isFinite(parseFloat(r.setup_hrs)) ? parseFloat(r.setup_hrs) : 0,
         qty:        Number.isFinite(q) && q > 0 ? q : 1,
