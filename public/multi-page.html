@@ -288,6 +288,51 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
   </div>
 </div>
 
+<!-- ── STEP 3B: WALL CALIBRATION (new, additive — not renumbering existing
+     steps 4+) ──────────────────────────────────────────────────────── -->
+<div class="section">
+  <div class="section-title">3B · Wall Calibration <span style="font-size:11px; color:#888; font-weight:normal;">(optional — enables auto path routing)</span></div>
+  <div style="font-size:13px; color:#aaa; margin-bottom:8px;">
+    Scores every selected page's stroke geometry to find the wall convention this drawing set uses,
+    aggregated across pages so one unusual sheet can't outvote the rest. Review the overlay before
+    confirming — walls in red, doors in yellow, drawn on the real page.
+  </div>
+  <button onclick="runWallCalibrationUI()">▶ Detect Wall Signature</button>
+  <button class="info" onclick="rejectWallCalibrationUI()" style="margin-left:6px;">✕ Reject / stay on waypoints</button>
+  <div class="status" id="wallcal-status">—</div>
+
+  <div id="wallcal-review" style="display:none; margin-top:12px;">
+    <div style="display:flex; gap:16px; padding:8px 12px; background:#0a0a0a; border:1px solid #2a2a2a; border-radius:4px; margin-bottom:10px; font-size:13px; align-items:center; flex-wrap:wrap;">
+      <span id="wallcal-summary" style="color:#aaa; flex:1;">—</span>
+      <button class="info" onclick="tryNextCandidateUI()" style="font-size:11px; padding:3px 10px;">try next candidate</button>
+      <button class="amber" onclick="confirmWallCalibrationUI()" style="font-size:11px; padding:3px 10px;">✓ Confirm — enable Tier 3</button>
+    </div>
+    <canvas id="wallcal-preview-canvas" style="max-width:100%; border:1px solid #2a2a2a; border-radius:4px;"></canvas>
+  </div>
+
+  <div id="wallcal-persist-status" class="status" style="margin-top:8px;">—</div>
+</div>
+
+<!-- ── STEP 3C: TEST AUTO ROUTE (new — pure client-side, does NOT touch
+     device_instances/total_ft/BOM. Safe to click freely; nothing here is
+     persisted or affects pass-batch.js output.) ──────────────────────── -->
+<div class="section" id="test-route-section" style="display:none;">
+  <div class="section-title">3C · Test Auto Route <span style="font-size:11px; color:#888; font-weight:normal;">(client-side preview only — writes nothing)</span></div>
+  <div style="font-size:13px; color:#aaa; margin-bottom:8px;">
+    Click a point for the TR, then a point for a device, to see the wall-aware route computed live
+    in the browser. Uses the confirmed signature's geometry for the current preview page. Nothing
+    here is saved — this is purely to verify auto-routing looks right before it's wired into batch.
+  </div>
+  <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+    <button onclick="setTestRouteMode('tr')">1. Click TR point</button>
+    <button onclick="setTestRouteMode('device')">2. Click device point</button>
+    <button class="amber" onclick="computeTestRoute()">▶ Compute Route</button>
+    <button class="info" onclick="clearTestRoute()">clear</button>
+    <span id="test-route-status" style="font-size:12px; color:#aaa;">—</span>
+  </div>
+  <canvas id="test-route-canvas" style="max-width:100%; border:1px solid #2a2a2a; border-radius:4px; cursor:crosshair;"></canvas>
+</div>
+
 <!-- ── STEP 4: BATCH RUN ─────────────────────────────────────────── -->
 <div class="section" id="batch-section" style="display:none;">
   <div class="section-title">4 · Batch Run</div>
@@ -597,17 +642,25 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
      module scripts, so it is set before any page processing runs. If it fails to load,
      the per-page symbol loop falls back to the existing LLM (pass-symbol) path. -->
 <script type="module">
-  import { contentFrame, extractFilledSubpaths, extractCameraBlobs, debugNearbyStrokes } from './lib/geometry.js';
+  import { contentFrame, extractFilledSubpaths, extractCameraBlobs, debugNearbyStrokes, extractStrokeSubpaths } from './lib/geometry.js';
   import { classifySheetClass, deriveSheetClassSignals } from './lib/sheet-class.js';
   import { planSymbolDetection, locateVector, blobsToInstances } from './lib/locate.js';
   import { runnerWorkForRole, unassignedPages } from './lib/plan-set.js';
   import { aggregateBom } from './lib/bom.js';
   import { buildGreedyPath } from './lib/waypoint-path.js';
+  import { scorePage, classifyGeometry } from './lib/wall-calibration.js';
+  import { runWallCalibration, renderCalibrationPreview, confirmWallCalibration,
+           rejectWallCalibration, tryNextCandidate, persistAllPageGeometry } from './lib/wall-calibration-client.js';
+  import { buildPageRouter } from './lib/wall-aware-path.js';
   window.TakeoffVec = { contentFrame, extractFilledSubpaths, extractCameraBlobs, debugNearbyStrokes,
                         classifySheetClass, deriveSheetClassSignals,
                         planSymbolDetection, locateVector, blobsToInstances,
                         runnerWorkForRole, unassignedPages,
-                        aggregateBom, buildGreedyPath };
+                        aggregateBom, buildGreedyPath,
+                        extractStrokeSubpaths, scorePage, classifyGeometry,
+                        runWallCalibration, renderCalibrationPreview, confirmWallCalibration,
+                        rejectWallCalibration, tryNextCandidate, persistAllPageGeometry,
+                        buildPageRouter };
 </script>
 <script>
 pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -1513,6 +1566,262 @@ async function runDemarcScan() {
   renderPageAssignmentTable(Object.values(trMap));
   renderTRMap(Object.values(trMap));
 }
+
+// ── Wall Calibration (3B) — bridges window.TakeoffVec's ESM exports into
+// the inline onclick= handlers, matching how the rest of this file calls
+// module code (see V.deriveSheetClassSignals usage elsewhere). ───────────
+let wallCalibResult = null;   // last wall_calibrations row returned by the API
+let wallCalibPages  = [];     // [{pageNum, pageId, pdfPage}] built fresh each run
+
+async function runWallCalibrationUI() {
+  if (!projectId)         { alert('Confirm project first'); return; }
+  if (!pdfDoc)            { alert('Load a PDF first'); return; }
+  if (!selectedPages.size){ alert('Select pages first'); return; }
+
+  const V = window.TakeoffVec;
+  setStatus('wallcal-status', `Scoring ${selectedPages.size} pages…`, 'running');
+  document.getElementById('wallcal-review').style.display = 'none';
+
+  try {
+    const sortedPages = [...selectedPages].sort((a, b) => a - b);
+    wallCalibPages = [];
+    for (const pageNum of sortedPages) {
+      const pageId = pageCache[pageNum]?.pageId;
+      if (!pageId) { console.warn(`Page ${pageNum} has no pageId yet — run Demarc Scan first, skipping.`); continue; }
+      const pdfPage = await pdfDoc.getPage(pageNum);
+      wallCalibPages.push({ pageNum, pageId, pdfPage });
+    }
+    if (!wallCalibPages.length) {
+      setStatus('wallcal-status', 'No scanned pages available — run Demarc Scan (step 3) first so pages have a pageId.', 'err');
+      return;
+    }
+
+    wallCalibResult = await V.runWallCalibration({
+      apiBase: base(), projectId, pages: wallCalibPages, OPS: pdfjsLib.OPS,
+    });
+    await showCalibrationPreview();
+  } catch (e) {
+    setStatus('wallcal-status', 'Calibration error: ' + e.message, 'err');
+  }
+}
+
+async function showCalibrationPreview() {
+  const V = window.TakeoffVec;
+  if (!wallCalibResult) return;
+
+  const previewEntry = wallCalibPages.find((p) => p.pageId === wallCalibResult.preview_page_id) ?? wallCalibPages[0];
+  const scale = 1.5; // matches the render scale used elsewhere in this file (runDemarcScan, etc.)
+  const vp = previewEntry.pdfPage.getViewport({ scale });
+  const canvas = document.getElementById('wallcal-preview-canvas');
+  canvas.width = vp.width; canvas.height = vp.height;
+  await previewEntry.pdfPage.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+
+  const signature = { color: wallCalibResult.stroke_color, width: wallCalibResult.stroke_width };
+  const { wallCount, doorCount } = await V.renderCalibrationPreview({
+    canvas, pdfPage: previewEntry.pdfPage, OPS: pdfjsLib.OPS, signature, viewportScale: scale,
+  });
+
+  const ratio = wallCalibResult.runner_up_score
+    ? (wallCalibResult.score / wallCalibResult.runner_up_score).toFixed(2) : '—';
+  document.getElementById('wallcal-summary').textContent =
+    `${wallCalibResult.pages_agreeing}/${wallCalibResult.pages_evaluated} pages agree · `
+    + `score ${wallCalibResult.score} vs ${wallCalibResult.runner_up_score ?? '—'} (ratio ${ratio}) · `
+    + `preview page: ${wallCount} walls, ${doorCount} doors — does the red overlay trace the walls?`;
+
+  setStatus('wallcal-status', `Suggested signature ready — review the overlay below (page ${previewEntry.pageNum}).`, 'ok');
+  document.getElementById('wallcal-review').style.display = 'block';
+}
+
+async function tryNextCandidateUI() {
+  const V = window.TakeoffVec;
+  try {
+    wallCalibResult = await V.tryNextCandidate({ apiBase: base(), projectId });
+    await showCalibrationPreview();
+  } catch (e) {
+    setStatus('wallcal-status', 'try-next error: ' + e.message, 'err');
+  }
+}
+
+async function confirmWallCalibrationUI() {
+  const V = window.TakeoffVec;
+  if (!wallCalibResult) return;
+  try {
+    setStatus('wallcal-persist-status', 'Confirming…', 'running');
+    await V.confirmWallCalibration({ apiBase: base(), projectId });
+
+    setStatus('wallcal-persist-status', `Persisting geometry for ${wallCalibPages.length} pages…`, 'running');
+    const signature = { color: wallCalibResult.stroke_color, width: wallCalibResult.stroke_width };
+    const results = await V.persistAllPageGeometry({
+      apiBase: base(), projectId, pages: wallCalibPages, OPS: pdfjsLib.OPS, signature,
+    });
+    const failed = results.filter((r) => !r.ok);
+    setStatus('wallcal-persist-status',
+      failed.length
+        ? `✓ Confirmed, but ${failed.length}/${results.length} pages failed to persist geometry — check console.`
+        : `✓ Confirmed and geometry persisted for all ${results.length} pages. Tier 3 routing is live for this project.`,
+      failed.length ? 'err' : 'ok');
+    if (failed.length) console.warn('Geometry persist failures:', failed);
+
+    document.getElementById('test-route-section').style.display = 'block';
+  } catch (e) {
+    setStatus('wallcal-persist-status', 'Confirm/persist error: ' + e.message, 'err');
+  }
+}
+
+async function rejectWallCalibrationUI() {
+  if (!projectId) { alert('Confirm project first'); return; }
+  const V = window.TakeoffVec;
+  try {
+    const row = await V.rejectWallCalibration({ apiBase: base(), projectId });
+    document.getElementById('wallcal-review').style.display = 'none';
+    setStatus('wallcal-status',
+      row.devices_flagged_stale
+        ? `Rejected — ${row.devices_flagged_stale} device(s) flagged wall_calibration_stale for review.`
+        : 'Rejected — staying on waypoint routing.',
+      '');
+  } catch (e) {
+    setStatus('wallcal-status', 'Reject error: ' + e.message, 'err');
+  }
+}
+
+// ── Test Auto Route (3C) — pure client-side. Computes a route with
+// buildPageRouter directly in the browser; writes nothing anywhere. Safe to
+// use freely to sanity-check auto-routing before it's wired into batch. ──
+let testRouteMode   = null;      // 'tr' | 'device' | null
+let testRoutePoints = { tr: null, device: null };  // in canvas pixel coords
+const TEST_ROUTE_SCALE = 1.5;
+
+function setTestRouteMode(mode) {
+  testRouteMode = mode;
+  document.getElementById('test-route-status').textContent =
+    mode === 'tr' ? 'Click the TR location on the page below.' : 'Click the device location on the page below.';
+}
+
+function clearTestRoute() {
+  testRoutePoints = { tr: null, device: null };
+  testRouteMode = null;
+  document.getElementById('test-route-status').textContent = '—';
+  renderTestRouteCanvas();
+}
+
+async function ensureTestRouteCanvasReady() {
+  const canvas = document.getElementById('test-route-canvas');
+  if (canvas.dataset.ready === '1') return canvas;
+
+  const pageNum = wallCalibPages[0]?.pageNum ?? [...selectedPages][0];
+  const pdfPage = await pdfDoc.getPage(pageNum);
+  const vp = pdfPage.getViewport({ scale: TEST_ROUTE_SCALE });
+  canvas.width = vp.width; canvas.height = vp.height;
+  await pdfPage.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+  canvas.dataset.ready = '1';
+  canvas.dataset.pageNum = pageNum;
+
+  canvas.onclick = (ev) => {
+    if (!testRouteMode) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = (ev.clientX - rect.left) * (canvas.width / rect.width);
+    const y = (ev.clientY - rect.top) * (canvas.height / rect.height);
+    testRoutePoints[testRouteMode] = { x, y };
+    document.getElementById('test-route-status').textContent =
+      `${testRouteMode.toUpperCase()} set at (${Math.round(x)}, ${Math.round(y)}).`
+      + (testRoutePoints.tr && testRoutePoints.device ? ' Ready — click Compute Route.' : '');
+    renderTestRouteCanvas();
+  };
+  return canvas;
+}
+
+async function renderTestRouteCanvas() {
+  const canvas = document.getElementById('test-route-canvas');
+  const pageNum = Number(canvas.dataset.pageNum);
+  if (!pageNum) return;
+  const pdfPage = await pdfDoc.getPage(pageNum);
+  const vp = pdfPage.getViewport({ scale: TEST_ROUTE_SCALE });
+  const ctx = canvas.getContext('2d');
+  await pdfPage.render({ canvasContext: ctx, viewport: vp }).promise;
+
+  ctx.save();
+  if (testRoutePoints.tr) {
+    ctx.fillStyle = '#2fbf8f';
+    ctx.fillRect(testRoutePoints.tr.x - 7, testRoutePoints.tr.y - 7, 14, 14);
+  }
+  if (testRoutePoints.device) {
+    ctx.fillStyle = '#ff5c5c';
+    ctx.beginPath(); ctx.arc(testRoutePoints.device.x, testRoutePoints.device.y, 7, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+async function computeTestRoute() {
+  const V = window.TakeoffVec;
+  const canvas = await ensureTestRouteCanvasReady();
+  if (!testRoutePoints.tr || !testRoutePoints.device) {
+    document.getElementById('test-route-status').textContent = 'Set both a TR point and a device point first.';
+    return;
+  }
+
+  // Canvas pixel coords are already at TEST_ROUTE_SCALE and already y-down
+  // (canvas native) — same convention classifyGeometry's output uses, so no
+  // further flip needed. Just divide out the render scale to get back to
+  // page-point space, matching what the persisted walls/doors are stored in.
+  const trXY     = [testRoutePoints.tr.x / TEST_ROUTE_SCALE, testRoutePoints.tr.y / TEST_ROUTE_SCALE];
+  const deviceXY = [testRoutePoints.device.x / TEST_ROUTE_SCALE, testRoutePoints.device.y / TEST_ROUTE_SCALE];
+
+  try {
+    document.getElementById('test-route-status').textContent = 'Extracting geometry and computing route…';
+    const pageNum = Number(canvas.dataset.pageNum);
+    const pdfPage = await pdfDoc.getPage(pageNum);
+    const signature = wallCalibResult
+      ? { color: wallCalibResult.stroke_color, width: wallCalibResult.stroke_width }
+      : null;
+    if (!signature) { document.getElementById('test-route-status').textContent = 'Run wall calibration first (3B).'; return; }
+
+    const strokes = await V.extractStrokeSubpaths(pdfPage, pdfjsLib.OPS);
+    const { walls, doors } = await V.classifyGeometry(strokes, pdfPage, signature);
+    if (!walls.length) {
+      document.getElementById('test-route-status').textContent = 'No walls found on this page for the confirmed signature.';
+      return;
+    }
+
+    const vp = pdfPage.getViewport({ scale: 1 });
+    const bounds = { x0: 0, y0: 0, x1: vp.width, y1: vp.height };
+    const router = V.buildPageRouter(trXY, { walls, doors }, bounds);
+    if (!router) { document.getElementById('test-route-status').textContent = 'buildPageRouter returned null.'; return; }
+
+    const result = router.routeDevice(deviceXY);
+    if (result.total_dist === null) {
+      document.getElementById('test-route-status').textContent = 'No path found — device may be in an enclosed area with no detected door nearby.';
+      return;
+    }
+
+    await renderTestRouteCanvas();
+    const ctx = canvas.getContext('2d');
+    ctx.save();
+    ctx.strokeStyle = '#ff8a3d'; ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    result.points.forEach(([x, y], i) => {
+      const cx = x * TEST_ROUTE_SCALE, cy = y * TEST_ROUTE_SCALE;
+      if (i === 0) ctx.moveTo(cx, cy); else ctx.lineTo(cx, cy);
+    });
+    ctx.stroke();
+    ctx.fillStyle = '#ff8a3d';
+    for (const [x, y] of result.points) {
+      ctx.beginPath(); ctx.arc(x * TEST_ROUTE_SCALE, y * TEST_ROUTE_SCALE, 3, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+
+    const scaleFt = pageCache[pageNum]?.passBResult?.scale?.text?.real_value
+      && pageCache[pageNum]?.passBResult?.scale?.text?.paper_value
+      ? (pageCache[pageNum].passBResult.scale.text.real_value / pageCache[pageNum].passBResult.scale.text.paper_value)
+      : null;
+    const ftNote = scaleFt ? ` (~${Math.round(result.total_dist * scaleFt / 72)} ft at this sheet's scale)` : '';
+    document.getElementById('test-route-status').textContent =
+      `✓ Route found: ${result.points.length} waypoints, ${result.total_dist.toFixed(1)} pt total${ftNote}.`;
+  } catch (e) {
+    document.getElementById('test-route-status').textContent = 'Error: ' + e.message;
+    console.error(e);
+  }
+}
+
 
 // ── Page → TR Assignment Table ────────────────────────────────────
 // pageAssignments: { pageNum → { trName, secondaryTR, isHost, hostInDataset } }
