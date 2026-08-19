@@ -72,3 +72,5 @@ export default async function handler(req) {
   if (error) return err(error.message, 500);
   return ok(data);
 }
+
+export const config = { path: "/api/pass-wall-geometry" };

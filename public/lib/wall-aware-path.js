@@ -199,6 +199,19 @@ function dijkstraFrom(grid, srcCell) {
       if (vx < 0 || vy < 0 || vx >= cols || vy >= rows) continue;
       const v = idx(vx, vy);
       if (blocked[v]) continue;
+      // Corner-cutting prevention: a diagonal move (dx!=0 AND dy!=0) is only
+      // legal if BOTH of the orthogonal cells it "passes between" are open.
+      // Without this check, 8-connected movement can slip diagonally between
+      // two blocked orthogonal cells that together represent a wall corner —
+      // the grid never occupies a blocked cell, so nothing here catches it,
+      // but visually the route cuts straight through the wall. Confirmed on
+      // real production data: a real device->TR route sliced through
+      // Conference Room, Storage 105-91, and Office A153-1's walls at
+      // exactly their corners before this fix — reproduced and visually
+      // verified against the actual drawing, not inferred from theory.
+      if (dx !== 0 && dy !== 0) {
+        if (blocked[idx(ux + dx, uy)] || blocked[idx(ux, uy + dy)]) continue;
+      }
       const nd = d + base * cost[v];
       if (nd < distArr[v]) { distArr[v] = nd; prev[v] = u; heap.push([nd, v]); }
     }
@@ -356,7 +369,21 @@ export function buildPageRouter(demarcXY, geometry, bounds) {
         ...toCell(bounds.x0, bounds.y0, deviceXY[0], deviceXY[1]));
       const rawLocal = backtrack(grid, field, deviceCell);
       if (!rawLocal) return { points: [], legs: [], total_dist: null, waypoint_ids_used: [] };
-      const raw = rawLocal.map(([x, y]) => [x + bounds.x0, y + bounds.y0]);
+      // backtrack() returns SOURCE-to-TARGET order (TR -> device, since the
+      // Dijkstra field is sourced at the TR and this walks its prev[] chain
+      // from deviceCell back to field.src, then reverses once already —
+      // that reverse lands on TR-first, not device-first). Reversing again
+      // here normalizes to the documented device->TR contract before
+      // anything downstream touches it. Without this, the endpoint overwrite
+      // two lines below silently swapped which point meant what — device
+      // and TR effectively traded places while every interior point stayed
+      // put, producing a route that jumps straight to what was really the
+      // TR-adjacent point, walks the true path backwards, and arrives back
+      // at what was really the device-adjacent point. Confirmed on real
+      // production data: reproduced exactly, visually verified the raw
+      // (correct, wall-avoiding) path against the broken simplified one.
+      const raw = rawLocal.map(([x, y]) => [x + bounds.x0, y + bounds.y0]).reverse();
+      if (globalThis.__WAP_DEBUG_RAW__) globalThis.__WAP_LAST_RAW__ = raw;
       const simplified = douglasPeucker(raw, SIMPLIFY_EPSILON);
       simplified[0] = deviceXY;
       simplified[simplified.length - 1] = demarcXY;
