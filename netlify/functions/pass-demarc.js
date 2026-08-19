@@ -49,7 +49,11 @@ export default async function handler(req) {
     if (!project_id || !name || !source) return err("project_id, name and source required");
 
   if (!(await assertProjectInOrg(supabase, project_id, orgId))) return err("Project not found in your organization", 404);
-  if (!(await assertPageInOrg(supabase, page_id, orgId))) return err("Page not found in your organization", 404);
+  // page_id is documented as legitimately null (project-level/off-sheet demarc)
+  // — assertPageInOrg returns false unconditionally for any falsy id, so
+  // calling it here for that legitimate case 404'd every off-sheet demarc
+  // save. Only check it when a page_id was actually supplied.
+  if (page_id != null && !(await assertPageInOrg(supabase, page_id, orgId))) return err("Page not found in your organization", 404);
 
     const row = {
       project_id,
@@ -65,11 +69,37 @@ export default async function handler(req) {
     // (e.g. an exit pin) never nulls an existing schematic link on upsert.
     if (region_id !== undefined) row.region_id = region_id ?? null;
 
-    const { data, error } = await supabase
-      .from("demarcs")
-      .upsert(row, { onConflict: "project_id,name" })
-      .select("*")
-      .single();
+    // Dedup by what a pin actually IS, not by whatever name the caller happens
+    // to send. The old upsert used onConflict:"project_id,name" — but the
+    // client's default name suggestion (e.g. "TR-pg2") differs every session,
+    // so re-placing the SAME physical pin under a different typed name always
+    // inserted a fresh row instead of updating the existing one. Confirmed on
+    // a real project: 8 real TR rooms had accumulated to 29 rows this way.
+    //
+    // An exit pin's name always ends "_exit_pg<N>" (see placeManualExit /
+    // suggestExitPin) — its identity is the page it exits FROM, not the name
+    // typed for the off-sheet target. A serving pin's identity is its page
+    // plus which schematic region it belongs to (a page can legitimately host
+    // more than one TR across different schematic regions).
+    const isExitPin = /_exit_pg\d+$/.test(String(name));
+    let existingId = null;
+    if (page_id != null) {
+      let findQuery = supabase.from("demarcs").select("id, name").eq("project_id", project_id).eq("page_id", page_id);
+      if (isExitPin) {
+        findQuery = findQuery.ilike("name", "%\\_exit\\_pg%");
+      } else {
+        findQuery = findQuery.not("name", "ilike", "%\\_exit\\_pg%");
+        if (region_id != null) findQuery = findQuery.eq("region_id", region_id);
+        else findQuery = findQuery.is("region_id", null);
+      }
+      const { data: existing, error: findErr } = await findQuery.limit(1).maybeSingle();
+      if (findErr) return err(findErr.message, 500);
+      if (existing) existingId = existing.id;
+    }
+
+    const { data, error } = existingId
+      ? await supabase.from("demarcs").update(row).eq("id", existingId).select("*").single()
+      : await supabase.from("demarcs").insert(row).select("*").single();
 
     if (error) return err(error.message, 500);
     return ok(data);

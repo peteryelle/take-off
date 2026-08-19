@@ -147,5 +147,56 @@ console.log('QTS page 8 (unmatched plate + unscheduled UIN flags):');
   assert(matched.length === 12, `12 matched devices have confidence high (got ${matched.length})`);
 }
 
+// ── proximity-based fold for no-UIN labels (was exact-coordinate) ───────────
+// Real production data: two detections of the SAME physical outlet almost
+// never land at bit-identical coordinates across extraction passes, so the
+// old exact-match (4-decimal) key created two separate device records for one
+// physical device instead of folding them — confirmed clusters of
+// near-duplicates 0.007-0.015 apart that should have been one device.
+console.log('proximity fold (near-identical, not exact, coordinates):');
+{
+  const catalog = { outlet: { sources: ['label'] } };
+  const labels = [
+    { type: 'outlet', x: 0.4770, y: 0.5150, families: ['DV'] },
+    { type: 'outlet', x: 0.4772, y: 0.5148, families: ['N'] },   // ~0.0003 away — must fold
+  ];
+  const devices = reconcile(catalog, labels, [], []);
+  assert(devices.length === 1, `two near-identical (not exact) label detections fold to one device (got ${devices.length})`);
+  assert(devices[0] && new Set(devices[0].attributes.families).size === 2,
+    'folded device unions families from both near-identical detections');
+}
+
+// Mutation tripwire: two GENUINELY distinct nearby devices — closer than
+// normal room spacing but still real, separate outlets — must NOT get merged
+// just because proximity replaced exact-match. The default radius (0.003)
+// must stay well under real-world minimum outlet spacing (confirmed on
+// production data: ~0.0072 at the tightest legitimately-observed spacing).
+console.log('proximity fold — genuinely distinct nearby devices stay separate:');
+{
+  const catalog = { outlet: { sources: ['label'] } };
+  const labels = [
+    { type: 'outlet', x: 0.400, y: 0.500, families: ['DV'] },
+    { type: 'outlet', x: 0.408, y: 0.500, families: ['DV'] },   // 0.008 away — a real, different outlet
+  ];
+  const devices = reconcile(catalog, labels, [], []);
+  assert(devices.length === 2, `two genuinely distinct nearby outlets stay separate (got ${devices.length})`);
+}
+
+// Mutation tripwire: a same-type device seeded by a REAL UIN elsewhere on the
+// page must never silently absorb a nearby no-UIN label — the two join paths
+// (UIN-exact vs proximity) must stay independent.
+console.log('proximity fold does not absorb a UIN-seeded device:');
+{
+  const catalog = { outlet: { sources: ['label'] } };
+  const labels = [
+    { uin: 'OUT-100', type: 'outlet', x: 0.500, y: 0.500 },      // real UIN, own device
+    { type: 'outlet', x: 0.5001, y: 0.4999 },                     // no-UIN, right on top of it
+  ];
+  const devices = reconcile(catalog, labels, [], []);
+  assert(devices.length === 2, `a UIN-seeded device and a nearby no-UIN label stay separate (got ${devices.length})`);
+  assert(devices.some((d) => d.uin === 'OUT-100') && devices.some((d) => d.uin === null),
+    'one device keeps its real UIN, the other stays unlabeled — no cross-path absorption');
+}
+
 console.log(failures === 0 ? '\nALL GATES PASS' : `\n${failures} ASSERTION(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

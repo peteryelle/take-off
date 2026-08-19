@@ -125,6 +125,11 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
 .res-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .res-table th { padding: 7px 10px; color: #999; font-weight: normal; text-align: left; border-bottom: 1px solid #2e2e2e; }
 .res-table td { padding: 7px 10px; border-bottom: 1px solid #1a1a1a; }
+/* BOM table only: columns sized to content instead of stretched full-width,
+   so Qty sits close to Part/Model instead of pinned to the far edge of a
+   wide results panel. */
+.res-table.bom-table { width: auto; max-width: 820px; }
+.res-table.bom-table th, .res-table.bom-table td { padding: 7px 20px 7px 10px; }
 </style>
 </head>
 <body>
@@ -493,9 +498,9 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
      z-index:300; flex-direction:column; align-items:center; justify-content:center;">
   <div style="color:#f0c040; font-size:15px; font-weight:bold; margin-bottom:4px;" id="conf-title">Confidence Map</div>
   <div style="color:#aaa; font-size:13px; margin-bottom:8px;">
-    Each star is a counted device · color = confidence · number = row in device table · ✕ = excluded · click empty space to add a missed device · hover for detail · scroll to zoom · drag to pan
+    Each star is a counted device · color = confidence · click a star to exclude it · click its number to isolate its path · ✕ = excluded · click empty space to add a missed device · filter by type to triage one device type at a time · hover for detail · scroll to zoom · drag to pan
   </div>
-  <div style="display:flex; gap:8px; margin-bottom:8px; align-items:center;">
+  <div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:8px; align-items:center; justify-content:center;">
     <button onclick="confZoomBtn(1.5)" style="padding:3px 12px;">＋</button>
     <button onclick="confZoomBtn(1/1.5)" style="padding:3px 12px;">－</button>
     <button onclick="confReset()" class="info" style="padding:3px 10px; font-size:11px;">Reset</button>
@@ -505,6 +510,8 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
     <span style="color:#f07a7a; font-size:11px;">● low</span>
     <button id="conf-paths-toggle" onclick="toggleConfPaths()" class="info"
       style="padding:3px 10px; font-size:11px; margin-left:12px;">🔀 show path confidence</button>
+    <select id="conf-type-filter" onchange="setConfTypeFilter(this.value)"
+      style="padding:3px 8px; font-size:11px; margin-left:12px; max-width:220px;"></select>
   </div>
   <div id="conf-wrap" style="overflow:hidden; width:88vw; height:60vh; position:relative;
        cursor:grab; border:1px solid #333;">
@@ -590,13 +597,13 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
      module scripts, so it is set before any page processing runs. If it fails to load,
      the per-page symbol loop falls back to the existing LLM (pass-symbol) path. -->
 <script type="module">
-  import { contentFrame, extractFilledSubpaths, extractCameraBlobs } from './lib/geometry.js';
+  import { contentFrame, extractFilledSubpaths, extractCameraBlobs, debugNearbyStrokes } from './lib/geometry.js';
   import { classifySheetClass, deriveSheetClassSignals } from './lib/sheet-class.js';
   import { planSymbolDetection, locateVector, blobsToInstances } from './lib/locate.js';
   import { runnerWorkForRole, unassignedPages } from './lib/plan-set.js';
   import { aggregateBom } from './lib/bom.js';
   import { buildGreedyPath } from './lib/waypoint-path.js';
-  window.TakeoffVec = { contentFrame, extractFilledSubpaths, extractCameraBlobs,
+  window.TakeoffVec = { contentFrame, extractFilledSubpaths, extractCameraBlobs, debugNearbyStrokes,
                         classifySheetClass, deriveSheetClassSignals,
                         planSymbolDetection, locateVector, blobsToInstances,
                         runnerWorkForRole, unassignedPages,
@@ -645,7 +652,7 @@ function setStatus(id, msg, cls='') {
     projectId = parseInt(stored);
     updateLinks();
     document.getElementById('device-type-bar').style.display = 'block';
-    restoreFromSupabase(parseInt(stored));
+    restoreFromSupabase(parseInt(stored)).then(() => attemptAutoLoadPdf(parseInt(stored)));
   }
 })();
 function updateLinks() {
@@ -968,6 +975,7 @@ function showPDFFilename(name) {
 // (nothing stored yet, expired signed URL, network hiccup) so the existing
 // fallback flow still works exactly as it did before this existed.
 async function attemptAutoLoadPdf(pid) {
+  if (pdfDoc) return true;   // already loaded this session (manual pick or a prior auto-load) — nothing to do
   try {
     const r = await fetch(`${base()}/api/pdf-storage-url`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -988,7 +996,7 @@ async function attemptAutoLoadPdf(pid) {
     return true;
   } catch (e) {
     console.warn('[attemptAutoLoadPdf]', e.message);
-    setStatus('pdf-status', '', '');
+    setStatus('pdf-status', `Could not auto-load the persisted PDF (${e.message}) — please re-attach below`, 'err');
     return false;
   }
 }
@@ -1080,6 +1088,23 @@ async function renderThumbnails() {
     wrap.onclick = () => togglePage(n);
     col.appendChild(wrap);
 
+    // Status badge — reads the authoritative pages.status ('ready' | 'running' |
+    // 'done' | 'error'), not an inferred proxy like "does this page have any
+    // device_instances." A page can legitimately have zero devices and still be
+    // genuinely done; the DB already knows the difference, so use it directly.
+    //
+    // Styled directly via the just-created element reference (applyStatusBadge),
+    // NOT via the document.querySelector-based updateThumbStatusBadge() used
+    // elsewhere — at this point in the loop, col/statusBadge are not yet
+    // attached to the live document (grid.appendChild(col) happens at the end
+    // of this iteration), so a query-based lookup here would silently find
+    // nothing and every badge would fail to render, with no error anywhere.
+    const statusBadge = document.createElement('div');
+    statusBadge.className = 'pg-status-badge';
+    statusBadge.dataset.page = n;
+    col.appendChild(statusBadge);
+    applyStatusBadge(statusBadge, n);
+
     // Enlarge-and-review: open the carousel at this page to see it big and set its role.
     const viewBtn = document.createElement('button');
     viewBtn.textContent = '🔍 view';
@@ -1129,6 +1154,44 @@ async function renderThumbnails() {
   markThumbRoleState();
 }
 
+// Styles one status badge element in place, given a direct element reference.
+// Pure DOM mutation, no query — safe to call before the element's container
+// has been attached to the document (see renderThumbnails above).
+function applyStatusBadge(el, n) {
+  const status = pageCache[n]?.status ?? null;
+  const msg    = pageCache[n]?.status_msg ?? '';
+  const STYLES = {
+    done:    { text: '✓ done',     bg: '#0f2a14', border: '#2a7a4a', color: '#7af07a' },
+    error:   { text: '⚠ error',    bg: '#2a1414', border: '#7a3a3a', color: '#f07a7a' },
+    running: { text: '… running',  bg: '#2a2410', border: '#7a6a2a', color: '#f0c060' },
+  };
+  const s = STYLES[status];
+  if (!s) {
+    // 'ready' or unset — page exists but hasn't been scanned yet. Deliberately
+    // no badge here rather than a noisy "— not run" on every page before a
+    // project's first scan; the badge earns its place once there's a real
+    // state to report.
+    el.style.display = 'none';
+    el.textContent = '';
+    el.title = '';
+    return;
+  }
+  el.style.cssText = `display:block; font-size:9px; text-align:center; padding:2px 4px; margin-top:2px; border-radius:3px; background:${s.bg}; border:1px solid ${s.border}; color:${s.color};`;
+  el.textContent = s.text;
+  el.title = status === 'error' && msg ? msg : '';
+}
+
+// Updates one page's status badge in place by looking it up in the live
+// document — used after a live pass-batch run, well after the thumbnail
+// grid has already been rendered and attached, so a query here is safe
+// (unlike the renderThumbnails call site, which uses applyStatusBadge
+// directly with a fresh element reference instead — see above).
+function updateThumbStatusBadge(n) {
+  const el = document.querySelector(`.pg-status-badge[data-page="${n}"]`);
+  if (!el) return;
+  applyStatusBadge(el, n);
+}
+
 // Persist a human-assigned page role. Updates client state immediately (the gate
 // reads pageCache.page_role), and writes through to the DB when the page row
 // exists (restored projects + any page after the demarc scan). For a brand-new
@@ -1151,8 +1214,11 @@ async function setPageRole(n, role) {
       body: JSON.stringify({ project_id: projectId, pdf_page_number: n, page_role: pageRole })
     });
     const j = await r.json().catch(() => ({}));
+    if (!r.ok) { setStatus('selection-status', `pg${n} role save failed: ${j.error || r.status}`, 'err'); return; }
     if (j?.page_id) pageCache[n].pageId = j.page_id;
-  } catch (e) { console.warn('set-page-role:', e.message); }
+  } catch (e) {
+    setStatus('selection-status', `pg${n} role save failed: ${e.message}`, 'err');
+  }
 }
 
 // Persist a page's TR assignment(s) — which TR this page hosts/is served by
@@ -1173,8 +1239,11 @@ async function setPageTR(n, fields) {
       body: JSON.stringify({ project_id: projectId, pdf_page_number: n, ...fields })
     });
     const j = await r.json().catch(() => ({}));
+    if (!r.ok) { setStatus('selection-status', `pg${n} TR save failed: ${j.error || r.status}`, 'err'); return; }
     if (j?.page_id) pageCache[n].pageId = j.page_id;
-  } catch (e) { console.warn('setPageTR:', e.message); }
+  } catch (e) {
+    setStatus('selection-status', `pg${n} TR save failed: ${e.message}`, 'err');
+  }
 }
 
 // Bulk-assign one role to every currently SELECTED page (the 39-page ergonomics:
@@ -1430,12 +1499,19 @@ async function runDemarcScan() {
     `✓ ${scanResult.pages_scanned} pages scanned · ${scanResult.tr_rooms} TR rooms found · ${scanResult.off_sheet} need configuration`,
     scanResult.off_sheet > 0 ? '' : 'ok');
 
-  // Store TR map
-  trMap = {};
-  for (const tr of (scanResult.tr_map ?? [])) trMap[tr.name] = tr;
+  // Merge, don't overwrite — same principle as the pageCache merge above.
+  // pass-scan only returns schedule-derived TRs (empty for a no-schedule project
+  // like this one, per its own doc comment: "pages without a schedule contribute
+  // no auto TRs"). Wiping trMap first discarded every manually-placed pin that
+  // had just been restored from demarcs — even though this scan never touches
+  // the demarcs table at all. Nothing was actually lost server-side; the visible
+  // list just went blank.
+  for (const tr of (scanResult.tr_map ?? [])) {
+    trMap[tr.name] = { ...(trMap[tr.name] ?? {}), ...tr };
+  }
 
-  renderPageAssignmentTable(scanResult.tr_map ?? []);
-  renderTRMap(scanResult.tr_map ?? []);
+  renderPageAssignmentTable(Object.values(trMap));
+  renderTRMap(Object.values(trMap));
 }
 
 // ── Page → TR Assignment Table ────────────────────────────────────
@@ -1820,7 +1896,7 @@ async function deleteTRRoom(trName) {
 
   // Reload state from Supabase so trMap, the page-assignment table and every
   // rendered card reflect exactly what's left in the demarcs table.
-  if (projectId) await restoreFromSupabase(projectId);
+  if (projectId) { await restoreFromSupabase(projectId); await attemptAutoLoadPdf(projectId); }
 }
 
 function renderTRMap(trs) {
@@ -3034,7 +3110,13 @@ async function lockDemarcs() {
 }
 
 // ── Step 4: Batch run ─────────────────────────────────────────────
-async function runBatch() {
+async function runBatch(quiet = false) {
+  // quiet=true (single-page manual-add rerun): status bar/heartbeat still update,
+  // but batch-log is left untouched — it's an append-only, fixed-height (160px)
+  // running record of the full batch run, and a manual-add rerun re-invoking it
+  // per keystroke both floods it with duplicate per-page lines and scrolls the
+  // other pages' original entries out of view. Feedback for a quiet rerun goes
+  // through conf-hover-info (see submitManualAdd) instead.
   const sortedPages = [...selectedPages].sort((a,b) => a-b);
   _anchorCache = null; // force fresh load — device types may have changed since last run
 
@@ -3052,7 +3134,7 @@ async function runBatch() {
         `✗ Counting blocked — assign a role to every selected page first. Needs a role: ${missing.map(n=>'pg'+n).join(', ')}`,
         'err');
       const log0 = document.getElementById('batch-log');
-      if (log0) log0.innerHTML += `<div style="color:#f0c040;">⚠ ${missing.length} page${missing.length!==1?'s':''} unassigned — no pages counted. Set roles (plan / schedule / legend / detail / skip) and re-run.</div>`;
+      if (log0 && !quiet) log0.innerHTML += `<div style="color:#f0c040;">⚠ ${missing.length} page${missing.length!==1?'s':''} unassigned — no pages counted. Set roles (plan / schedule / legend / detail / skip) and re-run.</div>`;
       return;   // nothing counts
     }
   }
@@ -3092,7 +3174,7 @@ async function runBatch() {
     const passBRes = cache.passBResult;
 
     if (!pageId) {
-      log.innerHTML += `<div style="color:#f07a7a;">pg${pageNum}: no page record — skipping</div>`;
+      if (!quiet) log.innerHTML += `<div style="color:#f07a7a;">pg${pageNum}: no page record — skipping</div>`;
       continue;
     }
 
@@ -3102,7 +3184,7 @@ async function runBatch() {
     const pageRole  = cache.page_role ?? null;
     const work      = (window.TakeoffVec?.runnerWorkForRole?.(pageRole)) ?? 'count';
     if (work === 'skip') {
-      log.innerHTML += `<div style="color:#888;">pg${pageNum}: ${pageRole} — not counted</div>`;
+      if (!quiet) log.innerHTML += `<div style="color:#888;">pg${pageNum}: ${pageRole} — not counted</div>`;
       done++;
       bar.style.width = `${Math.round((done / sortedPages.length) * 100)}%`;
       continue;
@@ -3228,11 +3310,65 @@ async function runBatch() {
           for (const step of steps) {
             if (step.route === 'vector') {
               let res = { instances: [], degraded: true };
+              const checkDiagnostics = [];
+              const activeCheck = step.group?.requires_ring ? 'ring'
+                : step.group?.requires_line_through_center ? 'line' : null;
               try {
                 res = await V.locateVector(pdfPage, pdfjsLib.OPS, textCenters, step.group,
-                  { extractCameraBlobs: V.extractCameraBlobs },
+                  {
+                    extractCameraBlobs: V.extractCameraBlobs,
+                    onCandidate: activeCheck ? (c) => checkDiagnostics.push(c) : undefined
+                  },
                   { vpW: W, vpH: H });
                 console.log(`[vector] pg${pageNum}: raw=${res.n_subpaths_raw} kept=${res.n_subpaths_kept} blobs=${res.blob_count} instances=${res.instances?.length ?? 0} (frame ${W}x${H}, bodyArea ${step.group?.body_area ?? 2e-5})`);
+                if (activeCheck) {
+                  const tag = `[${activeCheck}-verify]`;
+                  const accepted = checkDiagnostics.filter(c => c.accepted).length;
+                  console.log(`${tag} pg${pageNum}: strokes_found=${res.n_strokes_found} candidates=${checkDiagnostics.length} accepted=${accepted} rejected=${checkDiagnostics.length - accepted}`);
+                  if (res.n_strokes_found === 0) {
+                    console.warn(`${tag} pg${pageNum}: ZERO stroke-only subpaths extracted — the ${activeCheck === 'ring' ? 'ring' : 'line'} is likely not drawn as a plain stroke on this sheet. Every candidate will be rejected until this is understood.`);
+                  } else if (accepted === 0 && checkDiagnostics.length) {
+                    const lines = checkDiagnostics.slice(0, 5).map(c => {
+                      const n = c.nearby?.[0];
+                      const nearestTxt = !n ? `NO ${activeCheck.toUpperCase()}-LIKE STROKE FOUND NEARBY AT ALL`
+                        : activeCheck === 'ring'
+                        ? `dCenter=${n.dCenter.toFixed(5)} ratio=${n.ratio != null ? n.ratio.toFixed(2) : '—'} ringRadius=${n.radius.toFixed(5)}`
+                        : `perpDist=${n.perpDist.toFixed(5)} ratio=${n.ratio != null ? n.ratio.toFixed(2) : '—'} length=${n.length.toFixed(5)}`;
+                      return `blob(${c.x.toFixed(4)},${c.y.toFixed(4)}) r=${c.radius.toFixed(5)} → nearest: ${nearestTxt}`;
+                    });
+                    console.warn(`${tag} pg${pageNum}: strokes exist but NOTHING passed —\n` + lines.join('\n'));
+
+                    // Distance/proximity histogram for the FIRST blob, ignoring the
+                    // shape check entirely — same reasoning as the original ring
+                    // diagnostic: distinguishes "nothing near the device at all" from
+                    // "something's near it but at the wrong distance" from "there IS a
+                    // cluster at the right distance but the shape check still rejects
+                    // it." Showing only the closest few previously hid a same-distance
+                    // cluster if unrelated fragments sat even closer to the device.
+                    const first = checkDiagnostics[0];
+                    if (first && res.strokeSubpaths && V.debugNearbyStrokes) {
+                      const nearby = V.debugNearbyStrokes([first.x, first.y], res.strokeSubpaths, 0.02);
+                      if (!nearby.length) {
+                        console.warn(`${tag} pg${pageNum}: NOTHING stroke-only within 2% of blob(${first.x.toFixed(4)},${first.y.toFixed(4)}) at all — no geometry is reaching this device's position, full stop.`);
+                      } else {
+                        const bucketW = 0.0005;
+                        const buckets = {};
+                        for (const s of nearby) {
+                          const b = (Math.floor(s.dCenter / bucketW) * bucketW).toFixed(4);
+                          buckets[b] = (buckets[b] ?? 0) + 1;
+                        }
+                        const expectedTxt = activeCheck === 'ring'
+                          ? `expected ring dCenter range: ${(first.radius * 1.1).toFixed(5)}–${(first.radius * 3.0).toFixed(5)}`
+                          : `expected line length range: ${(first.radius * 2 * 1.0).toFixed(5)}–${(first.radius * 2 * 5.0).toFixed(5)} (perpDist near 0)`;
+                        const bucketLines = Object.entries(buckets)
+                          .sort((a, b) => parseFloat(a[0]) - parseFloat(b[0]))
+                          .map(([b, n]) => `  dCenter≈${b}: ${n} stroke(s)`);
+                        console.warn(`${tag} pg${pageNum}: ${nearby.length} stroke(s) near blob(${first.x.toFixed(4)},${first.y.toFixed(4)}) r=${first.radius.toFixed(5)} — ${expectedTxt} —\n` +
+                          bucketLines.join('\n'));
+                      }
+                    }
+                  }
+                }
               } catch (e) { console.warn('[vector locate] pg' + pageNum, e.message); }
               if (res.degraded) {                       // found nothing -> LLM for each type in the group
                 console.warn(`[vector] pg${pageNum}: degraded (0 blobs) -> LLM fallback for ${step.device_type_ids?.length ?? 0} types`);
@@ -3275,15 +3411,25 @@ async function runBatch() {
         devices: j.devices ?? [],
         device_count: (j.devices ?? []).length
       };
+      // Keep the thumbnail status badge in sync immediately after a live run —
+      // it reads pageCache[n].status, which otherwise only updates on the next
+      // restore/reload. pass-batch.js itself already writes 'done'/'error' to
+      // the pages row; this just mirrors that onto the client's copy right away.
+      if (!pageCache[pageNum]) pageCache[pageNum] = {};
+      pageCache[pageNum].status     = r.ok ? 'done' : 'error';
+      pageCache[pageNum].status_msg = r.ok ? null : (j.error ?? null);
+      updateThumbStatusBadge(pageNum);
       const msg = r.ok
         ? `pg${pageNum}: ${j.device_count} devices${j.tia_violations ? ' ⚠'+j.tia_violations+' TIA' : ''}${j.excluded_out_of_scope ? ` · ${j.excluded_out_of_scope} excluded (out of scope)` : ''}`
         : `pg${pageNum}: ERROR — ${j.error}`;
-      log.innerHTML += `<div style="color:${r.ok ? '#7af07a' : '#f07a7a'}">${msg}</div>`;
-      log.scrollTop = log.scrollHeight;
+      if (!quiet) {
+        log.innerHTML += `<div style="color:${r.ok ? '#7af07a' : '#f07a7a'}">${msg}</div>`;
+        log.scrollTop = log.scrollHeight;
+      }
 
 
     } catch(e) {
-      log.innerHTML += `<div style="color:#f07a7a;">pg${pageNum}: ${e.message}</div>`;
+      if (!quiet) log.innerHTML += `<div style="color:#f07a7a;">pg${pageNum}: ${e.message}</div>`;
     }
 
     done++;
@@ -3411,6 +3557,16 @@ function applyDistanceScope() {
   }
 }
 
+// Accordion state for the By Page results list. null = all collapsed.
+// Persists across re-renders (culls, leader edits, etc.) so the open page
+// stays open until the user collapses it or opens a different one.
+let expandedResultsPage = null;
+
+function toggleResultsPage(pageNum) {
+  expandedResultsPage = (expandedResultsPage === pageNum) ? null : pageNum;
+  renderByPage();
+}
+
 function renderResults() {
   renderByPage();
   renderByTR();
@@ -3420,7 +3576,16 @@ function renderResults() {
 
 function renderByPage() {
   const el = document.getElementById('by-page-content');
-  const sortedPages = [...selectedPages].sort((a,b)=>a-b);
+  // Results reflects everything actually computed (batchResults), NOT what's
+  // currently selected in Step 2 — selection is "what to run next," a
+  // completely separate concept from "what's already been computed." Using
+  // selectedPages here meant this tab showed nothing on a fresh restore
+  // (restore deliberately never auto-selects pages) even though batchResults
+  // was fully populated, and showed ONLY a just-rescanned page instead of it
+  // alongside every other page's already-computed results. renderByTR() and
+  // renderProjectTotal() already iterate batchResults directly — this brings
+  // renderByPage() in line with them.
+  const sortedPages = Object.keys(batchResults).map(Number).sort((a,b)=>a-b);
   let html = '';
 
   // Resolve a device's demarc_id → its TR name (covers both main pins and exit pins),
@@ -3459,16 +3624,20 @@ function renderByPage() {
     } else if (servingTRs.length > 1) {
       demarcInfo = `<span style="color:#555; margin-left:12px; font-size:11px;">${servingTRs.length} exits: ${servingTRs.map(t => t.name).join(', ')}</span>`;
     }
-    html += `<div style="color:#f0c040; font-size:13px; margin-bottom:6px; display:flex; align-items:baseline; flex-wrap:wrap; gap:8px;">
+    const isOpen = expandedResultsPage === pageNum;
+    html += `<div onclick="toggleResultsPage(${pageNum})" style="color:#f0c040; font-size:13px; margin-bottom:6px; display:flex; align-items:baseline; flex-wrap:wrap; gap:8px; cursor:pointer;">
+      <span style="color:#888; font-size:11px; width:10px; display:inline-block;">${isOpen ? '▾' : '▸'}</span>
       <strong>pg${pageNum}</strong>
       <span style="color:#e0e0e0;">${sheet}</span>
       <span style="color:#888;">${res.device_count} devices</span>
       ${res.tia_violations ? `<span style="color:#f07a7a;">⚠ ${res.tia_violations} TIA</span>` : ''}
       ${res.excluded_out_of_scope ? `<span style="color:#b06a2a;" title="dropped entirely — inside a marked out-of-scope zone">⬚ ${res.excluded_out_of_scope} excluded</span>` : ''}
       ${demarcInfo}
-      <button onclick="openLeaderModal(${pageNum})" class="info" style="padding:2px 9px; font-size:10px;">⤳ mark leaders</button>
-      <button onclick="openConfidenceModal(${pageNum})" class="info" style="padding:2px 9px; font-size:10px;">★ confidence map</button>
+      <button onclick="event.stopPropagation(); openLeaderModal(${pageNum})" class="info" style="padding:2px 9px; font-size:10px;">⤳ mark leaders</button>
+      <button onclick="event.stopPropagation(); openConfidenceModal(${pageNum})" class="info" style="padding:2px 9px; font-size:10px;">★ confidence map</button>
     </div>`;
+
+
 
     // By-type summary (with leader-added sub-count computed from device flags)
     const byType = res.by_type ?? [];
@@ -3483,6 +3652,11 @@ function renderByPage() {
       html += `<span style="margin-right:12px;"><strong style="color:#e0e0e0;">${t.count}</strong> ${t.name}${leaderNote}</span>`;
     }
     html += `</div>`;
+
+    if (!isOpen) {
+      html += `</div>`; // close the outer page wrapper — no table for a collapsed page
+      continue;
+    }
 
     // Device table
     html += `<table class="res-table"><thead><tr>
@@ -3823,6 +3997,8 @@ async function openLeaderModal(pageNum) {
 // the getBoundingClientRect/CSS-clamp drift that plain overlay positioning is
 // prone to (see click-coordinate bug notes elsewhere in this file).
 let confPageNum = null, confDevices = [];
+let confPinnedPath = null;   // device whose path is click-isolated (badge click), independent of hover and the arm-for-cull state
+let confTypeFilter = null;   // device name to show exclusively, or null for all — lets a busy page be triaged one type at a time
 let confArmedForCull = null;   // _num of a device clicked once, awaiting a second click to exclude
 // Default padding (identity-frame fraction) around a culled device's point when
 // auto-building its exclude box. Small enough not to swallow a close neighbor on a
@@ -3874,8 +4050,12 @@ function confRedraw() {
     layer.appendChild(dot);
   }
 
+  let attempted = 0, rendered = 0, skippedNullXY = 0, skippedFilter = 0, errored = [];
   for (const d of confDevices) {
-    if (d.x_norm == null || d.y_norm == null) continue;
+    attempted++;
+    if (d.x_norm == null || d.y_norm == null) { skippedNullXY++; continue; }
+    if (confTypeFilter && d.name !== confTypeFilter) { skippedFilter++; continue; }   // triage one type at a time on a busy sheet
+    try {
     const culled = (d.flags ?? []).includes('manual_excluded');
     const armed  = !culled && d._num != null && d._num === confArmedForCull;
     const color  = culled ? '#666' : armed ? '#f07a7a' : (CONF_COLOR[d.confidence] ?? '#888');
@@ -3886,11 +4066,11 @@ function confRedraw() {
     star.className = 'conf-star';
     // Counter-scale so the star's on-screen size stays ~constant across zoom levels.
     star.style.cssText = `position:absolute; width:${size}px; height:${size}px;
-      transform:translate(-50%,-50%); pointer-events:${culled ? 'none' : 'auto'}; z-index:10;
+      transform:translate(-50%,-50%); pointer-events:auto; z-index:10;
       display:flex; align-items:center; justify-content:center;
       font-size:${size}px; line-height:1; color:${color}; opacity:${culled ? 0.6 : 1};
       text-shadow:0 0 ${2/confZoom}px rgba(0,0,0,0.9), 0 0 ${1/confZoom}px rgba(0,0,0,0.9);
-      cursor:${culled ? 'default' : 'pointer'};`;
+      cursor:pointer;`;
     // Culled devices show as ✕ instead of ★ — same permanent-record reasoning as
     // the table's strikethrough: confirms the click applied, doesn't just vanish.
     star.textContent = culled ? '✕' : '★';
@@ -3907,22 +4087,22 @@ function confRedraw() {
       star.onmouseleave = () => { document.getElementById('conf-hover-info').textContent = ''; clearConfPath(); };
       star.onclick = (e) => { e.stopPropagation(); armOrCullDevice(d); };
     } else {
-      star.title = d.cull_category === 'junk'
+      star.title = (d.cull_category === 'junk'
         ? `${d.name ?? 'device'} #${d._num} — junk (not a real detection)`
-        : `${d.name ?? 'device'} #${d._num} — excluded${d.cull_reason ? ': ' + d.cull_reason : ''}`;
+        : `${d.name ?? 'device'} #${d._num} — excluded${d.cull_reason ? ': ' + d.cull_reason : ''}`)
+        + ' — click to restore';
+      star.onclick = (e) => { e.stopPropagation(); unCullDevice(d); };
     }
     layer.appendChild(star);
 
     // Numbered badge, tied to the device's row (#) in the by-page device table —
     // lets you cross-reference a plotted point back to its table row, and click it
-    // (while not yet culled) to exclude a device that shouldn't have been counted
-    // (e.g. inside a hatched out-of-scope area the zone tool didn't catch). Same
-    // arm-then-confirm pattern as the exclude-zone delete flow — click once to arm
-    // (red, 5s to confirm), click again to actually exclude. Kept as a separate
-    // element next to the star rather than replacing it, so the star's color still
-    // reads as confidence at a glance (it only turns red while armed).
+    // to isolate just this device's routed path (independent of the star, which
+    // handles exclude — kept on separate elements so the two actions never fight
+    // over one click). Click again (or click a different badge) to clear/switch.
     if (d._num != null) {
       const numSize = 12 / confZoom;
+      const pinned = confPinnedPath === d;
       const badge = document.createElement('div');
       badge.className = 'conf-star'; // reuse hit-test/cleanup grouping in confRedraw's clear step
       badge.style.cssText = `position:absolute; min-width:${numSize*1.6}px; height:${numSize*1.4}px;
@@ -3931,15 +4111,36 @@ function confRedraw() {
         display:flex; align-items:center; justify-content:center;
         font-size:${numSize}px; line-height:1; font-family:monospace; font-weight:bold;
         color:#0a0a0a; background:${color}; border-radius:${3/confZoom}px;
-        padding:0 ${2/confZoom}px;`;
+        padding:0 ${2/confZoom}px;
+        ${pinned ? `box-shadow:0 0 0 ${2/confZoom}px #fff;` : ''}`;
       badge.textContent = d._num;
-      badge.title = culled ? 'Excluded' : (armed ? 'Click again to exclude' : 'Click to exclude this device');
-      badge.style.left = (pos.x + size * 0.55) + 'px';
-      badge.style.top  = (pos.y - size * 0.55) + 'px';
-      if (!culled) badge.onclick = (e) => { e.stopPropagation(); armOrCullDevice(d); };
+      badge.title = culled ? 'Excluded' : (pinned ? 'Click to hide this path' : 'Click to show this device\'s path');
+      // 1.25x offset (was 0.55x) — at typical zoom the old offset put the badge's
+      // bounding box back inside the star's own, so a click aimed at either one
+      // could land on the other. This gives them a real gap.
+      badge.style.left = (pos.x + size * 1.25) + 'px';
+      badge.style.top  = (pos.y - size * 1.25) + 'px';
+      if (!culled) badge.onclick = (e) => { e.stopPropagation(); togglePinnedPath(d); };
       layer.appendChild(badge);
     }
+    rendered++;
+    } catch (e) {
+      errored.push({ num: d._num, name: d.name, x: d.x_norm, y: d.y_norm, error: e.message });
+    }
   }
+  if (confDevices.length) {
+    console.log(`[confRedraw] pg${confPageNum}: confDevices=${confDevices.length} attempted=${attempted} rendered=${rendered} skipped(nullXY)=${skippedNullXY} skipped(filter)=${skippedFilter} errored=${errored.length}`);
+    if (errored.length) console.warn('[confRedraw] devices that threw during rendering (silently skipped before this fix):', errored);
+  }
+}
+
+// Click a device's number badge to isolate just its path — bright white, drawn on
+// top of whatever the background toggle is showing (or on its own if that's off).
+// Click the same badge again to clear it; click a different one to switch. Kept
+// separate from the star's arm-then-cull click so the two never collide.
+function togglePinnedPath(d) {
+  confPinnedPath = (confPinnedPath === d) ? null : d;
+  confRedraw();
 }
 
 // Click a device's star or number badge once to arm it (red, "click again to
@@ -4025,12 +4226,14 @@ async function submitCull(category, reason) {
     : `Manual exclude — ${d.name ?? 'device'} #${d._num} — excluded: ${reason}`;
 
   document.getElementById('conf-hover-info').textContent = 'Excluding…';
+  let regionId;
   try {
     const r = await fetch(`${base()}/api/page-regions`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ project_id: projectId, page_id: pageId, label, polygon, x0, y0, x1, y1, kind: 'exclude' })
     });
     if (!r.ok) { const j = await r.json().catch(() => ({})); document.getElementById('conf-hover-info').textContent = 'Exclude failed: ' + (j.error || r.status); confCullTarget = null; confRedraw(); return; }
+    regionId = (await r.json())?.id;
   } catch (e) { document.getElementById('conf-hover-info').textContent = 'Error: ' + e.message; confCullTarget = null; confRedraw(); return; }
 
   // Flag the ACTUAL device in res.devices, not this confDevices copy — confDevices
@@ -4039,31 +4242,130 @@ async function submitCull(category, reason) {
   // res.devices directly) would never see it. d._num - 1 is res.devices' index
   // for this device, since confDevices was numbered off that same array/order.
   const res = batchResults[confPageNum];
+  const flagsArr = [...new Set([...(res?.devices?.[d._num - 1]?.flags ?? []), 'manual_excluded'])];
   if (res) {
     const orig = res.devices?.[d._num - 1];
     if (orig) {
-      const flags = new Set(orig.flags ?? []);
-      flags.add('manual_excluded');
-      orig.flags = [...flags];
+      orig.flags = flagsArr;
       orig.cull_category = category;    // 'junk' | 'excluded'
       orig.cull_reason = category === 'excluded' ? reason : null;
+      orig.cull_region_id = regionId;   // lets unCullDevice() delete precisely this box, not guess
     }
     res.device_count = Math.max(0, (res.device_count ?? 1) - 1);
     res.excluded_out_of_scope = (res.excluded_out_of_scope ?? 0) + 1;
     const bt = (res.by_type ?? []).find(t => t.name === d.name);
     if (bt) bt.count = Math.max(0, bt.count - 1);
   }
+  // Persist to the row itself — previously only the exclude-region was saved
+  // (stops a future re-run from re-detecting it), but the CURRENT row was never
+  // patched, so a plain reload without a fresh run showed every culled device
+  // as untouched. Not best-effort anymore — a silent failure here (rowId
+  // missing, or a non-ok response never checked) was the actual cause of culls
+  // silently not persisting despite the UI showing them as excluded.
+  const rowId = res?.devices?.[d._num - 1]?.id;
+  let persistError = null;
+  if (!rowId) {
+    console.warn('[device-instance patch] no rowId — device_instances.id was never resolved for this device (check pass-batch.js insert-order mapping)');
+    persistError = 'no database id for this device';
+  } else {
+    try {
+      const r = await fetch(`${base()}/api/device-instance`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: rowId, flags: flagsArr, cull_category: category, cull_reason: category === 'excluded' ? reason : null })
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        console.warn('[device-instance patch] failed:', j.error || r.status);
+        persistError = j.error || String(r.status);
+      }
+    } catch (e) {
+      console.warn('[device-instance patch]', e.message);
+      persistError = e.message;
+    }
+  }
   // Update the local copy too, so this redraw immediately shows ✕ without
   // needing the modal to be reopened.
-  const flags = new Set(d.flags ?? []);
-  flags.add('manual_excluded');
-  d.flags = [...flags];
+  d.flags = flagsArr;
   d.cull_category = category;
   d.cull_reason = category === 'excluded' ? reason : null;
+  d.cull_region_id = regionId;
 
   confCullTarget = null;
-  document.getElementById('conf-hover-info').textContent = '';
+  if (persistError) {
+    document.getElementById('conf-hover-info').textContent = `⚠ Excluded locally, but the save failed: ${persistError}. It may reappear on reload.`;
+  } else {
+    document.getElementById('conf-hover-info').textContent = '';
+  }
   clearConfPath();
+  confRedraw();
+  renderResults();
+}
+
+// Undo a cull — deletes the exact exclude-region row created for this device
+// (via cull_region_id, captured at cull time) rather than guessing which box
+// among possibly many on the page belongs to it, then clears the flag/category/
+// reason so it goes back to being a normal, counted, clickable star.
+async function unCullDevice(d) {
+  if (!d.cull_region_id) {
+    // Culled before this field existed, or the region id never made it back —
+    // clear the local flag anyway so the person isn't stuck, but the auto-drawn
+    // exclude box (if any) will need manual cleanup since we can't identify it.
+    document.getElementById('conf-hover-info').textContent = 'Restoring (exclude box may need manual cleanup — no region id on record)…';
+  } else {
+    document.getElementById('conf-hover-info').textContent = 'Restoring…';
+    try {
+      const r = await fetch(`${base()}/api/page-regions?id=${d.cull_region_id}`, { method: 'DELETE' });
+      if (!r.ok) { const j = await r.json().catch(() => ({})); document.getElementById('conf-hover-info').textContent = 'Restore failed: ' + (j.error || r.status); confRedraw(); return; }
+    } catch (e) { document.getElementById('conf-hover-info').textContent = 'Error: ' + e.message; confRedraw(); return; }
+  }
+
+  const res = batchResults[confPageNum];
+  const clearedFlags = (res?.devices?.[d._num - 1]?.flags ?? []).filter(f => f !== 'manual_excluded');
+  if (res) {
+    const orig = res.devices?.[d._num - 1];
+    if (orig) {
+      orig.flags = clearedFlags;
+      orig.cull_category = null;
+      orig.cull_reason = null;
+      orig.cull_region_id = null;
+    }
+    res.device_count = (res.device_count ?? 0) + 1;
+    res.excluded_out_of_scope = Math.max(0, (res.excluded_out_of_scope ?? 1) - 1);
+    const bt = (res.by_type ?? []).find(t => t.name === d.name);
+    if (bt) bt.count = (bt.count ?? 0) + 1;
+  }
+  // Persist the clear — same reasoning as submitCull's write: without this, the
+  // row itself stays flagged manual_excluded in the database even after the
+  // exclude-region is gone, so a reload would show it culled again.
+  const rowId = res?.devices?.[d._num - 1]?.id;
+  let persistError = null;
+  if (!rowId) {
+    console.warn('[device-instance patch] no rowId — device_instances.id was never resolved for this device');
+    persistError = 'no database id for this device';
+  } else {
+    try {
+      const r = await fetch(`${base()}/api/device-instance`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: rowId, flags: clearedFlags, cull_category: null, cull_reason: null })
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        console.warn('[device-instance patch] failed:', j.error || r.status);
+        persistError = j.error || String(r.status);
+      }
+    } catch (e) {
+      console.warn('[device-instance patch]', e.message);
+      persistError = e.message;
+    }
+  }
+  d.flags = clearedFlags;
+  d.cull_category = null;
+  d.cull_reason = null;
+  d.cull_region_id = null;
+
+  document.getElementById('conf-hover-info').textContent = persistError
+    ? `⚠ Restored locally, but the save failed: ${persistError}. It may show as excluded again on reload.`
+    : '';
   confRedraw();
   renderResults();
 }
@@ -4167,10 +4469,11 @@ async function rerunPageAfterManualAdd(pageNum) {
   selectedPages.clear();
   selectedPages.add(pageNum);
   try {
-    await runBatch();
+    await runBatch(true);
   } finally {
     selectedPages.clear();
     for (const p of prevSelected) selectedPages.add(p);
+    renderResults();   // re-render against the restored full selection
   }
 }
 
@@ -4221,11 +4524,21 @@ function renderAllConfPaths() {
   svg.setAttribute('width', confCW);
   svg.setAttribute('height', confCH);
   svg.setAttribute('viewBox', `0 0 ${confCW} ${confCH}`);
-  if (!confShowAllPaths) return;
-  for (const d of confDevices) {
-    const p = computeDevicePath(d);
-    if (!p) continue;
-    svgPolyline(svg, p.points, PATH_TIER_COLOR[p.tier], Math.max(0.75, 1.5 / confZoom), 0.6);
+  if (confShowAllPaths) {
+    for (const d of confDevices) {
+      if (confTypeFilter && d.name !== confTypeFilter) continue;
+      const p = computeDevicePath(d);
+      if (!p) continue;
+      svgPolyline(svg, p.points, PATH_TIER_COLOR[p.tier], Math.max(0.75, 1.5 / confZoom), 0.6);
+    }
+  }
+  // Pinned path (badge click) draws on top regardless of the background toggle —
+  // solid cyan, distinct from both the tier colors and the transient white-dashed
+  // hover overlay, so a pinned path stays visible and unambiguous while panning,
+  // zooming, or hovering a different device.
+  if (confPinnedPath) {
+    const p = computeDevicePath(confPinnedPath);
+    if (p) svgPolyline(svg, p.points, '#40c0f0', Math.max(1.25, 2.5 / confZoom), 0.9);
   }
 }
 function toggleConfPaths() {
@@ -4233,6 +4546,15 @@ function toggleConfPaths() {
   const btn = document.getElementById('conf-paths-toggle');
   btn.textContent = confShowAllPaths ? '🔀 hide path confidence' : '🔀 show path confidence';
   document.getElementById('conf-path-legend').style.display = confShowAllPaths ? 'block' : 'none';
+  renderAllConfPaths();
+}
+
+// Show only one device type's stars/badges/paths at a time — lets a busy sheet
+// (e.g. 144 devices, 40 of them the type actually being triaged) be worked
+// through without the other ~100 in the way. '' (All types) shows everything.
+function setConfTypeFilter(name) {
+  confTypeFilter = name || null;
+  confRedraw();
   renderAllConfPaths();
 }
 
@@ -4253,10 +4575,25 @@ async function openConfidenceModal(pageNum) {
   confPageNum = pageNum;
   confArmedForCull = null;
   confCullTarget = null;
+  confPinnedPath = null;
+  confTypeFilter = null;
   document.getElementById('conf-cull-panel').style.display = 'none';
   confDevices = (res.devices || [])
     .map((d, i) => ({ ...d, _num: i + 1 }))   // matches the # column in the by-page device table
     .filter(d => d.x_norm != null && d.y_norm != null);
+
+  // Populate the type filter from what's actually on this page, with counts, so a
+  // busy sheet can be triaged one type at a time (e.g. all 40 WAPs, none of the
+  // other 104 devices in the way). "All types" first, always resets to it on open.
+  const typeCounts = {};
+  for (const d of confDevices) typeCounts[d.name ?? '—'] = (typeCounts[d.name ?? '—'] ?? 0) + 1;
+  const filterSel = document.getElementById('conf-type-filter');
+  filterSel.innerHTML = '<option value="">All types</option>' +
+    Object.entries(typeCounts)
+      .sort((a, b) => b[1] - a[1])
+      .map(([name, n]) => `<option value="${name.replace(/"/g, '&quot;')}">${name} (${n})</option>`)
+      .join('');
+  filterSel.value = '';
   confZoom = 1; confPanX = 0; confPanY = 0;
 
   const cv   = document.getElementById('conf-canvas');
@@ -4324,6 +4661,7 @@ function closeConfidenceModal() {
   document.getElementById('conf-modal').style.display = 'none';
   confArmedForCull = null;
   confCullTarget = null;
+  confPinnedPath = null;
   document.getElementById('conf-cull-panel').style.display = 'none';
 }
 
@@ -4499,6 +4837,15 @@ async function getDeviceTypes() {
   return _typeCache;
 }
 
+// Always round UP, never to nearest — physical material (cable feet, part
+// counts); rounding 86694.3ft down to 86694 under-orders by a foot. Display
+// only — bom.js keeps full precision internally. CSV export (buildCsv below)
+// keeps full precision on purpose, for further spreadsheet math.
+function formatQty(n, perRunFt) {
+  const rounded = Math.ceil(Number(n));
+  return rounded.toLocaleString('en-US') + (perRunFt ? ' ft' : ' ea');
+}
+
 let lastBom = null;   // cached so CSV export can append the same BOM
 async function renderBom() {
   const el = document.getElementById('bom-content');
@@ -4515,6 +4862,12 @@ async function renderBom() {
 
   // Every detected device, across all pages, is a BOM input. Resolve each to a
   // type key the assembly map knows (legend_id first, then name).
+  //
+  // Culled devices are marked via flags containing 'manual_excluded' (see
+  // submitCull above) — NOT d.removed_by_user, which is never actually
+  // written anywhere in the live cull path. Using the always-false
+  // removed_by_user here meant culled devices were silently still counted
+  // in this BOM panel despite showing struck-through in the device table.
   const instances = [];
   for (const res of Object.values(batchResults)) {
     for (const d of (res.devices ?? [])) {
@@ -4522,7 +4875,8 @@ async function renderBom() {
       instances.push({
         device_type_id:  key,
         raw_labels:      d.raw_labels ?? [],
-        removed_by_user: d.removed_by_user ?? false,
+        removed_by_user: Array.isArray(d.flags) && d.flags.includes('manual_excluded'),
+        total_ft:        d.total_ft ?? null,
       });
     }
   }
@@ -4530,13 +4884,13 @@ async function renderBom() {
   const bom = window.TakeoffVec.aggregateBom(instances, typesByKey);
   lastBom = bom;
 
-  if (!bom.components.length && !bom.unmodeled.length) {
+  if (!bom.components.length && !bom.unmodeled.length && !bom.missing_distance.length) {
     el.innerHTML = '<div style="color:#555; font-size:12px;">No assemblies defined yet — nothing to compile.</div>';
     return;
   }
 
   let html = '<div style="font-size:11px; color:#888; letter-spacing:1px; margin-bottom:8px;">BILL OF MATERIALS · PROJECT TOTAL</div>';
-  html += `<table class="res-table"><thead><tr>
+  html += `<table class="res-table bom-table"><thead><tr>
       <th>Part</th><th>Manufacturer</th><th>Model</th><th style="text-align:right;">Qty</th>
     </tr></thead><tbody>`;
   for (const c of bom.components) {
@@ -4544,7 +4898,7 @@ async function renderBom() {
       <td style="color:#f0c040;">${c.part_name || c.device_name || '—'}</td>
       <td style="color:#bbb;">${c.manufacturer || ''}</td>
       <td style="color:#bbb; font-family:monospace;">${c.model || ''}</td>
-      <td style="text-align:right; color:#e0e0e0;">${c.qty}</td>
+      <td style="text-align:right; color:#e0e0e0;">${formatQty(c.qty, c.per_run_ft)}</td>
     </tr>`;
   }
   html += '</tbody></table>';
@@ -4558,8 +4912,17 @@ async function renderBom() {
     html += '</ul>';
   }
 
+  if (bom.missing_distance.length) {
+    html += '<div style="margin-top:14px; font-size:12px; color:#f0a050;">⚑ TR-run cable modeled, but no routed distance yet (not assigned a TR):</div>';
+    html += '<ul style="margin:6px 0 0 0; padding-left:18px; color:#c89060; font-size:12px;">';
+    for (const u of bom.missing_distance) {
+      html += `<li>${u.name} · family <b>${u.family}</b> — ${u.instances} ${u.instances === 1 ? 'device' : 'devices'}</li>`;
+    }
+    html += '</ul>';
+  }
+
   const cov = bom.coverage;
-  html += `<div style="margin-top:10px; font-size:11px; color:#666;">${cov.expanded_instances} of ${cov.total_instances} devices expanded · ${cov.flagged_instances} carry an unmodeled family</div>`;
+  html += `<div style="margin-top:10px; font-size:11px; color:#666;">${cov.expanded_instances} of ${cov.total_instances} devices expanded · ${cov.flagged_instances} carry an unmodeled or distance-less family</div>`;
 
   el.innerHTML = html;
 }
@@ -4613,9 +4976,21 @@ async function restoreFromSupabase(pid) {
     const pageRegions = j.page_regions ?? [];   // schematics (page → 1+ regions)
     const regionById  = new Map(pageRegions.map(rg => [rg.id, rg]));
     // Distance-scope boxes, keyed by page_id (devices are scoped against these).
+    // Only genuine schematic/scope-defining regions — page-regions.js's own
+    // default is kind:'schematic' for anything that isn't explicitly 'exclude'
+    // (see confirmRegion's POST). Exclude-kind regions serve a completely
+    // different purpose (hard-exclude a specific device from the count) and
+    // must never be treated as a distance-scope boundary — confirmed on real
+    // production data: once enough exclude regions accumulated (164, mostly
+    // leftover per-device test culls from an extended debugging session),
+    // they got silently pulled into this same array, and almost every device
+    // on the page started reading as "outside every scope box" purely because
+    // it didn't happen to sit inside one of ~164 scattered, unrelated tiny
+    // cull boxes that were never meant to define a serving area at all.
     scopeRegions = {};
     for (const rg of pageRegions) {
       if (rg.page_id == null || rg.x0 == null) continue;
+      if (rg.kind === 'exclude') continue;
       (scopeRegions[rg.page_id] ??= []).push(rg);
     }
     const instances   = j.device_instances ?? []; // reconcile merges in Step 5
@@ -4634,6 +5009,8 @@ async function restoreFromSupabase(pid) {
           tr_name_secondary: pg.tr_name_secondary ?? null,
           suggest_skip:   pg.suggest_skip ?? false,
           suggest_reason: pg.suggest_reason ?? null,
+          status:         pg.status ?? null,       // 'ready' | 'running' | 'done' | 'error'
+          status_msg:     pg.status_msg ?? null,
           passBResult: {
             page_id:     pg.page_id,
             sheet_title: pg.sheet_title ?? pg.drawing_number ?? `Page ${pg.eval_page_num}`,
@@ -4665,78 +5042,99 @@ async function restoreFromSupabase(pid) {
     }
 
     // ── Restore TR map from demarcs ────────────────────────────────
-    trMap = {};
-    for (const d of demarcs) {
-      const isExit = d.name?.includes('_exit_pg');
-      if (isExit) {
-        const parts  = d.name.split('_exit_pg');
-        const trName = parts[0];
-        const pgNum  = parseInt(parts[1]);
-        if (trName && pgNum) {
-          trMap[trName] = trMap[trName] ?? { name: trName, pages: [], extra_pins: {} };
-          trMap[trName].extra_pins = trMap[trName].extra_pins ?? {};
-          trMap[trName].extra_pins[pgNum] = {
-            x_norm: d.x_norm, y_norm: d.y_norm,
-            stub_ft: d.stub_ft, demarc_id: d.id
-          };
+    // Isolated in its own try/catch: this section does string parsing on
+    // demarc names (split/parseInt with no guaranteed-valid input) and is
+    // the most plausible place for a single malformed row to throw. Before
+    // this fix, an exception ANYWHERE in restoreFromSupabase's single
+    // outer try/catch silently aborted the rest of the function too —
+    // including the batch-results restoration below, which had nothing to
+    // do with the failure. A user would see "Restore error: ..." (or
+    // nothing) with zero results shown, even though their device data was
+    // completely fine, with no way to tell the two apart.
+    try {
+      trMap = {};
+      for (const d of demarcs) {
+        const isExit = d.name?.includes('_exit_pg');
+        if (isExit) {
+          const parts  = d.name.split('_exit_pg');
+          const trName = parts[0];
+          const pgNum  = parseInt(parts[1]);
+          if (trName && pgNum) {
+            trMap[trName] = trMap[trName] ?? { name: trName, pages: [], extra_pins: {} };
+            trMap[trName].extra_pins = trMap[trName].extra_pins ?? {};
+            trMap[trName].extra_pins[pgNum] = {
+              x_norm: d.x_norm, y_norm: d.y_norm,
+              stub_ft: d.stub_ft, demarc_id: d.id
+            };
+          }
+        } else {
+          trMap[d.name] = trMap[d.name] ?? {};
+          // The TR's schematic (region) determines its home page; fall back to the
+          // page the pin was placed on for legacy / unscoped demarcs.
+          const region     = d.region_id != null ? regionById.get(d.region_id) : null;
+          const homePageId = region?.page_id ?? d.page_id;
+          const pageForDemarc = projPages.find(p => p.page_id === homePageId);
+          // Served pages: tr_name match (written by reassignPage/ensureServedPage
+          // via setPageTR), else at least the home page itself as a fallback for
+          // demarcs written before this field existed.
+          let pages = projPages
+            .filter(p => p.tr_name === d.name)
+            .map(p => ({ page_id: p.page_id, eval_page_num: p.eval_page_num,
+                         building: p.building, floor: p.level ?? p.floor }));
+          if (!pages.length && pageForDemarc) {
+            pages = [{ page_id: homePageId, eval_page_num: pageForDemarc.eval_page_num,
+                       building: pageForDemarc.building, floor: pageForDemarc.level ?? pageForDemarc.floor }];
+          }
+          Object.assign(trMap[d.name], {
+            name:            d.name,
+            demarc_id:       d.id,
+            pin_x:           d.x_norm,   pin_y: d.y_norm,
+            demarc_x:        d.x_norm,   demarc_y: d.y_norm,
+            stub_ft:         d.stub_ft   ?? 0,
+            building:        d.building,
+            floor:           d.floor,
+            on_sheet:        d.source !== 'off_sheet',
+            status:          d.source !== 'off_sheet' ? 'on this page' : 'OFF-SHEET / unscoped',
+            region_id:       d.region_id ?? null,
+            schematic_id:    d.region_id ?? null,
+            schematic:       region?.label ?? null,
+            is_primary:      !!d.is_primary,
+            pinned:          d.x_norm != null,
+            runs:            0,
+            demarc_page_num: pageForDemarc?.eval_page_num ?? null,
+            demarc_page_id:  homePageId,
+            pages,
+            extra_pins: trMap[d.name]?.extra_pins ?? {}
+          });
         }
-      } else {
-        trMap[d.name] = trMap[d.name] ?? {};
-        // The TR's schematic (region) determines its home page; fall back to the
-        // page the pin was placed on for legacy / unscoped demarcs.
-        const region     = d.region_id != null ? regionById.get(d.region_id) : null;
-        const homePageId = region?.page_id ?? d.page_id;
-        const pageForDemarc = projPages.find(p => p.page_id === homePageId);
-        // Served pages: tr_name match (written by reassignPage/ensureServedPage
-        // via setPageTR), else at least the home page itself as a fallback for
-        // demarcs written before this field existed.
-        let pages = projPages
-          .filter(p => p.tr_name === d.name)
-          .map(p => ({ page_id: p.page_id, eval_page_num: p.eval_page_num,
-                       building: p.building, floor: p.level ?? p.floor }));
-        if (!pages.length && pageForDemarc) {
-          pages = [{ page_id: homePageId, eval_page_num: pageForDemarc.eval_page_num,
-                     building: pageForDemarc.building, floor: pageForDemarc.level ?? pageForDemarc.floor }];
-        }
-        Object.assign(trMap[d.name], {
-          name:            d.name,
-          demarc_id:       d.id,
-          pin_x:           d.x_norm,   pin_y: d.y_norm,
-          demarc_x:        d.x_norm,   demarc_y: d.y_norm,
-          stub_ft:         d.stub_ft   ?? 0,
-          building:        d.building,
-          floor:           d.floor,
-          on_sheet:        d.source !== 'off_sheet',
-          status:          d.source !== 'off_sheet' ? 'on this page' : 'OFF-SHEET / unscoped',
-          region_id:       d.region_id ?? null,
-          schematic_id:    d.region_id ?? null,
-          schematic:       region?.label ?? null,
-          is_primary:      !!d.is_primary,
-          pinned:          d.x_norm != null,
-          runs:            0,
-          demarc_page_num: pageForDemarc?.eval_page_num ?? null,
-          demarc_page_id:  homePageId,
-          pages,
-          extra_pins: trMap[d.name]?.extra_pins ?? {}
-        });
       }
-    }
 
-    if (Object.keys(trMap).length) {
-      document.getElementById('tr-map-section').style.display = 'block';
-      // Only pre-render the page→TR table if a selection exists; otherwise leave Step 3
-      // clean until the user selects pages and scans (the table filters to selection).
-      if (selectedPages.size) renderPageAssignmentTable(Object.values(trMap));
-      renderTRMap(Object.values(trMap));
-    } else {
-      // Every TR was deleted (or none exist yet) — clear stale cards rather than
-      // leaving the last-rendered set on screen.
-      const container = document.getElementById('tr-cards');
-      if (container) container.innerHTML = '';
-      document.getElementById('tr-map-section').style.display = 'none';
+      if (Object.keys(trMap).length) {
+        document.getElementById('tr-map-section').style.display = 'block';
+        // Only pre-render the page→TR table if a selection exists; otherwise leave Step 3
+        // clean until the user selects pages and scans (the table filters to selection).
+        if (selectedPages.size) renderPageAssignmentTable(Object.values(trMap));
+        renderTRMap(Object.values(trMap));
+      } else {
+        // Every TR was deleted (or none exist yet) — clear stale cards rather than
+        // leaving the last-rendered set on screen.
+        const container = document.getElementById('tr-cards');
+        if (container) container.innerHTML = '';
+        document.getElementById('tr-map-section').style.display = 'none';
+      }
+    } catch (e) {
+      console.error('restoreFromSupabase: TR map restoration failed, continuing to results —', e);
     }
 
     // ── Restore batch results ─────────────────────────────────────
+    // Isolated in its own try/catch for the same reason as TR-map above —
+    // this is the block that actually answers "does the user see their
+    // finished project when they open it," so it must run and render
+    // whatever it can even if something else in this function had a
+    // problem, and its own failure (if any) must not block the status
+    // line / PDF reattach logic that follows it.
+    let resultsRestoreFailed = false;
+    try {
     if (instances.length) {
       const byPage = {};
       for (const inst of instances) {
@@ -4745,10 +5143,17 @@ async function restoreFromSupabase(pid) {
         if (!pgNum) continue;
         if (!byPage[pgNum]) byPage[pgNum] = {
           device_count: 0, by_type: {}, devices: [],
-          tia_violations: 0
+          tia_violations: 0, excluded_out_of_scope: 0
         };
-        byPage[pgNum].device_count++;
+        // Culled devices stay in devices[] (the table renders their strikethrough
+        // from inst.flags/cull_category/cull_reason), but — matching live-run
+        // behavior in submitCull/unCullDevice — don't count toward the active
+        // total or by-type tallies. Without this, a reload would both lose the
+        // struck-through display AND double-count every culled device.
+        const culled = (inst.flags ?? []).includes('manual_excluded');
         byPage[pgNum].devices.push(inst);
+        if (culled) { byPage[pgNum].excluded_out_of_scope++; continue; }
+        byPage[pgNum].device_count++;
         if (inst.tia_flag) byPage[pgNum].tia_violations++;
         const k = inst.legend_id ?? String(inst.device_type_id);
         byPage[pgNum].by_type[k] = byPage[pgNum].by_type[k]
@@ -4765,6 +5170,12 @@ async function restoreFromSupabase(pid) {
         renderResults();
       }
     }
+    } catch (e) {
+      console.error('restoreFromSupabase: batch-results restoration failed —', e);
+      resultsRestoreFailed = true;
+      setStatus('project-status',
+        `⚠ Restored project data, but results display failed (${e.message}) — device data is intact, this is a display issue only`, 'err');
+    }
 
     // Counts — use restored in-memory state; fall back to raw array lengths
     // if batchResults wasn't populated (e.g. takeoff-summary returned no instances)
@@ -4773,9 +5184,11 @@ async function restoreFromSupabase(pid) {
     const pageCount = selectedPages.size || projPages.length;
     const trCount   = Object.keys(trMap).length
                       || demarcs.filter(d => !d.name?.includes('_exit_pg')).length;
-    setStatus('project-status',
-      `✓ Project ${pid} restored — ${pageCount} page${pageCount !== 1 ? 's' : ''} · ${trCount} TR room${trCount !== 1 ? 's' : ''} · ${devTotal} device${devTotal !== 1 ? 's' : ''}`,
-      'ok');
+    if (!resultsRestoreFailed) {
+      setStatus('project-status',
+        `✓ Project ${pid} restored — ${pageCount} page${pageCount !== 1 ? 's' : ''} · ${trCount} TR room${trCount !== 1 ? 's' : ''} · ${devTotal} device${devTotal !== 1 ? 's' : ''}`,
+        'ok');
+    }
 
     // Show device type bar in quiet ready state if types are configured.
     // takeoff-summary already returns device_types — use j directly.
@@ -4784,19 +5197,22 @@ async function restoreFromSupabase(pid) {
       setDeviceTypeBarReady(`${dtCount} device type${dtCount !== 1 ? 's' : ''} configured`);
     }
 
-    if (selectedPages.size > 0) {
-      const autoLoaded = await attemptAutoLoadPdf(pid);
-      if (!autoLoaded) {
-        // Show re-attach bar if we have a known filename from localStorage or project record
-        const savedName = localStorage.getItem('mp_last_pdf_name');
-        const reBar  = document.getElementById('pdf-reattach-bar');
-        const reName = document.getElementById('pdf-last-name');
-        if (savedName && reBar && reName && reBar.style.display === 'none') {
-          reName.textContent = savedName;
-          reBar.style.display = 'block';
-        }
-        setStatus('pdf-status', '', '');
+    // PDF auto-load runs independently, outside this function's try/catch — see
+    // the caller. Kept OUT of here deliberately: this function covers ~180 lines
+    // of restore logic (TR maps, batch results, device types, rollups), and an
+    // unrelated failure anywhere in that meant auto-load silently never ran, with
+    // no visible error — exactly what caused a real persisted PDF to still need
+    // manual re-attaching. Show the fallback bar now; the caller's auto-load
+    // attempt will hide it again via showPDFFilename() if it succeeds.
+    {
+      const savedName = localStorage.getItem('mp_last_pdf_name');
+      const reBar  = document.getElementById('pdf-reattach-bar');
+      const reName = document.getElementById('pdf-last-name');
+      if (savedName && reBar && reName && reBar.style.display === 'none') {
+        reName.textContent = savedName;
+        reBar.style.display = 'block';
       }
+      setStatus('pdf-status', '', '');
     }
 
   } catch(e) {

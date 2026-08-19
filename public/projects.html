@@ -123,7 +123,7 @@ label { color: #888; font-size: 12px; display: block; margin-bottom: 3px; }
   <div class="sub">Project Manager</div>
   <label style="color:#555; font-size:11px; margin:0;">Netlify URL</label>
   <input type="text" id="netlify-url" value="https://winquest-take-off.netlify.app" style="width:300px;">
-  <button class="info" onclick="loadProjects()">↻ Refresh</button>
+  <button class="info" onclick="loadCatalogs().then(loadProjects)">↻ Refresh</button>
 </div>
 <nav id="to-nav"></nav>
 <script src="nav.js"></script>
@@ -203,6 +203,7 @@ label { color: #888; font-size: 12px; display: block; margin-bottom: 3px; }
 
 <script>
 let allProjects   = [];
+let allCatalogs   = [];
 let selectedId    = null;
 let deleteTarget  = null;
 let deleteStage   = 1;
@@ -213,6 +214,41 @@ function base() { return document.getElementById('netlify-url').value.replace(/\
 function setStatus(id, msg, cls='') {
   const el = document.getElementById(id);
   if (el) { el.textContent = msg; el.className = 'status ' + cls; }
+}
+
+// ── Load this org's parts catalogs — feeds the per-project catalog picker.
+// Fetched once alongside the project list; an empty result just means no
+// catalog has been imported for this org yet (picker renders empty/disabled).
+async function loadCatalogs() {
+  try {
+    const r = await fetch(`${base()}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'list_catalogs' })
+    });
+    const j = await r.json();
+    allCatalogs = Array.isArray(j) ? j : [];
+  } catch(e) {
+    allCatalogs = [];   // non-fatal — picker just shows no options
+  }
+}
+
+async function assignCatalog(projectId, catalogIdRaw) {
+  const catalog_id = catalogIdRaw === '' ? null : parseInt(catalogIdRaw);
+  try {
+    const r = await fetch(`${base()}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'update_project', project_id: projectId, catalog_id })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { alert('Error: ' + (j.error ?? r.status)); await loadProjects(); return; }
+    const p = allProjects.find(p => p.id === projectId);
+    if (p) p.catalog_id = catalog_id;
+  } catch(e) {
+    alert('Error: ' + e.message);
+    await loadProjects();
+  }
 }
 
 // ── Load projects ─────────────────────────────────────────────────
@@ -286,6 +322,12 @@ function renderList(projects) {
                 style="padding:4px 12px; font-size:11px; margin-top:4px; ${p.is_library ? 'color:#c79af0; border-color:#6a4a8a;' : 'color:#888;'}">
           ${p.is_library ? '📚 Is Library ✓' : '☆ Mark as Library'}
         </button>
+        <select onclick="event.stopPropagation();" onchange="assignCatalog(${p.id}, this.value); event.stopPropagation();"
+                title="Parts catalog this project prices against"
+                style="background:#1a1a1a; border:1px solid #333; color:${p.catalog_id ? '#e0e0e0' : '#a55'}; padding:4px 8px; border-radius:3px; font-family:monospace; font-size:11px; margin-top:4px; width:100%;">
+          <option value="" ${!p.catalog_id ? 'selected' : ''}>— no catalog —</option>
+          ${allCatalogs.map(c => `<option value="${c.id}" ${c.id === p.catalog_id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
+        </select>
         <button class="danger" onclick="promptDelete(${p.id}, '${esc(p.name ?? '')}'); event.stopPropagation();"
                 style="padding:4px 12px; font-size:12px; margin-top:4px;">
           Delete
@@ -463,9 +505,10 @@ async function confirmDelete() {
 }
 
 // ── Init ──────────────────────────────────────────────────────────
-(function init() {
+(async function init() {
   const stored = localStorage.getItem('mp_netlify_url');
   if (stored) document.getElementById('netlify-url').value = stored;
+  await loadCatalogs();   // must resolve before loadProjects renders cards, so the picker isn't empty on first paint
   loadProjects();
 })();
 </script>

@@ -129,7 +129,11 @@ export function buildDeviceList(textItems = [], deviceTypes = [], scheduleCfg = 
     // per-type token back to the device_types row so device_type_id resolves
     // downstream (the BOM keys off it). lens_tokens is shared across the camera
     // types, so each type declares the single token it represents via symbol_token.
-    const tok = cfg.symbol_token || cfg.symbol_template?.symbol_token;
+    // single_type is the OTHER symbol_template shape (single-glyph types like WAP,
+    // no lens classification) — blobsToInstances already emits candidates keyed by
+    // it (the single_type bypass), but this resolution loop never recognized it as
+    // a token, so those candidates' device_type_id always came back null.
+    const tok = cfg.symbol_token || cfg.symbol_template?.symbol_token || cfg.symbol_template?.single_type;
     if (tok) typeMap[tok] = dt;
   }
 

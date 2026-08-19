@@ -15,10 +15,11 @@ import { requireOrg, assertProjectInOrg, assertPageInOrg } from "./utils/auth.js
 import { buildDeviceList } from "../../public/lib/pipeline.js";
 import { parseSchedule } from "../../public/lib/schedule.js";
 import { buildGreedyPath } from "../../public/lib/waypoint-path.js";
+import { toIdentityXY } from "../../public/lib/frame.js";
+import { hasUsableScale, resolveTiaLimit } from "../../public/lib/pipeline-guards.js";
 
 const ROUTE_FACTOR  = 1.35;
-const TIA_OUTLET_FT = 295;
-const TIA_WAP_FT    = 270;
+const TIA_OUTLET_FT = 295;   // fallback when a device type has no tia_limit_ft override set
 
 function portsFromFamilies(fams = []) {
   const F = fams.map((f) => String(f).toUpperCase());
@@ -78,14 +79,63 @@ export default async function handler(req) {
     const [{ data: page }, { data: deviceTypes }] = await Promise.all([
       supabase.from("pages").select("*").eq("id", page_id).single(),
       supabase.from("device_types")
-        .select("id, legend_id, name, detection_config")
+        .select("id, legend_id, name, detection_config, tia_limit_ft")
         .eq("project_id", project_id)
         .not("detection_config", "is", null)
     ]);
 
     if (!page) return err("Page not found", 404);
+
+    // ── Scale gate ──────────────────────────────────────────────────
+    // Distance (and any TR-run cable line item) silently comes out null
+    // when a page has no scale — confirmed on a real project: page 8 had
+    // 31 devices correctly detected and TR-assigned, but total_ft stayed
+    // null for every one of them because scale was never set, with
+    // nothing surfacing the gap until the BOM's missing_distance flag
+    // caught it well downstream of the actual cause. Refuse to run
+    // detection at all until a scale exists (already on the page, or
+    // supplied as scale_override in this request) — brittleness triggers
+    // the human immediately, not a silent null discovered three steps
+    // later. The scale_override persist block below still runs AFTER
+    // this gate on a normal call, so a page can be unblocked by simply
+    // supplying scale_override on the next run — no separate save step.
+    // See public/lib/pipeline-guards.js for the (now fixture-tested) check.
+    if (!hasUsableScale(page, scale_override)) {
+      await supabase.from("pages").update({
+        status: "error",
+        status_msg: "Scale not set — set the page scale before running detection"
+      }).eq("id", page_id);
+      return err("Scale not set for this page — set scale (Pass B, or the manual override) before running detection", 422);
+    }
+
     if (!deviceTypes?.length)
       return err("No device types with detection_config — run discovery or backfill the contract", 404);
+
+    // ── Drawing-bounds filter (label + vector symbol tracks) ────────────
+    // Boilerplate text and legend glyphs outside the actual plan area were being
+    // detected as real placed devices on every page that carried them — confirmed
+    // on a real project: a WAP-symbol legend block got counted as 7+ placed
+    // devices, requiring the same hand-culls to be redone on every re-run, since
+    // the source was never actually removed. drawing_bounds (captured by Pass B,
+    // pages.drawing_x0/y0/x1/y1) marks the real plan area vs. surrounding title
+    // block/legend/notes — both in the same identity-frame fraction units as
+    // text_items' cx_norm/cy_norm and symbol_instances' x/y, so no conversion
+    // needed. Falls back to unfiltered when bounds haven't been captured for this
+    // page yet (e.g. Pass B hasn't run) rather than silently dropping everything.
+    //
+    // Schedule parsing deliberately does NOT use this filter below — a schedule
+    // table often sits outside what Pass B considers the "drawing" area, and
+    // filtering it the same way would break UIN/cable_dest extraction entirely.
+    const db = { x0: page.drawing_x0, y0: page.drawing_y0, x1: page.drawing_x1, y1: page.drawing_y1 };
+    const hasDrawingBounds = [db.x0, db.y0, db.x1, db.y1].every((v) => v != null);
+    const inDrawingArea = (x, y) => !hasDrawingBounds || (x >= db.x0 && x <= db.x1 && y >= db.y0 && y <= db.y1);
+
+    const labelTextItems = hasDrawingBounds
+      ? text_items.filter((t) => inDrawingArea(t.cx_norm, t.cy_norm))
+      : text_items;
+    const boundedSymbolInstances = hasDrawingBounds
+      ? (symbol_instances || []).filter((s) => inDrawingArea(s.x, s.y))
+      : (symbol_instances || []);
 
     // Scale override from the per-page editor: persist to the page row (so distances
     // use it and it survives reload; redo replaces), then read it back for this run.
@@ -200,9 +250,9 @@ export default async function handler(req) {
     }
 
     const { devices: reconciled, typeMap } = buildDeviceList(
-      text_items, deviceTypes, page.schedule,
+      labelTextItems, deviceTypes, page.schedule,
       { scheduleRows: seededScheduleRows, planRegions: scopedPins.map((p) => p.scope_box).filter(Boolean) },
-      symbol_instances || [], leaderOv);
+      boundedSymbolInstances, leaderOv);
 
     // ── Manually-added devices (confidence-map "add missed device") ─────
     // manual_devices is the durable source — re-injected as synthetic reconcile
@@ -225,11 +275,19 @@ export default async function handler(req) {
     for (const m of (manualRows ?? [])) {
       const dt = deviceTypes.find((x) => x.id === m.device_type_id);
       if (!dt) continue;   // type deleted/renamed since the manual add — skip rather than crash the run
+      // hasRealUin distinguishes a genuine user-entered UIN from the synthetic
+      // `_manual{id}` placeholder below. The placeholder exists only so every
+      // manual row has SOME uin value for schedule-join/display purposes — it
+      // must never reach raw_labels (see below), or every manually-added device
+      // becomes its own unique, unmatchable BOM family (each carries a different
+      // id), permanently unable to expand through its type's real assembly even
+      // when one exists. See the "Counted but Unmodeled" report investigation.
+      const hasRealUin = !!(m.uin && String(m.uin).trim());
       reconciled.push({
         uin: m.uin || `_manual${m.id}`, type: resolveTypeKey(dt),
         x: m.x_norm, y: m.y_norm, xy_source: 'manual', symbol_via: null,
         sources: ['manual'], attributes: { families: [], codes: [] },
-        confidence: 'high', flags: ['manual_added'], _manual: true
+        confidence: 'high', flags: ['manual_added'], _manual: true, _hasRealUin: hasRealUin
       });
     }
 
@@ -246,24 +304,65 @@ export default async function handler(req) {
       .eq("kind", "exclude");
     if (exclErr) console.warn("[exclude regions]", exclErr.message);
 
+    // Small automatic buffer on genuinely drawn out-of-scope REGIONS — not the tiny
+    // per-device boxes the confidence-map cull flow auto-generates (those stay
+    // pixel-precise on purpose, so they don't swallow a nearby device on a dense
+    // sheet). A hand-drawn region is rarely pixel-perfect against the true wall/
+    // room edge; a device sitting just outside it by a hair is still meant to be
+    // excluded, not counted on a technicality. Confirmed on a real project: several
+    // rows of devices sat 0.011-0.018 outside a drawn boundary, all along the same
+    // wall line — a systematic under-draw, not scattered noise. 0.02 covers that
+    // with a little headroom. MIN_REGION_SIZE_FOR_BUFFER distinguishes "region" from
+    // "single-device cull box" by size (cull boxes are exactly CULL_PAD_FRAC*2 wide,
+    // well under this) rather than needing a schema flag for it.
+    const EXCLUDE_ZONE_BUFFER_FRAC = 0.02;
+    const MIN_REGION_SIZE_FOR_BUFFER = 0.05;
+
+    // Exclude regions are always stored in the identity (full-page) frame — the
+    // client draws them via the SAME bboxForDevice transform normToCanvasXY uses
+    // for rendering. But device.x/device.y here are NOT always in that frame:
+    // label-sourced (and vector-symbol-sourced) devices are normalized against
+    // the page's TEXT-CONTENT bounding box, not the full page. Comparing them
+    // directly against an identity-frame box compares two different coordinate
+    // spaces — confirmed on a real project: a cull's own exclude box failed to
+    // suppress the same device on the very next re-run, with position drift
+    // separately ruled out (three consecutive re-runs landed on IDENTICAL
+    // coordinates). The content-bbox offset alone (this page: ~0.03, ~-0.03)
+    // exceeds a per-device cull box's own half-width, so the mismatch guarantees
+    // a miss regardless of how precisely the device re-detects. See frame.js.
     const inExcludeZone = (x, y) => {
       if (x == null || y == null || !excludeRegions?.length) return false;
-      return excludeRegions.some((r) => r.x0 != null && x >= r.x0 && x <= r.x1 && y >= r.y0 && y <= r.y1);
+      return excludeRegions.some((r) => {
+        if (r.x0 == null) return false;
+        const isRegion = (r.x1 - r.x0) >= MIN_REGION_SIZE_FOR_BUFFER && (r.y1 - r.y0) >= MIN_REGION_SIZE_FOR_BUFFER;
+        const buf = isRegion ? EXCLUDE_ZONE_BUFFER_FRAC : 0;
+        return x >= r.x0 - buf && x <= r.x1 + buf && y >= r.y0 - buf && y <= r.y1 + buf;
+      });
     };
-    const excludedCount = reconciled.filter((dev) => !dev._manual && inExcludeZone(dev.x, dev.y)).length;
-    let inScope = reconciled.filter((dev) => dev._manual || !inExcludeZone(dev.x, dev.y));
+    const excludedCount = reconciled.filter((dev) => {
+      if (dev._manual) return false;
+      const [ix, iy] = toIdentityXY(dev, content_bbox);
+      return inExcludeZone(ix, iy);
+    }).length;
+    let inScope = reconciled.filter((dev) => {
+      if (dev._manual) return true;
+      const [ix, iy] = toIdentityXY(dev, content_bbox);
+      return !inExcludeZone(ix, iy);
+    });
 
     // Dedup: if detection later genuinely finds the same physical device a manual
     // add already covers (better symbol matching, a schedule row lands, etc.), drop
     // the freshly-detected duplicate rather than double-counting — the manual entry
-    // was a confirmed human decision and wins.
+    // was a confirmed human decision and wins. Compares in identity frame (see
+    // frame.js) — manual points are already identity-frame; dev may not be.
     const MANUAL_DEDUP_RADIUS_FRAC = 0.015;
     const manualPoints = inScope.filter((d) => d._manual);
     if (manualPoints.length) {
       inScope = inScope.filter((dev) => {
         if (dev._manual || dev.x == null || dev.y == null) return true;
+        const [ix, iy] = toIdentityXY(dev, content_bbox);
         return !manualPoints.some((m) =>
-          m.type === dev.type && Math.hypot(dev.x - m.x, dev.y - m.y) <= MANUAL_DEDUP_RADIUS_FRAC);
+          m.type === dev.type && Math.hypot(ix - m.x, iy - m.y) <= MANUAL_DEDUP_RADIUS_FRAC);
       });
     }
 
@@ -273,11 +372,25 @@ export default async function handler(req) {
       const codes = dev.attributes?.codes || [];     // full tokens w/ detail # (DV1/DD3)
       const anchor = dt.detection_config?.anchor || null;
       const ports = portsFromFamilies(fams);
-      const cx = dev.x, cy = dev.y;
+      // Transform to identity frame BEFORE any position-based use — assignPin,
+      // routedPts, and euclidPts all compare against demarc pins and scope
+      // boxes, which are always identity-frame (placed via the pin modal's
+      // identity-frame click math). dev.x/dev.y are NOT always identity-frame
+      // (label and vector-symbol devices normalize against the content-bbox).
+      // This was the same frame-mismatch class fixed for the exclude-zone
+      // check earlier tonight, but here it affects EVERY distance value shown
+      // for a label-sourced device, not just the exclude-zone gate — a much
+      // more foundational bug than tonight's other fixes. See frame.js.
+      const [cx, cy] = toIdentityXY(dev, content_bbox);
       const hasXY = cx != null && cy != null;
       // Label: anchor leads (N2), then the detail-numbered family codes in detected order.
       // UIN'd (prefix) types lead with the UIN; standalone (WAP/180) just the type.
-      const rawLabels = dev.uin
+      // A manual add without a real UIN (dev._manual && !dev._hasRealUin) must NOT
+      // use dev.uin here — that's the internal-only `_manual{id}` placeholder, unique
+      // per instance, which would otherwise become its own unmatchable BOM family.
+      // Falls through to the same anchor/type label any other UIN-less device gets.
+      const useUin = dev.uin && (!dev._manual || dev._hasRealUin);
+      const rawLabels = useUin
         ? [dev.uin, ...codes]
         : (codes.length ? (anchor ? [anchor, ...codes] : codes)
                         : (anchor ? [anchor] : [dev.type]));
@@ -297,7 +410,8 @@ export default async function handler(req) {
           if (routed.waypoint_ids_used?.length) routedViaWaypoints = routed.waypoint_ids_used;
           runLengthFt = parseFloat((distPts * ROUTE_FACTOR / ptsPerFt).toFixed(1));
           totalFt     = parseFloat((runLengthFt + (pin.stub_ft ?? 0)).toFixed(1));
-          const limit = /WAP/i.test(dt.name || "") ? TIA_WAP_FT : TIA_OUTLET_FT;
+          // See public/lib/pipeline-guards.js for the (now fixture-tested) resolver.
+          const limit = resolveTiaLimit(dt.tia_limit_ft, TIA_OUTLET_FT);
           if (totalFt > limit) { tiaFlag = true; tiaReason = `${totalFt}ft exceeds ${limit}ft TIA limit`; }
         }
       }
@@ -308,8 +422,14 @@ export default async function handler(req) {
         row: {
           page_id, device_type_id: dt.id ?? null, detection_method: dev._manual ? "manual" : "reconciled",
           uin: dev.uin ?? null,
-          x_norm: hasXY ? parseFloat(cx.toFixed(4)) : null,
-          y_norm: hasXY ? parseFloat(cy.toFixed(4)) : null,
+          // ORIGINAL native-frame coordinates, not the identity-transformed
+          // cx/cy above — the client applies its own transform on render
+          // (bboxForDevice, keyed on xy_source), so persisting the already-
+          // transformed value here would double-transform every label-sourced
+          // device's displayed position. cx/cy exist ONLY for this function's
+          // own position-based math against identity-frame pins/scope-boxes.
+          x_norm: hasXY ? parseFloat(dev.x.toFixed(4)) : null,
+          y_norm: hasXY ? parseFloat(dev.y.toFixed(4)) : null,
           x_ft: xFt, y_ft: yFt,
           raw_labels: rawLabels,
           data_ports: ports.data_ports, voice_ports: ports.voice_ports, node_labels: ports.node_labels,

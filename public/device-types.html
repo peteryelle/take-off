@@ -230,8 +230,8 @@ button.amber:hover { background: #332800; }
 /* ── Assembly (kit) ── */
 button.kit { background: #10242a; border-color: #2a6a7a; color: #7ad0e0; }
 button.kit:hover { background: #163138; }
-.modal.asm { width: 800px; max-width: 95vw; max-height: 88vh; overflow: auto; }
-.asm-sub { color: #666; font-size: 10px; margin: -6px 0 12px; }
+.modal.asm { width: 98vw; max-width: 98vw; max-height: 92vh; overflow: auto; }
+.asm-sub { color: #666; font-size: 13px; margin: -6px 0 12px; }
 .asm-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
 .asm-tab {
   background: #10242a; border: 1px solid #2a4a52; color: #7ad0e0;
@@ -241,7 +241,7 @@ button.kit:hover { background: #163138; }
 .asm-tab.active { background: #163a44; border-color: #3a8a9a; color: #aef0ff; font-weight: bold; }
 .asm-table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
 .asm-table th {
-  color: #666; font-size: 9px; text-transform: uppercase; letter-spacing: 1px;
+  color: #666; font-size: 12px; text-transform: uppercase; letter-spacing: 1px;
   text-align: left; padding: 4px 6px; border-bottom: 1px solid #222; font-weight: normal;
 }
 .asm-table td { padding: 3px 4px; border-bottom: 1px solid #141414; }
@@ -254,6 +254,22 @@ button.kit:hover { background: #163138; }
 .asm-table input.qty { width: 54px; text-align: center; }
 .asm-x { background: none; border: none; color: #555; cursor: pointer; font-size: 13px; padding: 0 4px; }
 .asm-x:hover { color: #f07a7a; }
+
+.asm-dropdown {
+  position: fixed; z-index: 500; display: none;
+  background: #161616; border: 1px solid #3a3a3a; border-radius: 4px;
+  max-height: 280px; overflow-y: auto; box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+  font-family: monospace; font-size: 12px;
+}
+.asm-dd-opt {
+  padding: 6px 10px; cursor: pointer; color: #ddd;
+  border-bottom: 1px solid #222; display: flex; justify-content: space-between; gap: 10px;
+}
+.asm-dd-opt:hover { background: #223244; }
+.asm-dd-left { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; flex: 1; min-width: 0; }
+.asm-dd-pn { color: #7ad0e0; font-weight: bold; margin-right: 8px; }
+.asm-dd-price { color: #8fd08f; flex-shrink: 0; }
+.asm-dd-more { padding: 6px 10px; color: #666; font-style: italic; }
 .asm-add { background: none; border: 1px dashed #3a7a3a; color: #7af07a; }
 </style>
 </head>
@@ -426,15 +442,41 @@ button.kit:hover { background: #163138; }
 <div class="modal-overlay" id="asm-modal">
   <div class="modal asm">
     <h2 id="asm-title">⊞ Assembly</h2>
-    <div class="asm-sub">Supporting parts pulled together as a kit. Quantity = parts per assembly.</div>
+    <div class="asm-sub">Supporting parts pulled together as a kit. Quantity = parts per assembly, or a waste-factor multiplier for TR Run cable (e.g. 1.05 = 5% waste). Narrow by Role → Manufacturer, then search to pick a catalog part and price this line. Free-text-only rows stay unpriced on the report.</div>
     <div class="asm-tabs" id="asm-tabs"></div>
     <table class="asm-table">
+      <colgroup>
+        <col style="width:3%"><col style="width:9%"><col style="width:8%">
+        <col style="width:16%"><col style="width:11%"><col style="width:24%">
+        <col style="width:7%"><col style="width:7%">
+        <col style="width:5%"><col style="width:4%"><col style="width:3%">
+      </colgroup>
       <thead><tr>
-        <th>#</th><th>Device Name</th><th>Manufacturer</th><th>Part Name</th><th>Model #</th><th>Qty</th><th></th>
+        <th>#</th><th>Role</th><th>Mfr</th><th title="Type to search by part # or description, within the Role/Mfr picked at left.">Catalog Part</th><th>Manufacturer</th><th>Part Name</th><th title="Catalog cost per unit">Cost</th><th title="Catalog sale per unit, at the catalog's current material margin">Sale</th><th>Qty</th><th title="Scale this part by the device's routed distance back to its TR, instead of a flat count per device">TR Run</th><th></th>
       </tr></thead>
       <tbody id="asm-tbody"></tbody>
     </table>
+    <div style="font-size:10px; color:#555; margin:6px 0 0;">Rows no longer carry a separate Device Name — Role covers it.</div>
     <button class="asm-add" onclick="addAsmRow()">+ Add Row</button>
+
+    <div style="margin-top:22px; border-top:1px solid #222; padding-top:14px;">
+      <div style="color:#f0c040; font-weight:bold; font-size:13px; margin-bottom:4px;">⏱ Labor</div>
+      <div class="asm-sub">Hours per device — type directly, or narrow by Role and search the reference rate sheet to pre-fill a row (picking one just copies its numbers in; nothing stays linked, and there's no $/hr conversion yet). Qty = task occurrences per device (e.g. 2 terminations for a 2-port outlet). TR Run scales hours by routed distance instead of a flat count.</div>
+      <table class="asm-table">
+        <colgroup>
+          <col style="width:4%"><col style="width:12%"><col style="width:32%">
+          <col style="width:10%"><col style="width:10%">
+          <col style="width:9%"><col style="width:9%"><col style="width:5%">
+        </colgroup>
+        <thead><tr>
+          <th>#</th><th>Role</th><th title="Type to search by task name, within the Role picked at left. Picking one pre-fills Hrs/Setup — you can still edit them.">Task Name</th><th title="Hours per occurrence, or per foot if TR Run is checked">Hrs</th><th title="Fixed hours added once per instance, regardless of qty or distance">Setup Hrs</th><th>Qty</th><th title="Scale by routed distance back to the TR, instead of a flat count per device">TR Run</th><th></th>
+        </tr></thead>
+        <tbody id="labor-tbody"></tbody>
+      </table>
+      <button class="asm-add" onclick="addLaborRow()">+ Add Labor Row</button>
+    </div>
+    <div id="labor-part-dropdown" class="asm-dropdown"></div>
+
     <div class="status" id="asm-status" style="margin-top:8px;"></div>
     <div class="actions">
       <button class="danger" onclick="closeAssembly()">Cancel</button>
@@ -443,9 +485,14 @@ button.kit:hover { background: #163138; }
   </div>
 </div>
 
+<div id="asm-part-dropdown" class="asm-dropdown"></div>
+
 <script>
 // ── State ────────────────────────────────────────────────────────
 let deviceTypes   = [];
+let catalogParts  = [];   // this project's parts_priced rows — feeds the Assembly picker
+let laborTasks    = [];   // this project's labor_tasks reference rows — feeds the Labor tab picker
+let catalogId     = null;
 let editingId     = null;   // device_type DB id being edited
 let uploadedImages = [];    // [{ name, base64, thumb }]
 
@@ -466,9 +513,15 @@ async function loadDeviceTypes() {
   try {
     const r = await fetch(`${base()}/api/takeoff-summary?project_id=${projId()}`);
     const j = await r.json();
-    deviceTypes = j.device_types ?? [];
+    deviceTypes  = j.device_types   ?? [];
+    catalogParts = j.catalog_parts  ?? [];
+    laborTasks   = j.labor_tasks    ?? [];
+    catalogId    = j.catalog_id     ?? null;
     renderGrid(deviceTypes);
-    setStatus('load-status', `✓ ${deviceTypes.length} device types`, 'ok');
+    const catNote = catalogId
+      ? ` · ${catalogParts.length} catalog part(s) · ${laborTasks.length} labor task(s)`
+      : ' · no parts catalog assigned to this project';
+    setStatus('load-status', `✓ ${deviceTypes.length} device types${catNote}`, 'ok');
   } catch(e) {
     setStatus('load-status', 'Error: ' + e.message, 'err');
   }
@@ -481,7 +534,7 @@ async function loadDeviceTypes() {
 // save_device_assembly path the modal uses. Replace-per-device, but only for devices
 // whose rows carry at least one filled component — a partly-filled export never wipes
 // the assemblies you didn't touch, and re-importing an unedited export is a no-op.
-const ASM_COLS = ['device_id','type_name','legend_id','kind','component','manufacturer','part_name','model','qty'];
+const ASM_COLS = ['device_id','type_name','legend_id','kind','component','part_number','manufacturer','part_name','model','qty','tr_run'];
 
 function exportAssembliesXlsx() {
   if (typeof XLSX === 'undefined') { setStatus('load-status','Excel library not loaded — check connection','err'); return; }
@@ -494,14 +547,16 @@ function exportAssembliesXlsx() {
       const parts = Array.isArray(saved[k]) ? saved[k] : [];
       if (parts.length) {
         for (const p of parts) rows.push([dt.id, dt.name ?? '', dt.legend_id ?? '', k,
-          p.device_name ?? '', p.manufacturer ?? '', p.part_name ?? '', p.model ?? '', Math.max(1, parseInt(p.qty) || 1)]);
+          p.device_name ?? '', p.part_number ?? '', p.manufacturer ?? '', p.part_name ?? '', p.model ?? '',
+          Number.isFinite(parseFloat(p.qty)) ? parseFloat(p.qty) : 1,
+          p.per_run_ft ? 'yes' : '']);
       } else {
-        rows.push([dt.id, dt.name ?? '', dt.legend_id ?? '', k, '', '', '', '', 1]);   // blank slot to fill
+        rows.push([dt.id, dt.name ?? '', dt.legend_id ?? '', k, '', '', '', '', '', 1, '']);   // blank slot to fill
       }
     }
   }
   const ws = XLSX.utils.aoa_to_sheet(rows);
-  ws['!cols'] = [{wch:9},{wch:18},{wch:14},{wch:6},{wch:22},{wch:18},{wch:22},{wch:16},{wch:5}];
+  ws['!cols'] = [{wch:9},{wch:18},{wch:14},{wch:6},{wch:22},{wch:14},{wch:18},{wch:22},{wch:16},{wch:5},{wch:7}];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Assemblies');
   const stamp = new Date().toISOString().slice(0,16).replace(/[:T]/g,'-');
@@ -532,14 +587,24 @@ async function importAssembliesXlsx(file) {
     if (!known.has(id)) { unknown.add(id); continue; }
     const kind = String(r.kind ?? '').trim();
     if (!kind) continue;
+    const perRunFt = /^\s*(yes|y|true|1|x)\s*$/i.test(String(r.tr_run ?? ''));
+    // qty is a decimal waste-factor multiplier for TR-run rows (1.05 = 5%
+    // waste) — parseInt here would truncate 1.05 -> 1 and silently erase the
+    // waste allowance on every re-import. parseFloat preserves it for both
+    // row types; fixed-qty rows still floor at 1 part.
+    const q = parseFloat(r.qty);
+    const qty = perRunFt
+      ? (Number.isFinite(q) && q > 0 ? q : 1)
+      : Math.max(1, Number.isFinite(q) ? q : 1);
     const part = {
       device_name:  String(r.component    ?? '').trim(),
+      part_number:  String(r.part_number  ?? '').trim() || null,   // null (not '') = cleanly unresolved for pricing.js
       manufacturer: String(r.manufacturer ?? '').trim(),
       part_name:    String(r.part_name    ?? '').trim(),
       model:        String(r.model        ?? '').trim(),
-      qty:          Math.max(1, parseInt(r.qty) || 1)
+      qty, per_run_ft: perRunFt,
     };
-    if ((part.device_name + part.manufacturer + part.part_name + part.model).trim() === '') continue;  // blank slot
+    if ((part.device_name + (part.part_number||'') + part.manufacturer + part.part_name + part.model).trim() === '') continue;  // blank slot
     filledRows++;
     if (!byId.has(id)) byId.set(id, {});
     (byId.get(id)[kind] ||= []).push(part);
@@ -642,7 +707,11 @@ function renderGrid(types) {
 }
 
 function escHtml(str) {
-  return String(str)
+  // ?? not || — part_number is intentionally stored as real null for
+  // unresolved rows (see saveAssembly), and String(null) is the literal
+  // text "null", which then poisons the datalist filter (an input showing
+  // "null" filters catalog options against that string, matching nothing).
+  return String(str ?? '')
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
     .replace(/"/g,'&quot;');
 }
@@ -667,7 +736,155 @@ let asmKinds      = [];
 let asmActiveKind = null;
 let asmData       = {};
 
-function asmBlankRow() { return { device_name:'', manufacturer:'', part_name:'', model:'', qty:1 }; }
+// role/mfr are persisted directly on each row (see asmBlankRow) — earlier
+// versions kept these as a separate in-memory-only filter that reset every
+// time the modal reopened. Storing them on the row itself is what makes the
+// picker's narrowing survive a close/reopen.
+function asmBlankRow() { return { device_name:'', manufacturer:'', part_name:'', model:'', part_number:'', role:'', mfr:'', qty:1, per_run_ft:false }; }
+
+// Backfill role/mfr for rows saved before those fields existed (or rows
+// where a catalog part was picked but the row predates this change) —
+// derived from the already-stored part_number via a catalog lookup, so
+// older assemblies don't show "any" forever just because they're old.
+function asmBackfillRoleMfr(rows) {
+  for (const r of rows) {
+    if (r.role || !r.part_number) continue;
+    const match = catalogParts.find(p => p.part_number === r.part_number);
+    if (match) { r.role = match.device_role || ''; r.mfr = match.manufacturer || ''; }
+  }
+  return rows;
+}
+
+// ── Catalog picker cascade: device_role -> manufacturer -> part_number search.
+// Each step narrows the next, so the search box never has to filter 1,000+
+// options at once. Un-set filters are treated as "any" (no narrowing yet).
+function asmCatalogRoles() {
+  const counts = new Map();
+  for (const p of catalogParts) {
+    const r = p.device_role || 'Other / Uncategorized';
+    counts.set(r, (counts.get(r) || 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]);   // biggest bucket first
+}
+function asmCatalogManufacturers(role) {
+  const counts = new Map();
+  for (const p of catalogParts) {
+    if (role && (p.device_role || 'Other / Uncategorized') !== role) continue;
+    const m = p.manufacturer || '(none)';
+    counts.set(m, (counts.get(m) || 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+}
+function asmFilteredParts(role, mfr) {
+  return catalogParts.filter(p =>
+    (!role || (p.device_role || 'Other / Uncategorized') === role) &&
+    (!mfr  || (p.manufacturer || '(none)') === mfr)
+  );
+}
+
+// ── Custom catalog-part dropdown (replaces native <input list>/<datalist>) ──
+// Native datalists proved unreliable across a few rounds of use here — some
+// browsers require typing before showing anything, some silently cap the
+// visible list, and the moment the underlying <option> set changes on every
+// render, behavior got inconsistent. This is a small dropdown we fully
+// control: explicit show/hide, capped result count for the "any (1231)"
+// case, and no dependency on browser-specific datalist quirks.
+let asmDropdownMatches = [];
+
+function asmCloseDropdown() {
+  const el = document.getElementById('asm-part-dropdown');
+  if (el) { el.style.display = 'none'; el.innerHTML = ''; }
+  asmDropdownMatches = [];
+}
+
+function asmShowDropdown(i, inputEl) {
+  const rows = asmData[asmActiveKind];
+  if (!rows || !rows[i]) return;
+  const r = rows[i];
+  const q = (inputEl.value || '').trim().toLowerCase();
+  let matches = asmFilteredParts(r.role || '', r.mfr || '');
+  if (q) {
+    matches = matches.filter(p =>
+      (p.part_number || '').toLowerCase().includes(q) ||
+      (p.description || '').toLowerCase().includes(q)
+    );
+  }
+  const CAP = 50;
+  const shown = matches.slice(0, CAP);
+  asmDropdownMatches = shown;
+
+  const el = document.getElementById('asm-part-dropdown');
+  if (!shown.length) {
+    el.innerHTML = `<div class="asm-dd-opt" style="color:#666; cursor:default;">${r.role ? 'no matches' : 'pick a role first'}</div>`;
+  } else {
+    el.innerHTML = shown.map((p, idx) =>
+      `<div class="asm-dd-opt" onmousedown="asmChoosePart(${i}, ${idx})">
+         <span class="asm-dd-left"><span class="asm-dd-pn">${escHtml(p.part_number)}</span>${escHtml(p.description || '')}</span>
+         <span class="asm-dd-price">${Number.isFinite(Number(p.cost_unit)) ? '$' + Number(p.cost_unit).toFixed(2) : '—'} / ${Number.isFinite(Number(p.sale_unit)) ? '$' + Number(p.sale_unit).toFixed(2) : '—'}</span>
+       </div>`
+    ).join('') + (matches.length > CAP ? `<div class="asm-dd-more">${matches.length - CAP} more — keep typing to narrow</div>` : '');
+  }
+  const rect = inputEl.getBoundingClientRect();
+  el.style.left  = rect.left + 'px';
+  el.style.top   = (rect.bottom + 2) + 'px';
+  el.style.width = Math.max(rect.width, 280) + 'px';
+  el.style.display = 'block';
+}
+
+// mousedown (not click) so this fires before the input's onblur — otherwise
+// blur would close the dropdown a moment before the click registers.
+function asmChoosePart(i, idx) {
+  const p = asmDropdownMatches[idx];
+  if (!p) return;
+  asmCloseDropdown();
+  asmPickCatalog(i, p.part_number);   // fills manufacturer/part_name, re-renders
+}
+
+// On blur: close the dropdown, and if what's typed happens to exactly match
+// a real part_number (typed in full rather than picked from the list),
+// resolve it the same way a dropdown pick would — don't require the click.
+function asmBlurCatalogField(i, inputEl) {
+  const val = (inputEl.value || '').trim();
+  setTimeout(() => {
+    asmCloseDropdown();
+    const match = catalogParts.find(p => p.part_number === val);
+    if (match) asmPickCatalog(i, val);
+  }, 150);   // delay lets a dropdown-option mousedown fire first
+}
+
+function asmSetRole(i, role) {
+  const rows = asmData[asmActiveKind];
+  if (!rows || !rows[i]) return;
+  rows[i].role = role;
+  rows[i].mfr  = '';           // picking a role clears any manufacturer choice — it may no longer apply
+  if (role) rows[i].device_name = role;   // Role IS the device name now — mirror it in so bom.js/report labels still show something meaningful
+  renderAsmTable();
+}
+function asmSetMfr(i, mfr) {
+  const rows = asmData[asmActiveKind];
+  if (!rows || !rows[i]) return;
+  rows[i].mfr = mfr;
+  renderAsmTable();
+}
+
+// Fires on the Catalog Part input. If the typed value exactly matches a
+// catalog part_number, auto-fill manufacturer/part_name as display metadata
+// and store part_number as the resolution key the report prices against.
+// A typed value that doesn't match anything is kept as free text (part_number
+// stays '' — row is a legacy/uncataloged line, priced as unresolved on report).
+function asmPickCatalog(i, val) {
+  const rows = asmData[asmActiveKind];
+  if (!rows || !rows[i]) return;
+  const match = catalogParts.find(p => p.part_number === val);
+  if (match) {
+    rows[i].part_number  = match.part_number;
+    rows[i].manufacturer = match.manufacturer || rows[i].manufacturer;
+    rows[i].part_name    = match.description  || rows[i].part_name;
+  } else {
+    rows[i].part_number = '';   // no exact match — treat as free text, unresolved on price
+  }
+  renderAsmTable();
+}
 
 function asmKindOf(anchor) {
   const k = String(anchor).replace(/\d+$/, '');
@@ -686,30 +903,36 @@ function asmKindsForDevice(dt) {
 }
 
 function asmRowFilled(r) {
-  return ((r.device_name || '') + (r.manufacturer || '') + (r.part_name || '') + (r.model || '')).trim() !== '';
+  return ((r.device_name || '') + (r.manufacturer || '') + (r.part_name || '') + (r.model || '') + (r.part_number || '')).trim() !== '';
 }
 
 function openAssembly(id) {
   const dt = deviceTypes.find(d => d.id === id);
   if (!dt) return;
   asmDeviceId = id;
-  const saved = (dt.assembly && typeof dt.assembly === 'object') ? dt.assembly : {};
-  // Kinds = anchor-derived UNION any kind already stored, so no saved key is
-  // ever orphaned (an orphaned key drops on open and is wiped on the next save).
+  const saved      = (dt.assembly && typeof dt.assembly === 'object') ? dt.assembly : {};
+  const savedLabor = (dt.labor    && typeof dt.labor    === 'object') ? dt.labor    : {};
+  // Kinds = anchor-derived UNION any kind already stored in EITHER material
+  // or labor, so a labor-only kind (or vice versa) never gets orphaned.
   const derived = asmKindsForDevice(dt);
-  asmKinds = [...new Set([...derived, ...Object.keys(saved)])];
+  asmKinds = [...new Set([...derived, ...Object.keys(saved), ...Object.keys(savedLabor)])];
   asmData = {};
+  laborData = {};
   for (const k of asmKinds) {
     const rows = Array.isArray(saved[k]) ? saved[k].map(r => ({ ...asmBlankRow(), ...r })) : [];
-    asmData[k] = rows.length ? rows : [asmBlankRow()];   // opens with one row
+    asmData[k] = asmBackfillRoleMfr(rows.length ? rows : [asmBlankRow()]);   // opens with one row
+    const laborRows = Array.isArray(savedLabor[k]) ? savedLabor[k].map(r => ({ ...laborBlankRow(), ...r })) : [];
+    laborData[k] = laborRows.length ? laborRows : [laborBlankRow()];
   }
   asmActiveKind = asmKinds[0];
   document.getElementById('asm-title').textContent =
     `⊞ Assembly — ${dt.legend_id ?? ''} · ${dt.name ?? ''}`;
-  setStatus('asm-status', asmKinds.length > 1
-    ? `${asmKinds.length} kinds on this device — one kit each` : '', '');
+  const catNote = catalogId ? '' : ' — no parts catalog assigned to this project, rows will price as unresolved';
+  setStatus('asm-status', (asmKinds.length > 1
+    ? `${asmKinds.length} kinds on this device — one kit each` : '') + catNote, catalogId ? '' : 'warn');
   renderAsmTabs();
   renderAsmTable();
+  renderLaborTable();
   document.getElementById('asm-modal').classList.add('open');
 }
 
@@ -729,17 +952,45 @@ function renderAsmTabs() {
 }
 
 function renderAsmTable() {
+  asmCloseDropdown();   // its anchor input is about to be destroyed by this re-render
   const rows = asmData[asmActiveKind] || [];
-  document.getElementById('asm-tbody').innerHTML = rows.map((r, i) => `
+  document.getElementById('asm-tbody').innerHTML = rows.map((r, i) => {
+    const filt = { role: r.role || '', mfr: r.mfr || '' };
+    const cat = r.part_number ? catalogParts.find(p => p.part_number === r.part_number) : null;
+    const money = (n) => (n == null || !Number.isFinite(Number(n))) ? '—' : '$' + Number(n).toFixed(4).replace(/0+$/,'').replace(/\.$/,'');
+    return `
     <tr>
       <td class="num">${i + 1}</td>
-      <td><input value="${escHtml(r.device_name)}"  oninput="asmUpd(${i},'device_name',this.value)"  placeholder="component"></td>
+      <td><select onchange="asmSetRole(${i}, this.value)" style="width:100%; background:#1a1a1a; border:1px solid #333; color:#ccc; font-size:12px; padding:4px;">
+        <option value="">any (${catalogParts.length})</option>
+        ${asmCatalogRoles().map(([role, n]) => `<option value="${escHtml(role)}" ${filt.role === role ? 'selected' : ''}>${escHtml(role)} (${n})</option>`).join('')}
+      </select></td>
+      <td><select onchange="asmSetMfr(${i}, this.value)" style="width:100%; background:#1a1a1a; border:1px solid #333; color:#ccc; font-size:12px; padding:4px;">
+        <option value="">any</option>
+        ${asmCatalogManufacturers(filt.role).map(([m, n]) => `<option value="${escHtml(m)}" ${filt.mfr === m ? 'selected' : ''}>${escHtml(m)} (${n})</option>`).join('')}
+      </select></td>
+      <td><input value="${escHtml(r.part_number)}"
+                 oninput="asmUpd(${i},'part_number',this.value); asmShowDropdown(${i}, this);"
+                 onfocus="asmShowDropdown(${i}, this)"
+                 onblur="asmBlurCatalogField(${i}, this)"
+                 onkeydown="if(event.key==='Escape'){this.blur();}"
+                 placeholder="${filt.role ? 'search part #…' : 'pick a role first…'}"
+                 title="${r.part_number ? 'Priced from catalog: ' + escHtml(r.part_number) : 'No catalog part linked — this line will price as unresolved'}"
+                 style="${r.part_number ? '' : 'color:#a55;'}"
+                 autocomplete="off"></td>
       <td><input value="${escHtml(r.manufacturer)}" oninput="asmUpd(${i},'manufacturer',this.value)" placeholder="manufacturer"></td>
       <td><input value="${escHtml(r.part_name)}"    oninput="asmUpd(${i},'part_name',this.value)"    placeholder="part name"></td>
-      <td><input value="${escHtml(r.model)}"        oninput="asmUpd(${i},'model',this.value)"        placeholder="model #"></td>
-      <td><input class="qty" type="number" min="1" step="1" value="${Number(r.qty) || 1}" oninput="asmUpd(${i},'qty',Math.max(1,parseInt(this.value)||1))"></td>
+      <td class="num" style="color:${cat ? '#ccc' : '#555'};" title="Catalog cost/unit${cat ? ' — ' + escHtml(cat.unit || '') : ''}">${money(cat?.cost_unit)}</td>
+      <td class="num" style="color:${cat ? '#8fd08f' : '#555'};" title="Catalog sale/unit at current material margin (${cat ? (Number(cat.material_margin)*100).toFixed(0) + '%' : '—'})">${money(cat?.sale_unit)}</td>
+      <td><input class="qty" type="number" min="0" step="0.01" value="${Number(r.qty) || 1}" oninput="asmUpd(${i},'qty',parseFloat(this.value)||0)"
+                 title="${r.per_run_ft ? 'Waste-factor multiplier applied to routed feet (e.g. 1.05 = 5% waste)' : 'Fixed qty per device'}"></td>
+      <td class="rm" style="text-align:center;">
+        <input type="checkbox" ${r.per_run_ft ? 'checked' : ''} title="Scale by this device's routed distance back to its TR"
+               onchange="asmUpd(${i},'per_run_ft',this.checked); renderAsmTable();">
+      </td>
       <td class="rm"><button class="asm-x" title="remove" onclick="rmAsmRow(${i})">✕</button></td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
 }
 
 function asmUpd(i, field, val) {
@@ -761,24 +1012,193 @@ function rmAsmRow(i) {
   renderAsmTabs();
 }
 
+// ── Labor editor — hours per device, typed in directly or pre-filled from
+// the labor_tasks reference list (Role-filtered, same dropdown pattern as
+// the material picker). Nothing stays linked after picking — it's a
+// one-time copy-in, since there's no $/hr conversion or ongoing resolution
+// for labor yet. Scoped to the same kind tabs as material. See
+// public/lib/labor.js for how these rows expand/sum.
+let laborData = {};
+function laborBlankRow() { return { role: '', task_name: '', hrs: 0, setup_hrs: 0, qty: 1, per_run_ft: false }; }
+function laborRowFilled(r) { return (r.task_name || '').trim() !== ''; }
+
+function laborRoles() {
+  const counts = new Map();
+  for (const t of laborTasks) {
+    const r = t.device_role || 'Other / Uncategorized';
+    counts.set(r, (counts.get(r) || 0) + 1);
+  }
+  // Pull in any role that exists on the parts catalog but has no labor_tasks
+  // rows yet (e.g. Pigtail/Patch) — keeps Labor's Role list a superset match
+  // of Assembly's, so a role is pickable here even before hours exist for it.
+  for (const p of catalogParts) {
+    const r = p.device_role || 'Other / Uncategorized';
+    if (!counts.has(r)) counts.set(r, 0);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+}
+function laborFilteredTasks(role, q) {
+  let list = laborTasks.filter(t => !role || (t.device_role || 'Other / Uncategorized') === role);
+  if (q) {
+    const ql = q.toLowerCase();
+    list = list.filter(t => (t.task_name || '').toLowerCase().includes(ql));
+  }
+  return list;
+}
+
+function laborSetRole(i, role) {
+  const rows = laborData[asmActiveKind];
+  if (rows && rows[i]) rows[i].role = role;
+  renderLaborTable();
+}
+
+let laborDropdownMatches = [];
+function laborCloseDropdown() {
+  const el = document.getElementById('labor-part-dropdown');
+  if (el) { el.style.display = 'none'; el.innerHTML = ''; }
+  laborDropdownMatches = [];
+}
+function laborShowDropdown(i, inputEl) {
+  const rows = laborData[asmActiveKind];
+  if (!rows || !rows[i]) return;
+  const r = rows[i];
+  const q = (inputEl.value || '').trim();
+  const matches = laborFilteredTasks(r.role || '', q);
+  const CAP = 50;
+  const shown = matches.slice(0, CAP);
+  laborDropdownMatches = shown;
+
+  const el = document.getElementById('labor-part-dropdown');
+  if (!shown.length) {
+    el.innerHTML = `<div class="asm-dd-opt" style="color:#666; cursor:default;">${r.role ? 'no matches' : 'pick a role first'}</div>`;
+  } else {
+    el.innerHTML = shown.map((t, idx) =>
+      `<div class="asm-dd-opt" onmousedown="laborChooseTask(${i}, ${idx})">
+         <span class="asm-dd-left">${escHtml(t.task_name)}</span>
+         <span class="asm-dd-price">${t.hrs_per_unit ?? '—'} hr${t.setup_hrs ? ' +' + t.setup_hrs + ' su' : ''}</span>
+       </div>`
+    ).join('') + (matches.length > CAP ? `<div class="asm-dd-more">${matches.length - CAP} more — keep typing to narrow</div>` : '');
+  }
+  const rect = inputEl.getBoundingClientRect();
+  el.style.left  = rect.left + 'px';
+  el.style.top   = (rect.bottom + 2) + 'px';
+  el.style.width = Math.max(rect.width, 320) + 'px';
+  el.style.display = 'block';
+}
+function laborChooseTask(i, idx) {
+  const t = laborDropdownMatches[idx];
+  if (!t) return;
+  const rows = laborData[asmActiveKind];
+  if (rows && rows[i]) {
+    rows[i].task_name  = t.task_name;
+    rows[i].hrs        = Number(t.hrs_per_unit) || 0;
+    rows[i].setup_hrs  = Number(t.setup_hrs) || 0;
+  }
+  laborCloseDropdown();
+  renderLaborTable();
+}
+function laborBlurTaskField(i) {
+  setTimeout(() => laborCloseDropdown(), 150);   // delay lets a dropdown-option mousedown fire first
+}
+
+function renderLaborTable() {
+  laborCloseDropdown();   // its anchor input is about to be destroyed by this re-render
+  const rows = laborData[asmActiveKind] || [];
+  document.getElementById('labor-tbody').innerHTML = rows.map((r, i) => `
+    <tr>
+      <td class="num">${i + 1}</td>
+      <td><select onchange="laborSetRole(${i}, this.value)" style="width:100%; background:#1a1a1a; border:1px solid #333; color:#ccc; font-size:12px; padding:4px;">
+        <option value="">any (${laborTasks.length})</option>
+        ${laborRoles().map(([role, n]) => `<option value="${escHtml(role)}" ${(r.role||'') === role ? 'selected' : ''}>${escHtml(role)} (${n})</option>`).join('')}
+      </select></td>
+      <td><input value="${escHtml(r.task_name)}"
+                 oninput="laborUpd(${i},'task_name',this.value); laborShowDropdown(${i}, this);"
+                 onfocus="laborShowDropdown(${i}, this)"
+                 onblur="laborBlurTaskField(${i})"
+                 onkeydown="if(event.key==='Escape'){this.blur();}"
+                 placeholder="${r.role ? 'search or type a task…' : 'pick a role, or type a task…'}"
+                 autocomplete="off"></td>
+      <td><input class="qty" type="number" min="0" step="0.001" value="${Number(r.hrs) || 0}" oninput="laborUpd(${i},'hrs',parseFloat(this.value)||0)"
+                 title="${r.per_run_ft ? 'Hours per foot of routed distance' : 'Hours per occurrence'}"></td>
+      <td><input class="qty" type="number" min="0" step="0.01" value="${Number(r.setup_hrs) || 0}" oninput="laborUpd(${i},'setup_hrs',parseFloat(this.value)||0)"></td>
+      <td><input class="qty" type="number" min="0" step="0.01" value="${Number(r.qty) || 1}" oninput="laborUpd(${i},'qty',parseFloat(this.value)||0)"
+                 title="${r.per_run_ft ? 'Waste-factor-style multiplier on the per-foot rate' : 'Task occurrences per device (e.g. 2 terminations for a 2-port outlet)'}"></td>
+      <td class="rm" style="text-align:center;">
+        <input type="checkbox" ${r.per_run_ft ? 'checked' : ''} title="Scale by this device's routed distance back to its TR"
+               onchange="laborUpd(${i},'per_run_ft',this.checked); renderLaborTable();">
+      </td>
+      <td class="rm"><button class="asm-x" title="remove" onclick="rmLaborRow(${i})">✕</button></td>
+    </tr>`).join('');
+}
+
+function laborUpd(i, field, val) {
+  const rows = laborData[asmActiveKind];
+  if (rows && rows[i]) rows[i][field] = val;   // no re-render -> keeps input focus
+}
+
+function addLaborRow() {
+  (laborData[asmActiveKind] ||= []).push(laborBlankRow());
+  renderLaborTable();
+}
+
+function rmLaborRow(i) {
+  const rows = laborData[asmActiveKind];
+  if (!rows) return;
+  rows.splice(i, 1);
+  if (!rows.length) rows.push(laborBlankRow());
+  renderLaborTable();
+}
+
 function switchAsmKind(k) {
   asmActiveKind = k;
   renderAsmTabs();
   renderAsmTable();
+  renderLaborTable();
 }
 
 async function saveAssembly() {
   if (!projId()) { setStatus('asm-status', 'Enter Project ID', 'err'); return; }
   const clean = {};
   for (const k of asmKinds) {
-    const rows = (asmData[k] || []).filter(asmRowFilled).map(r => ({
-      device_name:  (r.device_name  || '').trim(),
-      manufacturer: (r.manufacturer || '').trim(),
-      part_name:    (r.part_name    || '').trim(),
-      model:        (r.model        || '').trim(),
-      qty:          Math.max(1, parseInt(r.qty) || 1)
-    }));
+    const rows = (asmData[k] || []).filter(asmRowFilled).map(r => {
+      const perRunFt = !!r.per_run_ft;
+      const q = parseFloat(r.qty);
+      // TR-run rows are a waste-factor multiplier (1.05 = 5% waste) — decimals
+      // matter, so parseInt here would silently truncate 1.05 -> 1. Fixed-qty
+      // rows keep the old "at least 1 part" floor; TR-run rows just need a
+      // sane positive multiplier.
+      const qty = perRunFt
+        ? (Number.isFinite(q) && q > 0 ? q : 1)
+        : Math.max(1, Number.isFinite(q) ? q : 1);
+      return {
+        device_name:  (r.device_name  || '').trim(),
+        manufacturer: (r.manufacturer || '').trim(),
+        part_name:    (r.part_name    || '').trim(),
+        model:        (r.model        || '').trim(),
+        part_number:  (r.part_number  || '').trim() || null,   // null (not '') = cleanly unresolved for pricing.js
+        role:         (r.role || '').trim(),   // picker state — persisted so Role/Mfr survive a close/reopen
+        mfr:          (r.mfr  || '').trim(),
+        qty, per_run_ft: perRunFt,
+      };
+    });
     if (rows.length) clean[k] = rows;
+  }
+
+  const cleanLabor = {};
+  for (const k of asmKinds) {
+    const rows = (laborData[k] || []).filter(laborRowFilled).map(r => {
+      const perRunFt = !!r.per_run_ft;
+      const q = parseFloat(r.qty);
+      return {
+        task_name:  (r.task_name || '').trim(),
+        role:       (r.role || '').trim(),   // picker filter state — persisted so it survives a close/reopen, same lesson as material's Role/Mfr
+        hrs:        Number.isFinite(parseFloat(r.hrs)) ? parseFloat(r.hrs) : 0,
+        setup_hrs:  Number.isFinite(parseFloat(r.setup_hrs)) ? parseFloat(r.setup_hrs) : 0,
+        qty:        Number.isFinite(q) && q > 0 ? q : 1,
+        per_run_ft: perRunFt,
+      };
+    });
+    if (rows.length) cleanLabor[k] = rows;
   }
 
   setStatus('asm-status', 'Saving…', 'running');
@@ -790,7 +1210,8 @@ async function saveAssembly() {
         action:     'save_device_assembly',
         project_id: parseInt(projId()),
         id:         asmDeviceId,
-        assembly:   clean
+        assembly:   clean,
+        labor:      cleanLabor
       })
     });
     const j = await r.json().catch(() => ({}));
@@ -800,7 +1221,7 @@ async function saveAssembly() {
       return;
     }
     const dt = deviceTypes.find(d => d.id === asmDeviceId);
-    if (dt) dt.assembly = clean;
+    if (dt) { dt.assembly = clean; dt.labor = cleanLabor; }
     renderGrid(deviceTypes);
     setStatus('asm-status', '✓ Saved', 'ok');
     closeAssembly();

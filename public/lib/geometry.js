@@ -99,28 +99,85 @@ export function contentFrame(textCenters = [], vpW = 0, vpH = 0) {
  * @returns {Promise<Array>} [{ points:[[x,y]...], closed:true, filled:true, fill_rgb:[r,g,b] }]
  */
 export async function extractFilledSubpaths(page, OPS) {
+  return (await extractSubpaths(page, OPS)).filter((s) => s.filled);
+}
+
+/**
+ * Same operator-list walk as extractFilledSubpaths, but keeps BOTH filled and
+ * stroke-only sub-paths (tagged filled:true/false) instead of discarding strokes.
+ * Added for ring verification (geometry.js:findEncirclingRing) — a symbol's
+ * encircling outline is typically drawn as a stroke with no fill, which the
+ * fills-only extractor never captured at all. extractFilledSubpaths is now a
+ * one-line wrapper over this, so its existing return shape/contract is
+ * untouched — no existing consumer or gate sees a behavior change from adding
+ * this function.
+ *
+ * stroke_rgb / line_width (added for wall/door/tray extraction — see
+ * wall-calibration.js): stroke-only subpaths previously carried fill_rgb set
+ * to whatever fill color happened to be active, which is meaningless for a
+ * stroke. Real stroke color and line width are now tracked from
+ * setStrokeRGBColor/setStrokeGray/setStrokeCMYKColor and setLineWidth, and
+ * carried on every subpath alongside fill_rgb. filled:true subpaths still
+ * carry fill_rgb as the meaningful color, same as before; filled:false
+ * subpaths should be read via stroke_rgb/line_width instead.
+ *
+ * Scope note: CTM, stroke color, and line width are saved/restored on q/Q
+ * (OPS.save/restore) since PDF graphics state includes all three. fill_rgb's
+ * save/restore behavior is intentionally left exactly as it was before this
+ * change (not pushed/popped) — existing symbol-detection consumers
+ * (extractFilledSubpaths) depend on that exact behavior today, and changing
+ * it is out of scope here.
+ *
+ * @param {Object} page  an opened pdf.js page (has getOperatorList())
+ * @param {Object} OPS   that runtime's pdfjsLib.OPS table
+ * @returns {Promise<Array>} [{ points:[[x,y]...], closed:true, filled:bool,
+ *   fill_rgb:[r,g,b], stroke_rgb:[r,g,b], line_width:number }]
+ */
+export async function extractSubpaths(page, OPS) {
   const { fnArray, argsArray } = await page.getOperatorList();
   let ctm = [1, 0, 0, 1, 0, 0];
   const stack = [];
   let fill = [0, 0, 0];
+  let stroke = [0, 0, 0];
+  let lineWidth = 1;
   let cur = [];
   let pt = null;
   const out = [];
   const startSub = (x, y) => { cur.push({ points: [[x, y]] }); pt = [x, y]; };
   const lineTo = (x, y) => { if (!cur.length) startSub(x, y); else { cur[cur.length - 1].points.push([x, y]); pt = [x, y]; } };
+  // Line width is specified in user-space units and scales with whatever CTM
+  // is active at stroke time — same as point coordinates do via applyM. Using
+  // the raw setLineWidth value directly (no scaling) was wrong: content drawn
+  // inside a scaled nested transform (a block/symbol placed at a different
+  // scale than the page's base content) would report a line width off by
+  // that transform's scale factor, which silently fragments what should be
+  // one consistent wall/tray signature into multiple apparent widths.
+  // Approximated here as sqrt(|det(ctm)|) — the standard linear-scale
+  // approximation for a possibly-non-uniform affine transform; exact for the
+  // uniform-scale case, which is what page content transforms are in practice.
+  const ctmScale = () => Math.sqrt(Math.abs(ctm[0] * ctm[3] - ctm[1] * ctm[2]));
   const flush = (f) => {
-    if (f) for (const sp of cur) if (sp.points.length >= 2) out.push({ points: sp.points, closed: true, filled: true, fill_rgb: fill.slice() });
+    const scaledWidth = lineWidth * ctmScale();
+    for (const sp of cur) if (sp.points.length >= 2) out.push({
+      points: sp.points, closed: true, filled: f,
+      fill_rgb: fill.slice(), stroke_rgb: stroke.slice(), line_width: scaledWidth,
+    });
     cur = []; pt = null;
   };
+
   for (let i = 0; i < fnArray.length; i++) {
     const fn = fnArray[i], a = argsArray[i];
     switch (fn) {
-      case OPS.save: stack.push(ctm.slice()); break;
-      case OPS.restore: if (stack.length) ctm = stack.pop(); break;
+      case OPS.save: stack.push({ ctm: ctm.slice(), stroke: stroke.slice(), lineWidth }); break;
+      case OPS.restore: if (stack.length) { const s = stack.pop(); ctm = s.ctm; stroke = s.stroke; lineWidth = s.lineWidth; } break;
       case OPS.transform: ctm = mulM(ctm, [a[0], a[1], a[2], a[3], a[4], a[5]]); break;
       case OPS.setFillRGBColor: fill = [a[0], a[1], a[2]]; break;
       case OPS.setFillGray: fill = [Math.round(a[0] * 255), Math.round(a[0] * 255), Math.round(a[0] * 255)]; break;
       case OPS.setFillCMYKColor: { const [c, m, y, k] = a; fill = [255 * (1 - c) * (1 - k), 255 * (1 - m) * (1 - k), 255 * (1 - y) * (1 - k)].map(Math.round); break; }
+      case OPS.setStrokeRGBColor: stroke = [a[0], a[1], a[2]]; break;
+      case OPS.setStrokeGray: stroke = [Math.round(a[0] * 255), Math.round(a[0] * 255), Math.round(a[0] * 255)]; break;
+      case OPS.setStrokeCMYKColor: { const [c, m, y, k] = a; stroke = [255 * (1 - c) * (1 - k), 255 * (1 - m) * (1 - k), 255 * (1 - y) * (1 - k)].map(Math.round); break; }
+      case OPS.setLineWidth: lineWidth = a[0]; break;
       case OPS.constructPath: {
         const ops = a[0], co = a[1]; let j = 0;
         for (const op of ops) {
@@ -134,7 +191,8 @@ export async function extractFilledSubpaths(page, OPS) {
         }
         break;
       }
-      case OPS.fill: case OPS.eoFill: case OPS.fillStroke: case OPS.eoFillStroke: case OPS.closeFillStroke: flush(true); break;
+      case OPS.fill: case OPS.eoFill: flush(true); break;
+      case OPS.fillStroke: case OPS.eoFillStroke: case OPS.closeFillStroke: flush(true); break;
       case OPS.stroke: case OPS.closeStroke: flush(false); break;
       case OPS.endPath: cur = []; pt = null; break;
     }
@@ -142,10 +200,367 @@ export async function extractFilledSubpaths(page, OPS) {
   return out;
 }
 
+/**
+ * Stroke-only subpaths from extractSubpaths — the input wall-calibration.js
+ * and wall-aware-path.js need. Mirrors extractFilledSubpaths's shape (a
+ * one-line filter, same as that function), just the opposite half.
+ *
+ * @param {Object} page
+ * @param {Object} OPS
+ * @returns {Promise<Array>} subpaths with filled:false, keyed by stroke_rgb/line_width
+ */
+export async function extractStrokeSubpaths(page, OPS) {
+  return (await extractSubpaths(page, OPS)).filter((s) => !s.filled);
+}
+
 /** Keep sub-paths whose fill colour is within `tol` (per channel) of `target` [r,g,b]. */
 export function filterByFill(subpaths = [], target = null, tol = 48) {
   if (!target) return subpaths.slice();
   return subpaths.filter((s) => Array.isArray(s.fill_rgb) && s.fill_rgb.every((v, i) => Math.abs(v - target[i]) <= tol));
+}
+
+/**
+ * Is this closed point-loop roughly circular — constant radius from its own
+ * centroid, within `tol` (relative standard deviation of the radius samples)?
+ * PDF vector circles are drawn precisely (not scanned/rasterized), so a tight
+ * default tolerance is safe. Too few points to judge (a triangle, a short
+ * segment) returns null rather than a false circle call.
+ *
+ * @param {Array} points [[x,y]...] closed loop, any consistent coordinate frame
+ * @param {number} tol   relative std-dev of radius allowed (default 0.15)
+ * @returns {{center:[x,y], radius:number}|null}
+ */
+/**
+ * Diagnostic only, never used in the accept/reject or debugRingCandidates path —
+ * every stroke subpath whose OWN centroid falls within `radius` of `point`,
+ * regardless of whether isCircleLike accepts it. Built to distinguish "there's no
+ * stroke geometry anywhere near this device at all" from "there IS geometry
+ * nearby but it's failing the circle-shape check" — the two have very different
+ * fixes (capture gap vs. tolerance/shape-detection gap) and debugRingCandidates
+ * alone (which only reports already-circle-classified matches, however far away)
+ * can't tell them apart when NOTHING nearby passes the shape check.
+ *
+ * @returns {Array} [{ n_points, dCenter, isCircle:bool }] sorted by dCenter
+ */
+export function debugNearbyStrokes(point, strokeSubpaths = [], radius = 0.02) {
+  const out = [];
+  for (const sp of strokeSubpaths) {
+    if (!sp.points?.length) continue;
+    const c = centroid(sp.points);
+    const dCenter = Math.hypot(c[0] - point[0], c[1] - point[1]);
+    if (dCenter <= radius) {
+      out.push({ n_points: sp.points.length, dCenter, isCircle: !!isCircleLike(sp.points) });
+    }
+  }
+  return out.sort((a, b) => a.dCenter - b.dCenter);
+}
+
+export function isCircleLike(points, tol = 0.15) {
+  if (!Array.isArray(points) || points.length < 8) return null;
+  const c = centroid(points);
+  const radii = points.map(([x, y]) => Math.hypot(x - c[0], y - c[1]));
+  const meanR = radii.reduce((a, b) => a + b, 0) / radii.length;
+  if (meanR <= 0) return null;
+  const variance = radii.reduce((a, r) => a + (r - meanR) ** 2, 0) / radii.length;
+  const relStd = Math.sqrt(variance) / meanR;
+  return relStd <= tol ? { center: c, radius: meanR } : null;
+}
+
+/**
+ * Does some stroke-only sub-path form a circle that genuinely WRAPS AROUND this
+ * blob — center close to the blob's own centroid, radius meaningfully bigger
+ * (not just any nearby circle, and not one so much bigger it's clearly an
+ * unrelated feature elsewhere on the sheet)? Ring verification for symbol types
+ * whose real glyph is a filled shape inside a circular outline (e.g. WAP) — the
+ * outline is typically an unfilled stroke, which extractFilledSubpaths never
+ * captured; extractSubpaths(...).filter(s => !s.filled) is the intended source
+ * for `strokeSubpaths` here.
+ *
+ * @param {[number,number]} blobCentroid  the candidate blob's [x,y] (normalized)
+ * @param {number} blobRadius             the blob's own rough radius (e.g. sqrt(area/PI))
+ * @param {Array} strokeSubpaths          [{points, filled:false, ...}] normalized, same frame
+ * @param {Object} opts { centerTol, minRadiusRatio=1.1, maxRadiusRatio=3.0 }
+ * @returns {{center, radius}|null} the matching ring, or null if none found
+ */
+/**
+ * Chain together short stroke subpaths whose endpoints connect within `tol`,
+ * into longer continuous polylines. Real PDF circles are sometimes drawn as
+ * many short disconnected segments (each its own moveTo/lineTo/stroke) rather
+ * than one closed path — confirmed on a real project: a WAP's encircling ring
+ * was 55 separate 2-point pieces, every one individually far too short to
+ * read as a circle. Greedy nearest-endpoint chaining, not a full TSP solve —
+ * sufficient for "many short pieces of one shape," which is what this exists
+ * for, not general curve reconstruction.
+ *
+ * @param {Array} subpaths [{points:[[x,y]...]}]
+ * @param {number} tol     max gap between two endpoints to treat as connected
+ * @returns {Array} [{points:[[x,y]...]}] — stitched chains (unmatched inputs
+ *   pass through unchanged as their own single-element chain)
+ */
+export function stitchSegments(subpaths, tol = 0.001) {
+  let chains = subpaths.filter((sp) => sp.points?.length >= 2).map((sp) => sp.points.slice());
+  const dist = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1]);
+  let merged = true;
+  while (merged) {
+    merged = false;
+    outer:
+    for (let i = 0; i < chains.length; i++) {
+      const a = chains[i], aStart = a[0], aEnd = a[a.length - 1];
+      for (let j = i + 1; j < chains.length; j++) {
+        const b = chains[j], bStart = b[0], bEnd = b[b.length - 1];
+        let joined = null;
+        if (dist(aEnd, bStart) <= tol)        joined = a.concat(b.slice(1));
+        else if (dist(aEnd, bEnd) <= tol)     joined = a.concat(b.slice(0, -1).reverse());
+        else if (dist(aStart, bEnd) <= tol)   joined = b.concat(a.slice(1));
+        else if (dist(aStart, bStart) <= tol) joined = b.slice().reverse().concat(a.slice(1));
+        if (joined) { chains.splice(j, 1); chains[i] = joined; merged = true; break outer; }
+      }
+    }
+  }
+  return chains.map((points) => ({ points }));
+}
+
+/**
+ * Gap-based clustering of {sp, d} items by their `d` value — sorts by distance,
+ * then starts a new cluster whenever the gap to the next item exceeds `gapTol`.
+ * Adapts to however wide a real cluster actually is, unlike fixed-width binning
+ * (confirmed wrong on real data: a genuine ring's own fragment-to-fragment
+ * distance spread was ~6x wider than a bandWidth chosen from the blob's size
+ * alone, splitting one real cluster into several too-sparse fragments). The
+ * gap BETWEEN two real clusters was ~2.7x the largest gap WITHIN either one on
+ * that same data, which is what makes a gap threshold work at all here.
+ *
+ * @param {Array} items [{sp, d}] — d must be sorted-comparable (a distance)
+ * @param {number} gapTol
+ * @returns {Array} clusters, each an array of the original sp values, sorted by
+ *   cluster size descending (most items first)
+ */
+function clusterByDistance(items, gapTol) {
+  const sorted = [...items].sort((a, b) => a.d - b.d);
+  const clusters = [];
+  let current = [];
+  for (let i = 0; i < sorted.length; i++) {
+    if (current.length && sorted[i].d - sorted[i - 1].d > gapTol) {
+      clusters.push(current);
+      current = [];
+    }
+    current.push(sorted[i]);
+  }
+  if (current.length) clusters.push(current);
+  return clusters
+    .sort((a, b) => b.length - a.length)
+    .map((cluster) => cluster.map((item) => item.sp));
+}
+
+/**
+ * Does some stroke geometry near this blob form a circle that genuinely WRAPS
+ * AROUND it? Restricts to strokes within a local search radius first (cheap
+ * even when the page has tens of thousands of unrelated strokes), stitches
+ * that local set into continuous chains (see stitchSegments — a real ring is
+ * often many short disconnected pieces, not one closed path). Groups fragments
+ * by distance from the blob center via gap-based clustering (clusterByDistance)
+ * before stitching — real ring fragments all sit at roughly the same distance
+ * (that's what makes it a ring); unrelated nearby geometry (walls, other
+ * fragments) doesn't share that property. Stitching the whole neighborhood in
+ * one pass let unrelated geometry at a different distance get merged into
+ * (and corrupt) the real ring's shape — confirmed on real production data: a
+ * histogram of nearby strokes showed two distinct distance clusters, and even
+ * a wide unbanded search found nothing circle-like across the combined set.
+ *
+ * @param {[number,number]} blobCentroid
+ * @param {number} blobRadius
+ * @param {Array} strokeSubpaths  [{points, filled:false, ...}] normalized, same frame
+ * @param {Object} opts { centerTol, minRadiusRatio=1.1, maxRadiusRatio=8.0, searchRadius, stitchTol, gapTol }
+ * @returns {{center, radius}|null}
+ */
+export function findEncirclingRing(blobCentroid, blobRadius, strokeSubpaths = [], opts = {}) {
+  if (!(blobRadius > 0)) return null;
+  const centerTol = opts.centerTol ?? blobRadius * 0.5;
+  const minRadiusRatio = opts.minRadiusRatio ?? 1.1;
+  // Widened from the original 3.0 — a triangle's area-derived "radius"
+  // (sqrt(area/PI)) systematically underestimates its visual size vs. a true
+  // circle of the same area, so the real ring sits proportionally further out
+  // than that math suggests. Confirmed on real data: the actual ring cluster
+  // sat at ~4.6-6.5x the triangle blob's computed radius.
+  const maxRadiusRatio = opts.maxRadiusRatio ?? 8.0;
+  const searchRadius = opts.searchRadius ?? blobRadius * (maxRadiusRatio + 1) + centerTol;
+  const gapTol = opts.gapTol ?? blobRadius;
+
+  const nearby = [];
+  for (const sp of strokeSubpaths) {
+    if (!sp.points?.length) continue;
+    const c = centroid(sp.points);
+    const d = Math.hypot(c[0] - blobCentroid[0], c[1] - blobCentroid[1]);
+    if (d <= searchRadius) nearby.push({ sp, d });
+  }
+  if (!nearby.length) return null;
+
+  const clusters = clusterByDistance(nearby, gapTol);
+
+  for (const clusterStrokes of clusters) {
+    const stitched = stitchSegments(clusterStrokes, opts.stitchTol ?? 0.001);
+    for (const sp of stitched) {
+      const circle = isCircleLike(sp.points, opts.circleTol);
+      if (!circle) continue;
+      const dCenter = Math.hypot(circle.center[0] - blobCentroid[0], circle.center[1] - blobCentroid[1]);
+      const ratio = circle.radius / blobRadius;
+      if (dCenter <= centerTol && ratio >= minRadiusRatio && ratio <= maxRadiusRatio) return circle;
+    }
+  }
+  return null;
+}
+
+/**
+ * Fit a straight line through a point set via 2D total-least-squares (closed-form
+ * eigen-decomposition of the 2x2 covariance matrix — no linear-algebra library
+ * needed at this size). Returns the line's own centroid, unit direction, length
+ * (span of points projected onto that direction), and maxResidual (worst
+ * perpendicular distance any point sits from the fitted line — the straightness
+ * measure).
+ */
+function fitLine(points) {
+  const c = centroid(points);
+  let sxx = 0, sxy = 0, syy = 0;
+  for (const [x, y] of points) {
+    const dx = x - c[0], dy = y - c[1];
+    sxx += dx * dx; sxy += dx * dy; syy += dy * dy;
+  }
+  const n = points.length;
+  sxx /= n; sxy /= n; syy /= n;
+  const theta = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+  const dir = [Math.cos(theta), Math.sin(theta)];
+  let minT = Infinity, maxT = -Infinity, maxResidual = 0;
+  for (const [x, y] of points) {
+    const dx = x - c[0], dy = y - c[1];
+    const t = dx * dir[0] + dy * dir[1];
+    const perp = Math.abs(-dx * dir[1] + dy * dir[0]);
+    if (t < minT) minT = t;
+    if (t > maxT) maxT = t;
+    if (perp > maxResidual) maxResidual = perp;
+  }
+  return { center: c, dir, length: maxT - minT, maxResidual };
+}
+
+/**
+ * Is this point set (after stitching, typically) a straight line — every point
+ * within `straightnessTol` × the line's own length of the fitted line, not just
+ * clustered/circular? Needs at least 4 points to be a meaningful fit (a 2-point
+ * "line" is trivially straight and would pass everything).
+ *
+ * @returns {{center, dir, length, maxResidual}|null}
+ */
+export function isLineLike(points, opts = {}) {
+  if (!Array.isArray(points) || points.length < 4) return null;
+  const straightnessTol = opts.straightnessTol ?? 0.12;
+  const fit = fitLine(points);
+  if (!(fit.length > 0)) return null;
+  return (fit.maxResidual / fit.length) <= straightnessTol ? fit : null;
+}
+
+/**
+ * Does some stroke geometry near this blob form a straight line passing through
+ * (or very near) its centroid, roughly diameter-length? Same local-neighborhood-
+ * filter + stitch pattern as findEncirclingRing (real lines can be drawn as many
+ * short disconnected segments too, not just rings) — restrict to a local search
+ * radius first, stitch that local set, then fit/check each stitched chain.
+ *
+ * @param {[number,number]} blobCentroid
+ * @param {number} blobRadius
+ * @param {Array} strokeSubpaths
+ * @param {Object} opts { centerTol, minLenRatio=1.0, maxLenRatio=5.0, searchRadius, stitchTol, straightnessTol }
+ * @returns {{center,dir,length,maxResidual}|null}
+ */
+export function findLineThroughCenter(blobCentroid, blobRadius, strokeSubpaths = [], opts = {}) {
+  if (!(blobRadius > 0)) return null;
+  const minLenRatio = opts.minLenRatio ?? 1.0;
+  const maxLenRatio = opts.maxLenRatio ?? 5.0;
+  const centerTol = opts.centerTol ?? blobRadius * 1.0;
+  const searchRadius = opts.searchRadius ?? blobRadius * (maxLenRatio + 1) + centerTol;
+  const blobDiameter = blobRadius * 2;
+
+  const nearby = strokeSubpaths.filter((sp) => {
+    if (!sp.points?.length) return false;
+    const c = centroid(sp.points);
+    return Math.hypot(c[0] - blobCentroid[0], c[1] - blobCentroid[1]) <= searchRadius;
+  });
+  const stitched = stitchSegments(nearby, opts.stitchTol ?? 0.001);
+
+  for (const sp of stitched) {
+    const line = isLineLike(sp.points, opts);
+    if (!line) continue;
+    const dx = blobCentroid[0] - line.center[0], dy = blobCentroid[1] - line.center[1];
+    const perpDist = Math.abs(-dx * line.dir[1] + dy * line.dir[0]);
+    const ratio = line.length / blobDiameter;
+    if (perpDist <= centerTol && ratio >= minLenRatio && ratio <= maxLenRatio) return line;
+  }
+  return null;
+}
+
+/**
+ * Diagnostic sibling of findLineThroughCenter — every line-like candidate near
+ * the blob regardless of whether it would pass the length/center checks,
+ * closest-perpendicular-distance first.
+ *
+ * @returns {Array} [{ perpDist, ratio, length, center, dir }]
+ */
+export function debugLineCandidates(blobCentroid, blobRadius, strokeSubpaths = [], opts = {}) {
+  const searchRadius = opts.searchRadius ?? (blobRadius > 0 ? blobRadius * 6 + 0.02 : 0.02);
+  const blobDiameter = blobRadius * 2;
+  const nearby = strokeSubpaths.filter((sp) => {
+    if (!sp.points?.length) return false;
+    const c = centroid(sp.points);
+    return Math.hypot(c[0] - blobCentroid[0], c[1] - blobCentroid[1]) <= searchRadius;
+  });
+  const stitched = stitchSegments(nearby, opts.stitchTol ?? 0.001);
+  const out = [];
+  for (const sp of stitched) {
+    const line = isLineLike(sp.points, opts);
+    if (!line) continue;
+    const dx = blobCentroid[0] - line.center[0], dy = blobCentroid[1] - line.center[1];
+    out.push({
+      perpDist: Math.abs(-dx * line.dir[1] + dy * line.dir[0]),
+      ratio: blobDiameter > 0 ? line.length / blobDiameter : null,
+      length: line.length, center: line.center, dir: line.dir
+    });
+  }
+  return out.sort((a, b) => a.perpDist - b.perpDist);
+}
+
+/**
+ * Diagnostic sibling of findEncirclingRing — never used in the accept/reject
+ * path itself, returns every circle-like candidate near the blob (regardless
+ * of whether it would pass the ratio/center checks), closest first, so a
+ * rejection can be inspected instead of just returning null. Built for
+ * calibrating centerTol/minRadiusRatio/maxRadiusRatio against real page
+ * geometry when a blind tolerance guess turns out wrong in production.
+ *
+ * @returns {Array} [{ dCenter, ratio, center, radius }] sorted by dCenter, closest first
+ */
+export function debugRingCandidates(blobCentroid, blobRadius, strokeSubpaths = [], opts = {}) {
+  const searchRadius = opts.searchRadius ?? (blobRadius > 0 ? blobRadius * 9 + 0.02 : 0.02);
+  const gapTol = opts.gapTol ?? (blobRadius > 0 ? blobRadius : 0.001);
+  const nearby = [];
+  for (const sp of strokeSubpaths) {
+    if (!sp.points?.length) continue;
+    const c = centroid(sp.points);
+    const d = Math.hypot(c[0] - blobCentroid[0], c[1] - blobCentroid[1]);
+    if (d <= searchRadius) nearby.push({ sp, d });
+  }
+  const clusters = clusterByDistance(nearby, gapTol);
+  const out = [];
+  for (const clusterStrokes of clusters) {
+    const stitched = stitchSegments(clusterStrokes, opts.stitchTol ?? 0.001);
+    for (const sp of stitched) {
+      const circle = isCircleLike(sp.points);
+      if (!circle) continue;
+      out.push({
+        dCenter: Math.hypot(circle.center[0] - blobCentroid[0], circle.center[1] - blobCentroid[1]),
+        ratio: blobRadius > 0 ? circle.radius / blobRadius : null,
+        center: circle.center, radius: circle.radius
+      });
+    }
+  }
+  return out.sort((a, b) => a.dCenter - b.dCenter);
 }
 
 /**
@@ -261,11 +676,16 @@ export function classifyCameraBlob(blob, opts = {}) {
 export async function extractCameraBlobs(page, OPS, textCenters = [], opts = {}) {
   const { vpW = 0, vpH = 0, fill = null, fillTol = 48, bodyArea = 2e-5 } = opts;
   const frame = contentFrame(textCenters, vpW, vpH);
-  const raw = await extractFilledSubpaths(page, OPS);
+  // One operator-list walk for both — extractSubpaths returns filled AND
+  // stroke-only paths tagged; splitting locally avoids parsing the PDF twice.
+  const rawAll = await extractSubpaths(page, OPS);
+  const raw = rawAll.filter((s) => s.filled);
+  const rawStrokes = rawAll.filter((s) => !s.filled);
   const normed = raw.map((s) => ({ ...s, points: s.points.map(([x, y]) => frame.norm(x, y)) }));
+  const normedStrokes = rawStrokes.map((s) => ({ ...s, points: s.points.map(([x, y]) => frame.norm(x, y)) }));
   const kept = filterByFill(normed, fill, fillTol);
   const blobs = groupSubpaths(kept, { bodyArea });
-  return { blobs, frame, n_subpaths_raw: raw.length, n_subpaths_kept: kept.length };
+  return { blobs, frame, n_subpaths_raw: raw.length, n_subpaths_kept: kept.length, strokeSubpaths: normedStrokes };
 }
 
-export default { contentFrame, extractFilledSubpaths, filterByFill, groupSubpaths, classifyCameraBlob, extractCameraBlobs, polyArea };
+export default { contentFrame, extractFilledSubpaths, extractSubpaths, filterByFill, groupSubpaths, isCircleLike, stitchSegments, findEncirclingRing, debugRingCandidates, isLineLike, findLineThroughCenter, debugLineCandidates, debugNearbyStrokes, classifyCameraBlob, extractCameraBlobs, polyArea };

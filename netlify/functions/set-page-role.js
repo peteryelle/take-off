@@ -67,10 +67,25 @@ export default async function handler(req) {
   if (gate.error) return gate.error;
   const { supabase, orgId } = gate;
 
-  if (!(await assertProjectInOrg(supabase, project_id, orgId))) return err("Project not found in your organization", 404);
-  if (!(await assertPageInOrg(supabase, page_id, orgId))) return err("Page not found in your organization", 404);
+  // Legacy pattern passes page_id with no project_id — resolve it first so the
+  // org check below has something to check against, same fix as the preferred-
+  // pattern one below (a check run before its input is resolved always fails).
+  if (!project_id && page_id) {
+    const { data: pg, error: pgErr } = await supabase
+      .from("pages").select("project_id").eq("id", page_id).maybeSingle();
+    if (pgErr) return err(pgErr.message);
+    if (pg) project_id = pg.project_id;
+  }
 
-  // Resolve (or create) the page row.
+  if (!(await assertProjectInOrg(supabase, project_id, orgId))) return err("Project not found in your organization", 404);
+
+  // Resolve (or create) the page row BEFORE checking assertPageInOrg — page_id is
+  // absent on the "preferred" pattern (every call the client actually makes: role
+  // dropdowns, bulk role buttons, TR-name writes all pass project_id+pdf_page_number,
+  // never page_id). Checking assertPageInOrg(undefined) here used to 404 immediately
+  // on every one of those calls, before this block ever ran — silently, since fetch()
+  // doesn't throw on a 404 and only bulkSetRole surfaces a visible failure count.
+  // That's what broke page_role and tr_name persistence: they never actually wrote.
   if (!page_id) {
     if (!project_id || !pdf_page_number)
       return err("page_id, or project_id + pdf_page_number, required");
@@ -100,6 +115,12 @@ export default async function handler(req) {
                 { onConflict: "project_id,eval_page_num" });
     }
   }
+
+  // Now page_id is always defined — this is a genuine org-ownership check, not a
+  // premature one. Redundant (project_id was already asserted, and the page above
+  // is scoped to it) but cheap, and keeps the original safety intent for the
+  // legacy page_id-only call pattern where it's the only check that runs.
+  if (!(await assertPageInOrg(supabase, page_id, orgId))) return err("Page not found in your organization", 404);
 
   const updates = {};
   if (hasRole)  updates.page_role = role;

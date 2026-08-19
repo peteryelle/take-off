@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Report — Take-off</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="auth.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: monospace;
+  background: #0d0d0d;
+  color: #e4e4e4;
+  padding: 22px;
+  font-size: 15px;
+  line-height: 1.5;
+}
+h1 { color: #f0c95f; font-size: 20px; margin-bottom: 6px; letter-spacing: 2px; text-transform: uppercase; }
+.subtitle { color: #777; font-size: 13px; margin-bottom: 22px; }
+a { color: #7ac0f0; text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ── Config bar ── */
+.config-bar {
+  display: flex; gap: 10px; align-items: center;
+  background: #111; border: 1px solid #2a2a2a;
+  border-radius: 4px; padding: 12px 16px;
+  margin-bottom: 18px; flex-wrap: wrap;
+}
+.config-bar label { color: #999; font-size: 13px; margin-right: 4px; }
+input[type="text"] {
+  background: #1a1a1a; border: 1px solid #333;
+  color: #e4e4e4; padding: 7px 10px; width: 170px;
+  border-radius: 3px; font-family: monospace; font-size: 14px;
+}
+button {
+  background: #1e3a1e; border: 1px solid #3a7a3a;
+  color: #8af08a; padding: 8px 14px;
+  border-radius: 3px; cursor: pointer;
+  font-family: monospace; font-size: 14px;
+  transition: background 0.15s; white-space: nowrap;
+}
+button:hover { background: #2a4a2a; }
+button:disabled { opacity: 0.3; cursor: not-allowed; }
+
+.status { font-size: 13px; color: #aaa; padding: 3px 0; min-height: 18px; }
+.status.ok  { color: #8af08a; }
+.status.err { color: #f79a9a; }
+.status.running { color: #f0c95f; }
+
+.note {
+  background: #0f1822; border: 1px solid #2a3a4a; border-radius: 4px;
+  padding: 10px 14px; font-size: 13px; color: #8fcaf0; margin-bottom: 18px;
+}
+
+/* ── Badges/pills — tinted background + border, not flat bright text on
+   black. Matches the reference dashboard's CFG/EXC/APD and status-dot
+   pattern, which reads far better at a glance than solid color text. ── */
+.badge {
+  display: inline-block; padding: 3px 11px; border-radius: 12px;
+  font-size: 12px; font-weight: 600; border: 1px solid; white-space: nowrap;
+}
+.badge-info { background: rgba(122,192,240,0.12); border-color: #3a6a8a; color: #9fd4ff; }
+.badge-warn { background: rgba(240,180,90,0.14);  border-color: #8a6a2a; color: #f0c060; }
+.badge-bad  { background: rgba(240,122,122,0.14); border-color: #8a3a3a; color: #ff9a9a; }
+.badge-ok   { background: rgba(122,240,150,0.12); border-color: #2a7a4a; color: #9af0b0; }
+.dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+.dot-warn { background: #f0c060; }
+.dot-bad  { background: #ff9a9a; }
+.dot-ok   { background: #7af07a; }
+
+/* ── Stat strip ── */
+.stat-strip { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; }
+.stat-card {
+  background: #111; border: 1px solid #2a2a2a; border-radius: 5px;
+  padding: 12px 18px; min-width: 120px; border-left: 3px solid #2a2a2a;
+}
+.stat-card .num { font-size: 26px; color: #f0f0f0; font-weight: bold; line-height: 1.2; }
+.stat-card .lbl { font-size: 11px; color: #999; text-transform: uppercase; letter-spacing: 1px; margin-top: 4px; }
+.stat-card.warn { border-left-color: #f0c060; }
+.stat-card.bad  { border-left-color: #ff9a9a; }
+.stat-card.warn .lbl .dot, .stat-card.bad .lbl .dot { display: inline-block; }
+
+/* ── Sections ── */
+.section { margin-bottom: 28px; }
+.section-title {
+  color: #a8b8c8; font-size: 13px; text-transform: uppercase; letter-spacing: 1.5px;
+  font-weight: 600; margin-bottom: 10px; border-bottom: 1px solid #222; padding-bottom: 6px;
+}
+
+table { border-collapse: collapse; width: auto; max-width: 820px; }
+th {
+  text-align: left; color: #777; font-size: 11px; text-transform: uppercase;
+  letter-spacing: 1px; padding: 7px 20px 7px 10px; border-bottom: 1px solid #222; font-weight: normal;
+}
+td { padding: 7px 20px 7px 10px; border-bottom: 1px solid #141414; font-size: 14px; }
+tr:hover td { background: #131313; }
+.num-cell { text-align: right; color: #e4e4e4; }
+.part-cell { color: #e4e4e4; font-weight: 600; }
+
+.flag-list { list-style: none; padding: 0; }
+.flag-list li {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; margin-bottom: 6px; background: #151515;
+  border: 1px solid #2a2a2a; border-radius: 4px; color: #ccc; font-size: 14px;
+}
+
+.empty { color: #666; font-size: 14px; padding: 18px; text-align: center; }
+
+/* ── Print / Save-as-PDF ── — same content and structure as on screen, but
+   flipped to a light/dark-text palette (a black-background printout would
+   be unreadable and waste ink) and with the interactive chrome (config bar,
+   nav, load status) hidden since it has no purpose on paper. Uses the
+   browser's native print-to-PDF rather than a rasterizing library, so text
+   stays real/selectable in the resulting PDF instead of being an image. */
+@media print {
+  body { background: #fff !important; color: #111 !important; padding: 0; font-size: 12px; }
+  .config-bar, #to-nav, .note, .status, #print-btn, #export-btns { display: none !important; }
+  h1 { color: #111 !important; }
+  .subtitle { color: #444 !important; }
+  .section { break-inside: avoid; margin-bottom: 18px; }
+  table, tr { break-inside: avoid; }
+  table { max-width: 100% !important; }
+  .section-title { color: #333 !important; border-bottom-color: #ccc !important; }
+  th { color: #555 !important; border-bottom-color: #ccc !important; }
+  td { border-bottom-color: #ddd !important; color: #111 !important; }
+  .part-cell, .num-cell { color: #111 !important; }
+  .stat-card { background: #fff !important; border-color: #ccc !important; }
+  .stat-card .num, .stat-card .lbl { color: #111 !important; }
+  .badge { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .flag-list li { background: #f7f7f7 !important; border-color: #ccc !important; color: #111 !important; }
+}
+</style>
+</head>
+<body>
+
+<h1>📋 Report</h1>
+<nav id="to-nav"></nav>
+<script src="nav.js"></script>
+<p class="subtitle">Bill of materials &amp; device counts — persisted results only</p>
+
+
+<div class="note">
+  Read-only. Pulled straight from stored device instances &amp; device types — no Take-off run required to view this.
+</div>
+
+<!-- ── Config bar ── -->
+<div class="config-bar">
+  <label>Netlify URL</label>
+  <input type="text" id="netlify-url" value="https://winquest-take-off.netlify.app">
+  <label>Project ID</label>
+  <input type="text" id="project-id" placeholder="e.g. 12" style="width:80px;">
+  <button onclick="loadReport()">↓ Load</button>
+  <button id="print-btn" onclick="window.print()">🖨 Print / Save PDF</button>
+  <span id="export-btns">
+    <button onclick="exportCountsCsv()">⤓ Counts CSV</button>
+    <button onclick="exportBomCsv()">⤓ BOM CSV</button>
+    <button onclick="exportLaborCsv()">⤓ Labor CSV</button>
+  </span>
+  <div class="status" id="load-status">—</div>
+</div>
+
+<div id="report-body">
+  <div class="empty">Enter a Project ID and click Load</div>
+</div>
+
+<script type="module">
+import { aggregateBom } from './lib/bom.js';
+import { priceBom } from './lib/pricing.js';
+import { aggregateLaborHours } from './lib/labor.js';
+
+// Kept at module scope so exportReportCsv() (wired to the button above) can
+// read the last-loaded report without recomputing it. Null until a report
+// has actually loaded once.
+let lastReport = null;
+
+// $ formatting — material only. No labor cost/rate layer exists yet, so
+// every dollar figure on this page is material cost/sale, labeled as such.
+function formatMoney(n) {
+  return n == null ? '—' : n.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+}
+
+function base()  { return document.getElementById('netlify-url').value.replace(/\/$/, ''); }
+function projId(){ return document.getElementById('project-id').value.trim(); }
+
+function setStatus(msg, type = '') {
+  const el = document.getElementById('load-status');
+  el.textContent = msg;
+  el.className = 'status ' + type;
+}
+
+function escHtml(str) {
+  return String(str ?? '')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// Always round UP, never to nearest — this is physical material (cable feet,
+// part counts), and rounding 86694.3ft down to 86694 under-orders by a foot.
+// Formatted for display only; bom.js keeps full precision internally.
+function formatQty(n, perRunFt) {
+  const rounded = Math.ceil(Number(n));
+  return rounded.toLocaleString('en-US') + (perRunFt ? ' ft' : ' ea');
+}
+
+// Culled devices are marked via flags containing 'manual_excluded' (set by
+// submitCull for both 'junk' and 'excluded' categories) — NOT the
+// device_instances.removed_by_user column, which is never actually written
+// anywhere in the live cull path. aggregateBom()/expandInstance() check
+// `removed_by_user`, so translate the real signal onto that property here
+// rather than teaching bom.js a second exclusion field.
+function isCulled(inst) {
+  return Array.isArray(inst.flags) && inst.flags.includes('manual_excluded');
+}
+
+window.loadReport = async function loadReport() {
+  const pid = projId();
+  if (!pid) { setStatus('Enter a Project ID', 'err'); return; }
+  setStatus('Loading…', 'running');
+  document.getElementById('report-body').innerHTML = '<div class="empty">Loading…</div>';
+
+  let j;
+  try {
+    const r = await fetch(`${base()}/api/takeoff-summary?project_id=${encodeURIComponent(pid)}`);
+    j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.status);
+  } catch (e) {
+    setStatus('Error: ' + e.message, 'err');
+    document.getElementById('report-body').innerHTML = '<div class="empty">Failed to load</div>';
+    return;
+  }
+
+  const deviceTypes = j.device_types ?? [];
+  const rawInstances = j.device_instances ?? [];
+  const demarcs = j.demarcs ?? [];
+  const pages = j.pages ?? [];
+
+  // typesById keyed by the real numeric FK — device_instances.device_type_id
+  // already matches device_types.id directly from the DB, so (unlike the live
+  // batchResults path in multi-page.html, which has to key off legend_id/name
+  // as a string workaround) no key-translation hack is needed here.
+  const typesById = {};
+  for (const dt of deviceTypes) typesById[dt.id] = { name: dt.name, assembly: dt.assembly, labor: dt.labor };
+
+  const instances = rawInstances.map(inst => ({
+    device_type_id:  inst.device_type_id,
+    raw_labels:      inst.raw_labels ?? [],
+    removed_by_user: isCulled(inst),
+    total_ft:        inst.total_ft ?? null,
+  }));
+
+  const activeInstances = rawInstances.filter(i => !isCulled(i));
+  const tiaCount = activeInstances.filter(i => i.tia_flag).length;
+  const culledCount = rawInstances.length - activeInstances.length;
+
+  const bom = aggregateBom(instances, typesById);
+
+  // Material pricing — joins bom.components against this project's parts
+  // catalog by part_number. catalog_id null (no catalog assigned) or an
+  // empty catalog_parts list both fall through cleanly: every line comes
+  // back unresolved rather than erroring, same as pricing.js's own
+  // no-part_number handling.
+  const catalogId    = j.catalog_id ?? null;
+  const catalogParts = j.catalog_parts ?? [];
+  const priced       = priceBom(bom, catalogParts);
+
+  // Labor — HOURS only, no $/hr rate wired up yet, so this is intentionally
+  // not converted to a dollar figure anywhere on this page.
+  const labor = aggregateLaborHours(instances, typesById);
+
+  // ── Stat strip ──
+  let html = '<div class="stat-strip">';
+  html += statCard(pages.length, 'Pages');
+  html += statCard(activeInstances.length, 'Devices Counted');
+  html += statCard(culledCount, 'Culled', culledCount ? 'warn' : '');
+  html += statCard(tiaCount, 'TIA Flags', tiaCount ? 'warn' : '');
+  html += statCard(demarcs.length, 'Demarcs / TRs');
+  html += statCard(bom.coverage.flagged_instances, 'Unmodeled', bom.coverage.flagged_instances ? 'warn' : '');
+  html += statCard(bom.missing_distance.reduce((n, u) => n + u.instances, 0), 'No TR Distance', bom.missing_distance.length ? 'warn' : '');
+  html += statCard(formatMoney(priced.totals.cost_total), 'Material Cost');
+  html += statCard(formatMoney(priced.totals.sale_total), 'Material Sale');
+  html += statCard(priced.unresolved.length, 'Unpriced Line(s)', priced.unresolved.length ? 'warn' : '');
+  html += statCard(labor.total_hours.toLocaleString('en-US', {maximumFractionDigits: 1}), 'Labor Hours');
+  html += '</div>';
+  if (!catalogId) {
+    html += '<div class="empty" style="margin:-8px 0 16px;">No parts catalog assigned to this project — every line below is unpriced.</div>';
+  }
+
+  // ── Device counts by type ──
+  const countsByType = new Map();
+  for (const inst of activeInstances) {
+    const key = inst.device_type_id;
+    const dt = typesById[key];
+    const name = dt?.name ?? `type ${key}`;
+    if (!countsByType.has(key)) countsByType.set(key, { name, count: 0 });
+    countsByType.get(key).count++;
+  }
+  const countRows = [...countsByType.values()].sort((a, b) => b.count - a.count);
+
+  lastReport = { project_id: pid, priced, labor, countRows };
+
+  html += '<div class="section"><div class="section-title">Device Counts</div>';
+  if (countRows.length) {
+    html += '<table><thead><tr><th>Device Type</th><th style="text-align:right;">Count</th></tr></thead><tbody>';
+    for (const r of countRows) {
+      html += `<tr><td>${escHtml(r.name)}</td><td class="num-cell">${r.count}</td></tr>`;
+    }
+    html += '</tbody></table>';
+  } else {
+    html += '<div class="empty">No devices counted yet for this project</div>';
+  }
+  html += '</div>';
+
+  // ── Bill of materials ── (material cost/sale only — see stat strip note on labor)
+  html += '<div class="section"><div class="section-title">Bill of Materials — Project Total</div><div style="font-size:12px; color:#777; margin:-4px 0 8px;">Material only — labor cost is not yet modeled.</div>';
+  if (priced.components.length) {
+    html += '<table><thead><tr><th>Part</th><th>Manufacturer</th><th>Part #</th><th style="text-align:right;">Qty</th><th style="text-align:right;">Cost/Unit</th><th style="text-align:right;">Line Cost</th><th style="text-align:right;">Line Sale</th></tr></thead><tbody>';
+    for (const c of priced.components) {
+      const unpriced = !c.priced;
+      html += `<tr${unpriced ? ' style="opacity:.6;"' : ''}>
+        <td class="part-cell">${escHtml(c.part_name || c.device_name || '—')}${unpriced ? ' <span class="badge badge-warn" title="No catalog part linked or not found in this project\'s catalog">unpriced</span>' : ''}</td>
+        <td style="color:#bbb;">${escHtml(c.manufacturer)}</td>
+        <td style="color:#bbb; font-family:monospace;">${escHtml(c.part_number || '—')}</td>
+        <td class="num-cell">${formatQty(c.qty, c.per_run_ft)}</td>
+        <td class="num-cell">${c.cost_unit != null ? formatMoney(c.cost_unit) : '—'}</td>
+        <td class="num-cell">${c.line_cost != null ? formatMoney(c.line_cost) : '—'}</td>
+        <td class="num-cell">${c.line_sale != null ? formatMoney(c.line_sale) : '—'}</td>
+      </tr>`;
+    }
+    html += `<tr style="font-weight:600; border-top:2px solid #444;">
+      <td colspan="5" style="text-align:right;">Material Total</td>
+      <td class="num-cell">${formatMoney(priced.totals.cost_total)}</td>
+      <td class="num-cell">${formatMoney(priced.totals.sale_total)}</td>
+    </tr>`;
+    html += '</tbody></table>';
+  } else {
+    html += '<div class="empty">No assemblies defined yet — nothing to compile</div>';
+  }
+  html += '</div>';
+
+  // ── Labor hours ── (hours only — no $/hr rate wired up yet)
+  html += '<div class="section"><div class="section-title">Labor Hours — Project Total</div><div style="font-size:12px; color:#777; margin:-4px 0 8px;">Hours only — not yet converted to a dollar figure.</div>';
+  if (labor.tasks.length) {
+    html += '<table><thead><tr><th>Task</th><th style="text-align:right;">Hours</th></tr></thead><tbody>';
+    for (const t of labor.tasks) {
+      html += `<tr><td class="part-cell">${escHtml(t.task_name)}</td><td class="num-cell">${t.hours.toLocaleString('en-US', {maximumFractionDigits: 2})}</td></tr>`;
+    }
+    html += `<tr style="font-weight:600; border-top:2px solid #444;"><td style="text-align:right;">Total</td><td class="num-cell">${labor.total_hours.toLocaleString('en-US', {maximumFractionDigits: 2})}</td></tr>`;
+    html += '</tbody></table>';
+  } else {
+    html += '<div class="empty">No labor tasks defined yet — nothing to compile</div>';
+  }
+  html += '</div>';
+
+  // ── Unmodeled flags ──
+  if (bom.unmodeled.length) {
+    html += '<div class="section"><div class="section-title">⚑ Counted but Unmodeled</div><ul class="flag-list">';
+    for (const u of bom.unmodeled) {
+      html += `<li><span class="badge badge-warn">${escHtml(u.family)}</span> ${escHtml(u.name)} — ${u.instances} ${u.instances === 1 ? 'outlet' : 'outlets'}</li>`;
+    }
+    html += '</ul></div>';
+  }
+
+  // ── Missing TR distance — device has a TR-run cable modeled, but no
+  // routed distance to scale it by (not yet assigned a demarc, or the
+  // distance was never computed for that instance). Cable qty for these
+  // instances is NOT included in the BOM above — flagged, not fabricated. ──
+  if (bom.missing_distance.length) {
+    html += '<div class="section"><div class="section-title">⚑ TR-Run Cable — No Distance Yet</div><ul class="flag-list">';
+    for (const u of bom.missing_distance) {
+      html += `<li><span class="badge badge-bad">${escHtml(u.family)}</span> ${escHtml(u.name)} — ${u.instances} ${u.instances === 1 ? 'device' : 'devices'} not yet assigned a TR / distance</li>`;
+    }
+    html += '</ul></div>';
+  }
+
+  // ── Same gap, labor side — a per-foot labor task can't compute hours
+  // without a routed distance either. ──
+  if (labor.missing_distance.length) {
+    html += '<div class="section"><div class="section-title">⚑ TR-Run Labor — No Distance Yet</div><ul class="flag-list">';
+    for (const u of labor.missing_distance) {
+      html += `<li><span class="badge badge-bad">${escHtml(u.family)}</span> ${escHtml(u.name)} — ${u.instances} ${u.instances === 1 ? 'device' : 'devices'} not yet assigned a TR / distance</li>`;
+    }
+    html += '</ul></div>';
+  }
+
+  // ── Unpriced lines — a BOM line with no catalog part linked, or a
+  // part_number not found (or inactive) in this project's catalog. Not
+  // zeroed out above; surfaced here so it gets fixed rather than missed. ──
+  if (priced.unresolved.length) {
+    html += '<div class="section"><div class="section-title">⚑ Unpriced Line(s)</div><ul class="flag-list">';
+    const reasonLabel = { no_part_number: 'no catalog part linked', not_in_catalog: 'part # not in this catalog', inactive: 'catalog part is inactive' };
+    for (const u of priced.unresolved) {
+      html += `<li><span class="badge badge-warn">${escHtml(reasonLabel[u.reason] || u.reason)}</span> ${escHtml(u.part_name || u.device_name || '—')}${u.part_number ? ` (${escHtml(u.part_number)})` : ''} — qty ${formatQty(u.qty, u.per_run_ft)}</li>`;
+    }
+    html += '</ul></div>';
+  }
+
+  html += `<div style="font-size:12px; color:#777;">${bom.coverage.expanded_instances} of ${bom.coverage.total_instances} counted devices expanded into parts · ${bom.coverage.flagged_instances} carry an unmodeled or distance-less family · ${priced.unresolved.length} unpriced line(s) · ${culledCount} culled device(s) excluded</div>`;
+
+  document.getElementById('report-body').innerHTML = html;
+  setStatus(`✓ Loaded — ${activeInstances.length} devices, ${bom.components.length} part line(s)`, 'ok');
+};
+
+function statCard(num, label, cls = '') {
+  const dot = cls ? `<span class="dot dot-${cls}"></span>` : '';
+  return `<div class="stat-card ${cls}"><div class="num">${num}</div><div class="lbl">${dot}${escHtml(label)}</div></div>`;
+}
+
+// ── CSV export — one file per section (Counts, BOM, Labor Hours) rather
+// than one combined file, so each can be dropped straight into its own
+// Excel tab/workflow. Same escaping/format rules for all three: quoted
+// fields, UTF-8 BOM so special characters render correctly, CRLF line
+// endings. Unresolved material lines are INCLUDED in the BOM file, not
+// hidden — flagged via their own Status column — same "flag don't
+// fabricate" principle as everything else on this page. Each function is a
+// no-op with a status message if no report has been loaded yet.
+function csvField(v) {
+  const s = v == null ? '' : String(v);
+  return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+function csvRow(fields) { return fields.map(csvField).join(',') + '\r\n'; }
+
+function downloadCsv(csv, filename) {
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+window.exportCountsCsv = function exportCountsCsv() {
+  if (!lastReport) { setStatus('Load a report before exporting', 'err'); return; }
+  const { project_id, countRows } = lastReport;
+  let csv = csvRow(['Device Type', 'Count']);
+  for (const r of countRows) csv += csvRow([r.name, r.count]);
+  csv += csvRow(['Total', countRows.reduce((s, r) => s + r.count, 0)]);
+  downloadCsv(csv, `takeoff-counts-project-${project_id}.csv`);
+};
+
+window.exportBomCsv = function exportBomCsv() {
+  if (!lastReport) { setStatus('Load a report before exporting', 'err'); return; }
+  const { project_id, priced } = lastReport;
+  let csv = csvRow(['Part', 'Manufacturer', 'Model', 'Part Number', 'Qty', 'Cost/Unit', 'Line Cost', 'Line Sale', 'Status']);
+  for (const c of priced.components) {
+    csv += csvRow([
+      c.part_name || c.device_name || '',
+      c.manufacturer || '',
+      c.model || '',
+      c.part_number || '',
+      formatQty(c.qty, c.per_run_ft),
+      c.cost_unit ?? '',
+      c.line_cost ?? '',
+      c.line_sale ?? '',
+      c.priced ? 'Priced' : 'Unresolved',
+    ]);
+  }
+  csv += csvRow(['', '', '', '', '', '', 'Total', priced.totals.cost_total, priced.totals.sale_total, '']);
+  if (priced.unresolved.length) {
+    const reasonLabel = { no_part_number: 'No catalog part linked', not_in_catalog: 'Part # not in this catalog', inactive: 'Catalog part is inactive' };
+    csv += '\r\n';
+    csv += csvRow(['UNRESOLVED MATERIAL LINES']);
+    csv += csvRow(['Part', 'Part Number', 'Qty', 'Reason']);
+    for (const u of priced.unresolved) {
+      csv += csvRow([u.part_name || u.device_name || '', u.part_number || '', formatQty(u.qty, u.per_run_ft), reasonLabel[u.reason] || u.reason]);
+    }
+  }
+  downloadCsv(csv, `takeoff-bom-project-${project_id}.csv`);
+};
+
+window.exportLaborCsv = function exportLaborCsv() {
+  if (!lastReport) { setStatus('Load a report before exporting', 'err'); return; }
+  const { project_id, labor } = lastReport;
+  let csv = csvRow(['Task', 'Hours']);
+  for (const t of labor.tasks) csv += csvRow([t.task_name, t.hours]);
+  csv += csvRow(['Total', labor.total_hours]);
+  downloadCsv(csv, `takeoff-labor-project-${project_id}.csv`);
+};
+
+// ── Auto-load if project_id in URL / sessionStorage ─────────────────
+(function init() {
+  const params = new URLSearchParams(window.location.search);
+  const pid = params.get('project_id') ?? sessionStorage.getItem('to_project_id') ?? '';
+  if (pid) {
+    document.getElementById('project-id').value = pid;
+    const nurl = sessionStorage.getItem('to_netlify_url');
+    if (nurl) document.getElementById('netlify-url').value = nurl;
+    loadReport();
+  }
+})();
+</script>
+
+</body>
+</html>

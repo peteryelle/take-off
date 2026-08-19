@@ -14,7 +14,7 @@
 // imports no PDF library. Output is the live contract { type, x, y, confidence } that
 // pass-extract already threads into reconcile — plus flag/via for the review surface.
 
-import { classifyCameraBlob } from './geometry.js';
+import { classifyCameraBlob, polyArea, findEncirclingRing, debugRingCandidates, findLineThroughCenter, debugLineCandidates } from './geometry.js';
 
 const fillKey = (rgb) => (Array.isArray(rgb) ? rgb.join(',') : 'none');
 const hasTemplate = (g) => !!(g && Array.isArray(g.fill_rgb) && g.fill_rgb.length === 3);
@@ -44,16 +44,65 @@ export function chooseLocator(sheetClass, group) {
  * already fully disambiguate the glyph (confirmed per-type before setting this), every
  * blob that passed extraction's fill/area filter IS that type — full stop.
  *
+ * group.requires_ring: opt-in ring verification for glyphs whose real visual signature
+ * is a filled shape inside a circular OUTLINE (e.g. WAP) — fill+area alone can't tell a
+ * real one from any other similarly-sized, similarly-colored shape on the sheet (wall
+ * lines, other hardware glyphs, a wall-mounted device from the same triangle family
+ * minus the circle). Confirmed on a real project: 28 WAP candidates, most demonstrably
+ * not WAPs by this exact confusion. Requires deps.strokeSubpaths (from
+ * extractSubpaths(...).filter(s => !s.filled), same normalized frame as the blobs) — a
+ * blob with no matching encircling ring is dropped outright, not flagged, since the
+ * ring's absence is decisive negative evidence for this glyph family, not an ambiguous
+ * case. Every OTHER symbol type (requires_ring unset) is completely unaffected.
+ *
  * @param {Array}  blobs  from groupSubpaths/extractCameraBlobs (carry x,y normalized)
- * @param {Object} group  { single_type? | prototypes?, proto_tol?, aspect_hub_max? }
+ * @param {Object} group  { single_type? | prototypes?, proto_tol?, aspect_hub_max?, requires_ring? }
+ * @param {Object} deps   { strokeSubpaths?, onCandidate? } — onCandidate is a diagnostic
+ *   hook only, no-op when omitted: called once per blob when requires_ring is set, with
+ *   { x, y, radius, accepted, nearby } (nearby = debugRingCandidates, closest 3) — for
+ *   calibrating centerTol/minRadiusRatio/maxRadiusRatio against real page geometry when
+ *   a blind tolerance guess turns out wrong in production.
  * @returns {Array} [{ type, x, y, confidence, flag, via:'vector' }]
  */
-export function blobsToInstances(blobs = [], group = {}) {
+export function blobsToInstances(blobs = [], group = {}, deps = {}) {
+  let candidates = blobs;
+  if (group.requires_ring) {
+    const strokeSubpaths = deps.strokeSubpaths || [];
+    candidates = candidates.filter((b) => {
+      const bodyPoints = b.paths?.[0]?.points;
+      const area = bodyPoints ? polyArea(bodyPoints) : 0;
+      const radius = Math.sqrt(area / Math.PI);
+      const ring = radius > 0 ? findEncirclingRing([b.x, b.y], radius, strokeSubpaths) : null;
+      if (deps.onCandidate) {
+        deps.onCandidate({
+          check: 'ring', x: b.x, y: b.y, radius, accepted: !!ring,
+          nearby: radius > 0 ? debugRingCandidates([b.x, b.y], radius, strokeSubpaths).slice(0, 3) : []
+        });
+      }
+      return !!ring;
+    });
+  }
+  if (group.requires_line_through_center) {
+    const strokeSubpaths = deps.strokeSubpaths || [];
+    candidates = candidates.filter((b) => {
+      const bodyPoints = b.paths?.[0]?.points;
+      const area = bodyPoints ? polyArea(bodyPoints) : 0;
+      const radius = Math.sqrt(area / Math.PI);
+      const line = radius > 0 ? findLineThroughCenter([b.x, b.y], radius, strokeSubpaths) : null;
+      if (deps.onCandidate) {
+        deps.onCandidate({
+          check: 'line', x: b.x, y: b.y, radius, accepted: !!line,
+          nearby: radius > 0 ? debugLineCandidates([b.x, b.y], radius, strokeSubpaths).slice(0, 3) : []
+        });
+      }
+      return !!line;
+    });
+  }
   if (group.single_type) {
-    return blobs.map((b) => ({ type: group.single_type, x: b.x, y: b.y, confidence: 'high', flag: null, via: 'vector' }));
+    return candidates.map((b) => ({ type: group.single_type, x: b.x, y: b.y, confidence: 'high', flag: null, via: 'vector' }));
   }
   const opts = { prototypes: group.prototypes || null, protoTol: group.proto_tol ?? 1.4, aspectHubMax: group.aspect_hub_max ?? 2.2, lensTokens: group.lens_tokens || null };
-  return blobs.map((b) => {
+  return candidates.map((b) => {
     const r = classifyCameraBlob(b, opts);
     return { type: r.type, x: b.x, y: b.y, confidence: r.confidence, flag: r.flag || (r.type === null ? 'no_match' : null), via: 'vector' };
   });
@@ -80,7 +129,8 @@ export function planSymbolDetection(sheetClass, symTypes = []) {
     const tmpl = cfg.symbol_template || null;
     const group = (tmpl && Array.isArray(tmpl.fill_rgb))
       ? { fill_rgb: tmpl.fill_rgb, fill_tol: tmpl.fill_tol ?? 48, body_area: tmpl.body_area ?? 2e-5,
-          single_type: tmpl.single_type || null,
+          single_type: tmpl.single_type || null, requires_ring: !!tmpl.requires_ring,
+          requires_line_through_center: !!tmpl.requires_line_through_center,
           prototypes: (Array.isArray(tmpl.prototypes) && tmpl.prototypes.length) ? tmpl.prototypes : null,
           proto_tol: tmpl.proto_tol, aspect_hub_max: tmpl.aspect_hub_max, lens_tokens: tmpl.lens_tokens || null }
       : null;
@@ -108,11 +158,17 @@ export function planSymbolDetection(sheetClass, symTypes = []) {
  * @returns {Promise<{ instances, blob_count, degraded }>}
  */
 export async function locateVector(page, OPS, textCenters, group, deps = {}, opts = {}) {
-  const { extractCameraBlobs } = deps;
-  const { blobs, n_subpaths_raw, n_subpaths_kept } = await extractCameraBlobs(page, OPS, textCenters, {
+  const { extractCameraBlobs, onCandidate } = deps;
+  const { blobs, n_subpaths_raw, n_subpaths_kept, strokeSubpaths } = await extractCameraBlobs(page, OPS, textCenters, {
     vpW: opts.vpW, vpH: opts.vpH, fill: group.fill_rgb, fillTol: group.fill_tol ?? 48, bodyArea: group.body_area ?? 2e-5,
   });
-  return { instances: blobsToInstances(blobs, group), blob_count: blobs.length, n_subpaths_raw, n_subpaths_kept, degraded: blobs.length === 0 };
+  return {
+    instances: blobsToInstances(blobs, group, { strokeSubpaths, onCandidate }),
+    blob_count: blobs.length, n_subpaths_raw, n_subpaths_kept,
+    n_strokes_found: strokeSubpaths?.length ?? 0,
+    strokeSubpaths,   // diagnostic use only (debugNearbyStrokes) — not needed for normal operation
+    degraded: blobs.length === 0
+  };
 }
 
 export default { chooseLocator, blobsToInstances, planSymbolDetection, locateVector };
