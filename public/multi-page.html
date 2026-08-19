@@ -1790,6 +1790,9 @@ async function computeTestRoute() {
 
     const strokes = await V.extractStrokeSubpaths(pdfPage, pdfjsLib.OPS);
     const { walls, doors } = await V.classifyGeometry(strokes, pdfPage, signature);
+    console.log(`[test-route] signature=${JSON.stringify(signature)} walls=${walls.length} doors=${doors.length}`);
+    console.log(`[test-route] TR clicked at (canvas px) ${JSON.stringify(testRoutePoints.tr)} -> page-pt ${JSON.stringify(trXY)}`);
+    console.log(`[test-route] device clicked at (canvas px) ${JSON.stringify(testRoutePoints.device)} -> page-pt ${JSON.stringify(deviceXY)}`);
     if (!walls.length) {
       document.getElementById('test-route-status').textContent = 'No walls found on this page for the confirmed signature.';
       return;
@@ -1801,6 +1804,7 @@ async function computeTestRoute() {
     if (!router) { document.getElementById('test-route-status').textContent = 'buildPageRouter returned null.'; return; }
 
     const result = router.routeDevice(deviceXY);
+    console.log(`[test-route] raw result:`, result);
     if (result.total_dist === null) {
       document.getElementById('test-route-status').textContent = 'No path found — device may be in an enclosed area with no detected door nearby.';
       return;
@@ -1828,7 +1832,8 @@ async function computeTestRoute() {
       : null;
     const ftNote = scaleFt ? ` (~${Math.round(result.total_dist * scaleFt / 72)} ft at this sheet's scale)` : '';
     document.getElementById('test-route-status').textContent =
-      `✓ Route found: ${result.points.length} waypoints, ${result.total_dist.toFixed(1)} pt total${ftNote}.`;
+      `✓ Route found: ${result.points.length} waypoints, ${result.total_dist.toFixed(1)} pt total${ftNote} `
+      + `— ${walls.length} walls / ${doors.length} doors used (see console for full detail).`;
   } catch (e) {
     document.getElementById('test-route-status').textContent = 'Error: ' + e.message;
     console.error(e);
