@@ -219,11 +219,15 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
     <div style="padding-top:16px;">
       <button class="info" onclick="applyRange()">Apply Range</button>
       <button onclick="clearSelection()" style="margin-left:4px;" title="clears the page selection only — does not change roles">Clear selection</button>
+      <button class="info" onclick="previewAutoRoutingCoverage()" style="margin-left:12px;"
+        title="Scores every selected page's stroke geometry to see which pages could use Tier 3 wall-aware routing. Re-clickable any time — rerun after changing the selection to refresh badges (they don't update automatically).">
+        ▶ Preview Auto-Routing Coverage</button>
     </div>
   </div>
 
   <div class="thumb-grid" id="thumb-grid"></div>
   <div class="status" id="selection-status" style="margin-top:6px;">—</div>
+  <div class="status" id="tier-coverage-status" style="margin-top:2px; display:none;">—</div>
   <div id="bulk-role-bar" style="margin-top:8px; display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
     <span style="color:#aaa; font-size:12px;">Set selected pages →</span>
     <button class="info" onclick="bulkSetRole('plan')"     style="padding:3px 10px; font-size:12px;">plan</button>
@@ -1183,6 +1187,19 @@ async function renderThumbnails() {
     sel.onchange = (e) => { e.stopPropagation(); setPageRole(n, sel.value); };
     col.appendChild(sel);
 
+    // Tier-3-coverage badge — set by previewAutoRoutingCoverage(), reads
+    // tierPreview[n] (in-memory, not persisted — this is a preview, not a
+    // decision). Deliberately does NOT auto-invalidate when the page
+    // selection changes: it sits as-is until the user explicitly reruns the
+    // preview button. Same applyStatusBadge/updateThumbStatusBadge split as
+    // the status badge above — fresh element reference here at render time,
+    // a separate query-based updater for after the preview finishes async.
+    const tierBadge = document.createElement('div');
+    tierBadge.className = 'pg-tier-badge';
+    tierBadge.dataset.page = n;
+    col.appendChild(tierBadge);
+    applyTierBadge(tierBadge, n);
+
     // Redundant-overall suggestion — the takeoff-summary view flags whole-floor
     // OVERALL sheets that have drawing-number segment-siblings (e.g. SE02-01 →
     // SE02-01A/B/…). Counting them double-counts cameras already tallied on the
@@ -1244,6 +1261,98 @@ function updateThumbStatusBadge(n) {
   if (!el) return;
   applyStatusBadge(el, n);
 }
+
+// ── Tier-3 coverage preview (Step 2) ────────────────────────────────────
+// In-memory only, keyed by PDF page number — NOT persisted, NOT the same
+// thing as wall_calibrations/page_wall_geometry (those only exist after 3B
+// confirm). This is purely "could this page support Tier 3," computed the
+// same way wall-calibration.js scores/aggregates for real, so the badge
+// shown here is an honest preview of what 3B would find, not a guess.
+let tierPreview = {};   // pageNum -> { eligible: bool, wallCount: number } | undefined (not yet previewed)
+
+function applyTierBadge(el, n) {
+  const t = tierPreview[n];
+  if (!t) { el.style.display = 'none'; el.textContent = ''; el.title = ''; return; }
+  const s = t.eligible
+    ? { text: 'T3 ✓',      bg: '#0f2a14', border: '#2a7a4a', color: '#7af07a' }
+    : { text: 'T1 only',   bg: '#2a2410', border: '#7a6a2a', color: '#f0c060' };
+  el.style.cssText = `display:block; font-size:9px; text-align:center; padding:2px 4px; margin-top:2px; border-radius:3px; background:${s.bg}; border:1px solid ${s.border}; color:${s.color};`;
+  el.textContent = s.text;
+  el.title = t.eligible
+    ? `${t.wallCount} walls found using this project's aggregate wall signature`
+    : `No usable wall geometry found for this page — will use Tier 1 (waypoint) routing`;
+}
+
+function updateThumbTierBadge(n) {
+  const el = document.querySelector(`.pg-tier-badge[data-page="${n}"]`);
+  if (!el) return;
+  applyTierBadge(el, n);
+}
+
+// Scores every selected page's stroke geometry (same scorePage/aggregateScores
+// wall-calibration.js uses for real at 3B confirm time), finds the aggregate
+// winning wall signature across just this selection, then checks each page
+// individually against that signature to decide Tier 3 eligibility. Pure
+// preview — writes nothing to the database, doesn't touch wall_calibrations.
+// Re-running overwrites tierPreview wholesale; badges for pages no longer
+// selected simply stop being touched (stale by design — see the button's
+// own tooltip and the earlier design discussion: no auto-invalidation).
+async function previewAutoRoutingCoverage() {
+  if (!pdfDoc) { alert('Load a PDF first'); return; }
+  if (!selectedPages.size) { alert('Select pages first'); return; }
+  const V = window.TakeoffVec;
+  if (!V?.scorePage || !V?.aggregateScores || !V?.classifyGeometry || !V?.extractStrokeSubpaths) {
+    setStatus('tier-coverage-status', 'Wall-calibration module not loaded — cannot preview.', 'err');
+    document.getElementById('tier-coverage-status').style.display = 'block';
+    return;
+  }
+
+  const sortedPages = [...selectedPages].sort((a, b) => a - b);
+  document.getElementById('tier-coverage-status').style.display = 'block';
+  setStatus('tier-coverage-status', `Scoring ${sortedPages.length} page${sortedPages.length !== 1 ? 's' : ''} for auto-routing coverage…`, 'running');
+
+  try {
+    const perPage = [];
+    const pdfPages = {};
+    for (const n of sortedPages) {
+      const pdfPage = await pdfDoc.getPage(n);
+      pdfPages[n] = pdfPage;
+      const strokes = await V.extractStrokeSubpaths(pdfPage, pdfjsLib.OPS);
+      const scores = await V.scorePage(strokes, pdfPage);
+      perPage.push({ pageId: n, scores });
+    }
+
+    const candidates = V.aggregateScores(perPage);
+    if (!candidates.length) {
+      // No usable stroke geometry anywhere in the selection — every page is Tier 1.
+      for (const n of sortedPages) {
+        tierPreview[n] = { eligible: false, wallCount: 0 };
+        updateThumbTierBadge(n);
+      }
+      setStatus('tier-coverage-status', 'No usable wall geometry found on any selected page — Tier 1 (waypoints) only.', '');
+      return;
+    }
+
+    const winner = { color: candidates[0].color, width: candidates[0].width };
+    let eligibleCount = 0;
+    for (const n of sortedPages) {
+      const strokes = await V.extractStrokeSubpaths(pdfPages[n], pdfjsLib.OPS);
+      const { walls } = await V.classifyGeometry(strokes, pdfPages[n], winner);
+      const eligible = walls.length > 0;
+      if (eligible) eligibleCount++;
+      tierPreview[n] = { eligible, wallCount: walls.length };
+      updateThumbTierBadge(n);
+    }
+
+    setStatus('tier-coverage-status',
+      `Tier 3 possible on ${eligibleCount}/${sortedPages.length} selected pages (signature: score ${candidates[0].score}` +
+      (candidates[1] ? ` vs ${candidates[1].score}` : '') + ')',
+      eligibleCount > 0 ? 'ok' : '');
+  } catch (e) {
+    setStatus('tier-coverage-status', 'Preview error: ' + e.message, 'err');
+  }
+}
+
 
 // Persist a human-assigned page role. Updates client state immediately (the gate
 // reads pageCache.page_role), and writes through to the DB when the page row
