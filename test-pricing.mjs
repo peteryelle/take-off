@@ -1,6 +1,6 @@
 // test-pricing.mjs — offline fixture gate for public/lib/pricing.js
 // Run: node test-pricing.mjs
-import { priceBom } from './pricing.js';
+import { priceBom } from './public/lib/pricing.js';
 
 let failures = 0;
 function check(label, cond) {

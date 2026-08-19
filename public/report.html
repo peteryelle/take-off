@@ -138,6 +138,7 @@ tr:hover td { background: #131313; }
 <script type="module">
 import { aggregateBom } from './lib/bom.js';
 import { priceBom } from './lib/pricing.js';
+import { aggregateLaborHours } from './lib/labor.js';
 
 // $ formatting — material only. No labor cost/rate layer exists yet, so
 // every dollar figure on this page is material cost/sale, labeled as such.
@@ -228,6 +229,10 @@ window.loadReport = async function loadReport() {
   const catalogParts = j.catalog_parts ?? [];
   const priced       = priceBom(bom, catalogParts);
 
+  // Labor — HOURS only, no $/hr rate wired up yet, so this is intentionally
+  // not converted to a dollar figure anywhere on this page.
+  const labor = aggregateLaborHours(instances, typesById);
+
   // ── Stat strip ──
   let html = '<div class="stat-strip">';
   html += statCard(pages.length, 'Pages');
@@ -240,6 +245,7 @@ window.loadReport = async function loadReport() {
   html += statCard(formatMoney(priced.totals.cost_total), 'Material Cost');
   html += statCard(formatMoney(priced.totals.sale_total), 'Material Sale');
   html += statCard(priced.unresolved.length, 'Unpriced Line(s)', priced.unresolved.length ? 'warn' : '');
+  html += statCard(labor.total_hours.toLocaleString('en-US', {maximumFractionDigits: 1}), 'Labor Hours');
   html += '</div>';
   if (!catalogId) {
     html += '<div class="empty" style="margin:-8px 0 16px;">No parts catalog assigned to this project — every line below is unpriced.</div>';
@@ -295,6 +301,20 @@ window.loadReport = async function loadReport() {
   }
   html += '</div>';
 
+  // ── Labor hours ── (hours only — no $/hr rate wired up yet)
+  html += '<div class="section"><div class="section-title">Labor Hours — Project Total</div><div style="font-size:12px; color:#777; margin:-4px 0 8px;">Hours only — not yet converted to a dollar figure.</div>';
+  if (labor.tasks.length) {
+    html += '<table><thead><tr><th>Task</th><th style="text-align:right;">Hours</th></tr></thead><tbody>';
+    for (const t of labor.tasks) {
+      html += `<tr><td class="part-cell">${escHtml(t.task_name)}</td><td class="num-cell">${t.hours.toLocaleString('en-US', {maximumFractionDigits: 2})}</td></tr>`;
+    }
+    html += `<tr style="font-weight:600; border-top:2px solid #444;"><td style="text-align:right;">Total</td><td class="num-cell">${labor.total_hours.toLocaleString('en-US', {maximumFractionDigits: 2})}</td></tr>`;
+    html += '</tbody></table>';
+  } else {
+    html += '<div class="empty">No labor tasks defined yet — nothing to compile</div>';
+  }
+  html += '</div>';
+
   // ── Unmodeled flags ──
   if (bom.unmodeled.length) {
     html += '<div class="section"><div class="section-title">⚑ Counted but Unmodeled</div><ul class="flag-list">';
@@ -311,6 +331,16 @@ window.loadReport = async function loadReport() {
   if (bom.missing_distance.length) {
     html += '<div class="section"><div class="section-title">⚑ TR-Run Cable — No Distance Yet</div><ul class="flag-list">';
     for (const u of bom.missing_distance) {
+      html += `<li><span class="badge badge-bad">${escHtml(u.family)}</span> ${escHtml(u.name)} — ${u.instances} ${u.instances === 1 ? 'device' : 'devices'} not yet assigned a TR / distance</li>`;
+    }
+    html += '</ul></div>';
+  }
+
+  // ── Same gap, labor side — a per-foot labor task can't compute hours
+  // without a routed distance either. ──
+  if (labor.missing_distance.length) {
+    html += '<div class="section"><div class="section-title">⚑ TR-Run Labor — No Distance Yet</div><ul class="flag-list">';
+    for (const u of labor.missing_distance) {
       html += `<li><span class="badge badge-bad">${escHtml(u.family)}</span> ${escHtml(u.name)} — ${u.instances} ${u.instances === 1 ? 'device' : 'devices'} not yet assigned a TR / distance</li>`;
     }
     html += '</ul></div>';

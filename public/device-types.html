@@ -263,10 +263,12 @@ button.kit:hover { background: #163138; }
 }
 .asm-dd-opt {
   padding: 6px 10px; cursor: pointer; color: #ddd;
-  border-bottom: 1px solid #222; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  border-bottom: 1px solid #222; display: flex; justify-content: space-between; gap: 10px;
 }
 .asm-dd-opt:hover { background: #223244; }
+.asm-dd-left { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; flex: 1; min-width: 0; }
 .asm-dd-pn { color: #7ad0e0; font-weight: bold; margin-right: 8px; }
+.asm-dd-price { color: #8fd08f; flex-shrink: 0; }
 .asm-dd-more { padding: 6px 10px; color: #666; font-style: italic; }
 .asm-add { background: none; border: 1px dashed #3a7a3a; color: #7af07a; }
 </style>
@@ -444,17 +446,35 @@ button.kit:hover { background: #163138; }
     <div class="asm-tabs" id="asm-tabs"></div>
     <table class="asm-table">
       <colgroup>
-        <col style="width:3%"><col style="width:11%"><col style="width:9%">
-        <col style="width:19%"><col style="width:13%"><col style="width:32%">
-        <col style="width:6%"><col style="width:4%"><col style="width:3%">
+        <col style="width:3%"><col style="width:9%"><col style="width:8%">
+        <col style="width:16%"><col style="width:11%"><col style="width:24%">
+        <col style="width:7%"><col style="width:7%">
+        <col style="width:5%"><col style="width:4%"><col style="width:3%">
       </colgroup>
       <thead><tr>
-        <th>#</th><th>Role</th><th>Mfr</th><th title="Type to search by part # or description, within the Role/Mfr picked at left.">Catalog Part</th><th>Manufacturer</th><th>Part Name</th><th>Qty</th><th title="Scale this part by the device's routed distance back to its TR, instead of a flat count per device">TR Run</th><th></th>
+        <th>#</th><th>Role</th><th>Mfr</th><th title="Type to search by part # or description, within the Role/Mfr picked at left.">Catalog Part</th><th>Manufacturer</th><th>Part Name</th><th title="Catalog cost per unit">Cost</th><th title="Catalog sale per unit, at the catalog's current material margin">Sale</th><th>Qty</th><th title="Scale this part by the device's routed distance back to its TR, instead of a flat count per device">TR Run</th><th></th>
       </tr></thead>
       <tbody id="asm-tbody"></tbody>
     </table>
     <div style="font-size:10px; color:#555; margin:6px 0 0;">Rows no longer carry a separate Device Name — Role covers it.</div>
     <button class="asm-add" onclick="addAsmRow()">+ Add Row</button>
+
+    <div style="margin-top:22px; border-top:1px solid #222; padding-top:14px;">
+      <div style="color:#f0c040; font-weight:bold; font-size:13px; margin-bottom:4px;">⏱ Labor</div>
+      <div class="asm-sub">Hours per device, entered directly — not looked up from a catalog. Use a reference rate sheet to inform the number. Qty = task occurrences per device (e.g. 2 terminations for a 2-port outlet). TR Run scales hours by routed distance instead of a flat count.</div>
+      <table class="asm-table">
+        <colgroup>
+          <col style="width:4%"><col style="width:34%"><col style="width:14%"><col style="width:14%">
+          <col style="width:10%"><col style="width:10%"><col style="width:5%">
+        </colgroup>
+        <thead><tr>
+          <th>#</th><th>Task Name</th><th title="Hours per occurrence, or per foot if TR Run is checked">Hrs</th><th title="Fixed hours added once per instance, regardless of qty or distance">Setup Hrs</th><th>Qty</th><th title="Scale by routed distance back to the TR, instead of a flat count per device">TR Run</th><th></th>
+        </tr></thead>
+        <tbody id="labor-tbody"></tbody>
+      </table>
+      <button class="asm-add" onclick="addLaborRow()">+ Add Labor Row</button>
+    </div>
+
     <div class="status" id="asm-status" style="margin-top:8px;"></div>
     <div class="actions">
       <button class="danger" onclick="closeAssembly()">Cancel</button>
@@ -795,7 +815,8 @@ function asmShowDropdown(i, inputEl) {
   } else {
     el.innerHTML = shown.map((p, idx) =>
       `<div class="asm-dd-opt" onmousedown="asmChoosePart(${i}, ${idx})">
-         <span class="asm-dd-pn">${escHtml(p.part_number)}</span>${escHtml(p.description || '')}
+         <span class="asm-dd-left"><span class="asm-dd-pn">${escHtml(p.part_number)}</span>${escHtml(p.description || '')}</span>
+         <span class="asm-dd-price">${Number.isFinite(Number(p.cost_unit)) ? '$' + Number(p.cost_unit).toFixed(2) : '—'} / ${Number.isFinite(Number(p.sale_unit)) ? '$' + Number(p.sale_unit).toFixed(2) : '—'}</span>
        </div>`
     ).join('') + (matches.length > CAP ? `<div class="asm-dd-more">${matches.length - CAP} more — keep typing to narrow</div>` : '');
   }
@@ -885,15 +906,19 @@ function openAssembly(id) {
   const dt = deviceTypes.find(d => d.id === id);
   if (!dt) return;
   asmDeviceId = id;
-  const saved = (dt.assembly && typeof dt.assembly === 'object') ? dt.assembly : {};
-  // Kinds = anchor-derived UNION any kind already stored, so no saved key is
-  // ever orphaned (an orphaned key drops on open and is wiped on the next save).
+  const saved      = (dt.assembly && typeof dt.assembly === 'object') ? dt.assembly : {};
+  const savedLabor = (dt.labor    && typeof dt.labor    === 'object') ? dt.labor    : {};
+  // Kinds = anchor-derived UNION any kind already stored in EITHER material
+  // or labor, so a labor-only kind (or vice versa) never gets orphaned.
   const derived = asmKindsForDevice(dt);
-  asmKinds = [...new Set([...derived, ...Object.keys(saved)])];
+  asmKinds = [...new Set([...derived, ...Object.keys(saved), ...Object.keys(savedLabor)])];
   asmData = {};
+  laborData = {};
   for (const k of asmKinds) {
     const rows = Array.isArray(saved[k]) ? saved[k].map(r => ({ ...asmBlankRow(), ...r })) : [];
     asmData[k] = asmBackfillRoleMfr(rows.length ? rows : [asmBlankRow()]);   // opens with one row
+    const laborRows = Array.isArray(savedLabor[k]) ? savedLabor[k].map(r => ({ ...laborBlankRow(), ...r })) : [];
+    laborData[k] = laborRows.length ? laborRows : [laborBlankRow()];
   }
   asmActiveKind = asmKinds[0];
   document.getElementById('asm-title').textContent =
@@ -903,6 +928,7 @@ function openAssembly(id) {
     ? `${asmKinds.length} kinds on this device — one kit each` : '') + catNote, catalogId ? '' : 'warn');
   renderAsmTabs();
   renderAsmTable();
+  renderLaborTable();
   document.getElementById('asm-modal').classList.add('open');
 }
 
@@ -926,6 +952,8 @@ function renderAsmTable() {
   const rows = asmData[asmActiveKind] || [];
   document.getElementById('asm-tbody').innerHTML = rows.map((r, i) => {
     const filt = { role: r.role || '', mfr: r.mfr || '' };
+    const cat = r.part_number ? catalogParts.find(p => p.part_number === r.part_number) : null;
+    const money = (n) => (n == null || !Number.isFinite(Number(n))) ? '—' : '$' + Number(n).toFixed(4).replace(/0+$/,'').replace(/\.$/,'');
     return `
     <tr>
       <td class="num">${i + 1}</td>
@@ -948,6 +976,8 @@ function renderAsmTable() {
                  autocomplete="off"></td>
       <td><input value="${escHtml(r.manufacturer)}" oninput="asmUpd(${i},'manufacturer',this.value)" placeholder="manufacturer"></td>
       <td><input value="${escHtml(r.part_name)}"    oninput="asmUpd(${i},'part_name',this.value)"    placeholder="part name"></td>
+      <td class="num" style="color:${cat ? '#ccc' : '#555'};" title="Catalog cost/unit${cat ? ' — ' + escHtml(cat.unit || '') : ''}">${money(cat?.cost_unit)}</td>
+      <td class="num" style="color:${cat ? '#8fd08f' : '#555'};" title="Catalog sale/unit at current material margin (${cat ? (Number(cat.material_margin)*100).toFixed(0) + '%' : '—'})">${money(cat?.sale_unit)}</td>
       <td><input class="qty" type="number" min="0" step="0.01" value="${Number(r.qty) || 1}" oninput="asmUpd(${i},'qty',parseFloat(this.value)||0)"
                  title="${r.per_run_ft ? 'Waste-factor multiplier applied to routed feet (e.g. 1.05 = 5% waste)' : 'Fixed qty per device'}"></td>
       <td class="rm" style="text-align:center;">
@@ -978,10 +1008,55 @@ function rmAsmRow(i) {
   renderAsmTabs();
 }
 
+// ── Labor editor — hours per device, typed in directly (no catalog to
+// search; there's no "parts list" for labor). Scoped to the same kind
+// tabs as material. See public/lib/labor.js for how these expand/sum.
+let laborData = {};
+function laborBlankRow() { return { task_name: '', hrs: 0, setup_hrs: 0, qty: 1, per_run_ft: false }; }
+function laborRowFilled(r) { return (r.task_name || '').trim() !== ''; }
+
+function renderLaborTable() {
+  const rows = laborData[asmActiveKind] || [];
+  document.getElementById('labor-tbody').innerHTML = rows.map((r, i) => `
+    <tr>
+      <td class="num">${i + 1}</td>
+      <td><input value="${escHtml(r.task_name)}" oninput="laborUpd(${i},'task_name',this.value)" placeholder="e.g. Terminate + mount faceplate"></td>
+      <td><input class="qty" type="number" min="0" step="0.001" value="${Number(r.hrs) || 0}" oninput="laborUpd(${i},'hrs',parseFloat(this.value)||0)"
+                 title="${r.per_run_ft ? 'Hours per foot of routed distance' : 'Hours per occurrence'}"></td>
+      <td><input class="qty" type="number" min="0" step="0.01" value="${Number(r.setup_hrs) || 0}" oninput="laborUpd(${i},'setup_hrs',parseFloat(this.value)||0)"></td>
+      <td><input class="qty" type="number" min="0" step="0.01" value="${Number(r.qty) || 1}" oninput="laborUpd(${i},'qty',parseFloat(this.value)||0)"
+                 title="${r.per_run_ft ? 'Waste-factor-style multiplier on the per-foot rate' : 'Task occurrences per device (e.g. 2 terminations for a 2-port outlet)'}"></td>
+      <td class="rm" style="text-align:center;">
+        <input type="checkbox" ${r.per_run_ft ? 'checked' : ''} title="Scale by this device's routed distance back to its TR"
+               onchange="laborUpd(${i},'per_run_ft',this.checked); renderLaborTable();">
+      </td>
+      <td class="rm"><button class="asm-x" title="remove" onclick="rmLaborRow(${i})">✕</button></td>
+    </tr>`).join('');
+}
+
+function laborUpd(i, field, val) {
+  const rows = laborData[asmActiveKind];
+  if (rows && rows[i]) rows[i][field] = val;   // no re-render -> keeps input focus
+}
+
+function addLaborRow() {
+  (laborData[asmActiveKind] ||= []).push(laborBlankRow());
+  renderLaborTable();
+}
+
+function rmLaborRow(i) {
+  const rows = laborData[asmActiveKind];
+  if (!rows) return;
+  rows.splice(i, 1);
+  if (!rows.length) rows.push(laborBlankRow());
+  renderLaborTable();
+}
+
 function switchAsmKind(k) {
   asmActiveKind = k;
   renderAsmTabs();
   renderAsmTable();
+  renderLaborTable();
 }
 
 async function saveAssembly() {
@@ -1012,6 +1087,22 @@ async function saveAssembly() {
     if (rows.length) clean[k] = rows;
   }
 
+  const cleanLabor = {};
+  for (const k of asmKinds) {
+    const rows = (laborData[k] || []).filter(laborRowFilled).map(r => {
+      const perRunFt = !!r.per_run_ft;
+      const q = parseFloat(r.qty);
+      return {
+        task_name:  (r.task_name || '').trim(),
+        hrs:        Number.isFinite(parseFloat(r.hrs)) ? parseFloat(r.hrs) : 0,
+        setup_hrs:  Number.isFinite(parseFloat(r.setup_hrs)) ? parseFloat(r.setup_hrs) : 0,
+        qty:        Number.isFinite(q) && q > 0 ? q : 1,
+        per_run_ft: perRunFt,
+      };
+    });
+    if (rows.length) cleanLabor[k] = rows;
+  }
+
   setStatus('asm-status', 'Saving…', 'running');
   try {
     const r = await fetch(`${base()}/api/projects`, {
@@ -1021,7 +1112,8 @@ async function saveAssembly() {
         action:     'save_device_assembly',
         project_id: parseInt(projId()),
         id:         asmDeviceId,
-        assembly:   clean
+        assembly:   clean,
+        labor:      cleanLabor
       })
     });
     const j = await r.json().catch(() => ({}));
@@ -1031,7 +1123,7 @@ async function saveAssembly() {
       return;
     }
     const dt = deviceTypes.find(d => d.id === asmDeviceId);
-    if (dt) dt.assembly = clean;
+    if (dt) { dt.assembly = clean; dt.labor = cleanLabor; }
     renderGrid(deviceTypes);
     setStatus('asm-status', '✓ Saved', 'ok');
     closeAssembly();

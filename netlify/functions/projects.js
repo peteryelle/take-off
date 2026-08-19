@@ -232,14 +232,17 @@ export default async function handler(req) {
 
     // ── Action: save device assembly (jsonb on device_types) ────
     if (action === "save_device_assembly") {
-      const { project_id, id, assembly } = body;
+      const { project_id, id, assembly, labor } = body;
       if (!project_id || !id) return err("project_id and id required");
       if (!(await assertProjectInOrg(supabase, project_id, orgId)))
         return err("Project not found in your organization", 404);
 
+      const patch = { assembly: assembly ?? {}, updated_at: new Date() };
+      if (labor !== undefined) patch.labor = labor ?? {};   // optional — callers that only touch material don't need to send it
+
       const { error } = await supabase
         .from("device_types")
-        .update({ assembly: assembly ?? {}, updated_at: new Date() })
+        .update(patch)
         .eq("id", id)
         .eq("project_id", project_id);
 
