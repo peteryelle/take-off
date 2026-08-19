@@ -1028,6 +1028,13 @@ function laborRoles() {
     const r = t.device_role || 'Other / Uncategorized';
     counts.set(r, (counts.get(r) || 0) + 1);
   }
+  // Pull in any role that exists on the parts catalog but has no labor_tasks
+  // rows yet (e.g. Pigtail/Patch) — keeps Labor's Role list a superset match
+  // of Assembly's, so a role is pickable here even before hours exist for it.
+  for (const p of catalogParts) {
+    const r = p.device_role || 'Other / Uncategorized';
+    if (!counts.has(r)) counts.set(r, 0);
+  }
   return [...counts.entries()].sort((a, b) => b[1] - a[1]);
 }
 function laborFilteredTasks(role, q) {
