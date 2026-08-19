@@ -59,7 +59,7 @@ export default async function handler(req) {
     .from("wall_calibrations").select("id").eq("project_id", project_id).maybeSingle();
 
   const row = {
-    page_id, project_id,
+    page_id, project_id, org_id: orgId,
     wall_calibration_id: calib?.id ?? null,
     walls, doors: doors ?? [], tray: tray ?? [],
     extracted_at: new Date().toISOString(),

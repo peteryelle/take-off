@@ -137,6 +137,7 @@ export default async function handler(req) {
 
   const row = {
     project_id,
+    org_id: orgId,
     stroke_color: winner.color,
     stroke_width: winner.width,
     score: winner.score,
