@@ -1663,6 +1663,7 @@ async function confirmWallCalibrationUI() {
     if (failed.length) console.warn('Geometry persist failures:', failed);
 
     document.getElementById('test-route-section').style.display = 'block';
+    ensureTestRouteCanvasReady().catch((e) => console.warn('Test-route canvas pre-render failed:', e.message));
   } catch (e) {
     setStatus('wallcal-persist-status', 'Confirm/persist error: ' + e.message, 'err');
   }
@@ -1694,7 +1695,19 @@ const TEST_ROUTE_SCALE = 1.5;
 function setTestRouteMode(mode) {
   testRouteMode = mode;
   document.getElementById('test-route-status').textContent =
-    mode === 'tr' ? 'Click the TR location on the page below.' : 'Click the device location on the page below.';
+    mode === 'tr' ? 'Loading page…' : 'Loading page…';
+  // Canvas render + click handler were previously only attached inside
+  // computeTestRoute(), which the user can't reach before placing points —
+  // a chicken-and-egg bug (clicking "1. Click TR point" set the mode, but
+  // the canvas had no click handler yet, so clicking on it did nothing).
+  // Ensuring readiness here means the canvas is live the moment either mode
+  // button is clicked, before the user ever touches the canvas itself.
+  ensureTestRouteCanvasReady().then(() => {
+    document.getElementById('test-route-status').textContent =
+      mode === 'tr' ? 'Click the TR location on the page below.' : 'Click the device location on the page below.';
+  }).catch((e) => {
+    document.getElementById('test-route-status').textContent = 'Error loading page: ' + e.message;
+  });
 }
 
 function clearTestRoute() {

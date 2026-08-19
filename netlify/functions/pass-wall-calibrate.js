@@ -63,7 +63,18 @@ export default async function handler(req) {
     return err("Project not found in your organization", 404);
 
   // ── action: 'confirm' ────────────────────────────────────────
+  // Idempotent: if the row is already 'confirmed' (e.g. a second click after
+  // the first one already succeeded), return the current row instead of
+  // erroring. The .eq('status','suggested') filter matching zero rows on a
+  // re-click is exactly what produced "Cannot coerce the result to a single
+  // JSON object" in testing — confirmed live, not guessed.
   if (action === "confirm") {
+    const { data: existing, error: exErr } = await supabase
+      .from("wall_calibrations").select("*").eq("project_id", project_id).maybeSingle();
+    if (exErr) return err(exErr.message, 500);
+    if (!existing) return err("No calibration to confirm", 404);
+    if (existing.status === "confirmed") return ok(existing); // already done — not an error
+
     const { data, error } = await supabase
       .from("wall_calibrations")
       .update({ status: "confirmed", confirmed_at: new Date().toISOString() })
