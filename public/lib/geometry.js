@@ -112,33 +112,72 @@ export async function extractFilledSubpaths(page, OPS) {
  * untouched — no existing consumer or gate sees a behavior change from adding
  * this function.
  *
+ * stroke_rgb / line_width (added for wall/door/tray extraction — see
+ * wall-calibration.js): stroke-only subpaths previously carried fill_rgb set
+ * to whatever fill color happened to be active, which is meaningless for a
+ * stroke. Real stroke color and line width are now tracked from
+ * setStrokeRGBColor/setStrokeGray/setStrokeCMYKColor and setLineWidth, and
+ * carried on every subpath alongside fill_rgb. filled:true subpaths still
+ * carry fill_rgb as the meaningful color, same as before; filled:false
+ * subpaths should be read via stroke_rgb/line_width instead.
+ *
+ * Scope note: CTM, stroke color, and line width are saved/restored on q/Q
+ * (OPS.save/restore) since PDF graphics state includes all three. fill_rgb's
+ * save/restore behavior is intentionally left exactly as it was before this
+ * change (not pushed/popped) — existing symbol-detection consumers
+ * (extractFilledSubpaths) depend on that exact behavior today, and changing
+ * it is out of scope here.
+ *
  * @param {Object} page  an opened pdf.js page (has getOperatorList())
  * @param {Object} OPS   that runtime's pdfjsLib.OPS table
- * @returns {Promise<Array>} [{ points:[[x,y]...], closed:true, filled:bool, fill_rgb:[r,g,b] }]
+ * @returns {Promise<Array>} [{ points:[[x,y]...], closed:true, filled:bool,
+ *   fill_rgb:[r,g,b], stroke_rgb:[r,g,b], line_width:number }]
  */
 export async function extractSubpaths(page, OPS) {
   const { fnArray, argsArray } = await page.getOperatorList();
   let ctm = [1, 0, 0, 1, 0, 0];
   const stack = [];
   let fill = [0, 0, 0];
+  let stroke = [0, 0, 0];
+  let lineWidth = 1;
   let cur = [];
   let pt = null;
   const out = [];
   const startSub = (x, y) => { cur.push({ points: [[x, y]] }); pt = [x, y]; };
   const lineTo = (x, y) => { if (!cur.length) startSub(x, y); else { cur[cur.length - 1].points.push([x, y]); pt = [x, y]; } };
+  // Line width is specified in user-space units and scales with whatever CTM
+  // is active at stroke time — same as point coordinates do via applyM. Using
+  // the raw setLineWidth value directly (no scaling) was wrong: content drawn
+  // inside a scaled nested transform (a block/symbol placed at a different
+  // scale than the page's base content) would report a line width off by
+  // that transform's scale factor, which silently fragments what should be
+  // one consistent wall/tray signature into multiple apparent widths.
+  // Approximated here as sqrt(|det(ctm)|) — the standard linear-scale
+  // approximation for a possibly-non-uniform affine transform; exact for the
+  // uniform-scale case, which is what page content transforms are in practice.
+  const ctmScale = () => Math.sqrt(Math.abs(ctm[0] * ctm[3] - ctm[1] * ctm[2]));
   const flush = (f) => {
-    for (const sp of cur) if (sp.points.length >= 2) out.push({ points: sp.points, closed: true, filled: f, fill_rgb: fill.slice() });
+    const scaledWidth = lineWidth * ctmScale();
+    for (const sp of cur) if (sp.points.length >= 2) out.push({
+      points: sp.points, closed: true, filled: f,
+      fill_rgb: fill.slice(), stroke_rgb: stroke.slice(), line_width: scaledWidth,
+    });
     cur = []; pt = null;
   };
+
   for (let i = 0; i < fnArray.length; i++) {
     const fn = fnArray[i], a = argsArray[i];
     switch (fn) {
-      case OPS.save: stack.push(ctm.slice()); break;
-      case OPS.restore: if (stack.length) ctm = stack.pop(); break;
+      case OPS.save: stack.push({ ctm: ctm.slice(), stroke: stroke.slice(), lineWidth }); break;
+      case OPS.restore: if (stack.length) { const s = stack.pop(); ctm = s.ctm; stroke = s.stroke; lineWidth = s.lineWidth; } break;
       case OPS.transform: ctm = mulM(ctm, [a[0], a[1], a[2], a[3], a[4], a[5]]); break;
       case OPS.setFillRGBColor: fill = [a[0], a[1], a[2]]; break;
       case OPS.setFillGray: fill = [Math.round(a[0] * 255), Math.round(a[0] * 255), Math.round(a[0] * 255)]; break;
       case OPS.setFillCMYKColor: { const [c, m, y, k] = a; fill = [255 * (1 - c) * (1 - k), 255 * (1 - m) * (1 - k), 255 * (1 - y) * (1 - k)].map(Math.round); break; }
+      case OPS.setStrokeRGBColor: stroke = [a[0], a[1], a[2]]; break;
+      case OPS.setStrokeGray: stroke = [Math.round(a[0] * 255), Math.round(a[0] * 255), Math.round(a[0] * 255)]; break;
+      case OPS.setStrokeCMYKColor: { const [c, m, y, k] = a; stroke = [255 * (1 - c) * (1 - k), 255 * (1 - m) * (1 - k), 255 * (1 - y) * (1 - k)].map(Math.round); break; }
+      case OPS.setLineWidth: lineWidth = a[0]; break;
       case OPS.constructPath: {
         const ops = a[0], co = a[1]; let j = 0;
         for (const op of ops) {
@@ -159,6 +198,19 @@ export async function extractSubpaths(page, OPS) {
     }
   }
   return out;
+}
+
+/**
+ * Stroke-only subpaths from extractSubpaths — the input wall-calibration.js
+ * and wall-aware-path.js need. Mirrors extractFilledSubpaths's shape (a
+ * one-line filter, same as that function), just the opposite half.
+ *
+ * @param {Object} page
+ * @param {Object} OPS
+ * @returns {Promise<Array>} subpaths with filled:false, keyed by stroke_rgb/line_width
+ */
+export async function extractStrokeSubpaths(page, OPS) {
+  return (await extractSubpaths(page, OPS)).filter((s) => !s.filled);
 }
 
 /** Keep sub-paths whose fill colour is within `tol` (per channel) of `target` [r,g,b]. */
