@@ -604,7 +604,8 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
   </div>
   <div style="color:#40c0f0; font-size:11px; margin-top:2px;">● waypoint · hover a device star to highlight its routed path</div>
   <div id="conf-path-legend" style="font-size:11px; margin-top:2px; display:none;">
-    <span style="color:#888;">path confidence (waypoint coverage):</span>
+    <span style="color:#4da3ff;"> ── Tier 3 (wall-aware, persisted route)</span>
+    <span style="color:#888;"> · Tier 1 path confidence (waypoint coverage):</span>
     <span style="color:#40f0a0;"> ── high (2+ waypoints)</span>
     <span style="color:#f0c040;"> ── medium (1 waypoint)</span>
     <span style="color:#f07a7a;"> ── low (straight line only)</span>
@@ -4446,6 +4447,7 @@ let confPendingAddXY = null; // {x,y} identity-frame coords awaiting a type choi
 let confWaypoints = [], confDemarcs = {};   // for routed-path visualization on hover
 let confShowAllPaths = false;               // path-confidence layer toggle
 let confZoom = 1, confPanX = 0, confPanY = 0, confDrag = null, confCW = 0, confCH = 0;
+let confPageWidthPts = 0, confPageHeightPts = 0;   // raw PDF point-space page size — see openConfidenceModal
 
 const CONF_COLOR = { high: '#7af07a', medium: '#f0c040', low: '#f07a7a' };
 
@@ -4514,7 +4516,9 @@ function confRedraw() {
     star.style.top  = pos.y + 'px';
     if (!culled) {
       star.onmouseenter = () => {
-        const routeNote = d.routed_via_waypoints?.length ? `  ·  via ${d.routed_via_waypoints.length} waypoint(s)` : '';
+        const routeNote = d.routed_via_tier3
+          ? `  ·  Tier 3 (wall-aware, ${d.route_geometry?.length ?? '?'} pts)`
+          : d.routed_via_waypoints?.length ? `  ·  via ${d.routed_via_waypoints.length} waypoint(s)` : '';
         const cullNote = armed ? '  ·  click again to exclude' : '  ·  click to exclude';
         document.getElementById('conf-hover-info').textContent =
           `${d.name ?? d.type ?? '—'}  ·  ${(d.raw_labels ?? []).join(' · ')}  ·  confidence: ${d.confidence ?? '—'}${routeNote}${cullNote}`;
@@ -4913,17 +4917,38 @@ async function rerunPageAfterManualAdd(pageNum) {
   }
 }
 
-// Draw the device's routed path (device -> waypoints -> demarc) as an SVG polyline,
-// recomputed live via the SAME pure buildGreedyPath the server uses — nothing here is
-// persisted; it's fully derivable from data already on hand (device xy, waypoint pool,
-// demarc xy), consistent with why routed_via_waypoints isn't persisted server-side either.
+// Draw the device's routed path as an SVG polyline. Two sources, depending on
+// how this device was actually routed (see routed_via_tier3 on the persisted
+// row):
+//   - Tier 3: use the PERSISTED route_geometry directly — the real wall-aware
+//     path pass-batch.js computed and saved, not a live recompute. This was
+//     previously always recomputed via buildGreedyPath regardless of which
+//     tier actually routed the device, which meant this view could never show
+//     a Tier 3 route even when one existed — every path looked like Tier 1
+//     because it WAS Tier 1, freshly recomputed, no matter what actually ran
+//     server-side. Confirmed on real data: a project with 75/75 devices
+//     routed via Tier 3 in the database still rendered 75 straight Tier-1
+//     lines here, because this function never looked at the persisted result.
+//   - Tier 1 (or no persisted route yet): recompute live via the same pure
+//     buildGreedyPath the server uses — unchanged from before, since Tier 1
+//     routes were never persisted in the first place (deliberately ephemeral,
+//     see waypoint-path.js's own header).
 function computeDevicePath(d) {
   const V = window.TakeoffVec;
-  if (!V?.buildGreedyPath || !d.demarc_id) return null;
+  if (!d.demarc_id) return null;
   const demarc = confDemarcs[d.demarc_id];
   if (!demarc || demarc.x_norm == null || demarc.y_norm == null) return null;
-
   const identityBbox = { xmin_frac: 0, ymin_frac: 0, w_frac: 1, h_frac: 1 };
+
+  if (d.routed_via_tier3 && Array.isArray(d.route_geometry) && d.route_geometry.length >= 2 && confPageWidthPts && confPageHeightPts) {
+    const points = d.route_geometry.map(([px, py]) => {
+      const p = normToCanvasXY(px / confPageWidthPts, py / confPageHeightPts, identityBbox, confCW, confCH);
+      return [p.x, p.y];
+    });
+    return { points, tier: 'tier3' };
+  }
+
+  if (!V?.buildGreedyPath) return null;
   const devPos    = normToCanvasXY(d.x_norm, d.y_norm, bboxForDevice(confPageNum, d), confCW, confCH);
   const demarcPos = normToCanvasXY(demarc.x_norm, demarc.y_norm, identityBbox, confCW, confCH);
   const wpPos     = confWaypoints.map(w => {
@@ -4938,7 +4963,7 @@ function computeDevicePath(d) {
   return { points: path.points, tier };
 }
 
-const PATH_TIER_COLOR = { high: '#40f0a0', medium: '#f0c040', low: '#f07a7a' };
+const PATH_TIER_COLOR = { high: '#40f0a0', medium: '#f0c040', low: '#f07a7a', tier3: '#4da3ff' };
 function svgPolyline(svg, points, color, width, opacity, dashed) {
   const ns = 'http://www.w3.org/2000/svg';
   const poly = document.createElementNS(ns, 'polyline');
@@ -5038,6 +5063,13 @@ async function openConfidenceModal(pageNum) {
   const pdfPage = await pdfDoc.getPage(pageNum);
   const vp = pdfPage.getViewport({ scale: 2.5 });
   confCW = vp.width; confCH = vp.height;
+  // Raw PDF point-space dimensions (scale:1) — needed to convert persisted
+  // route_geometry (stored in page-point space by wall-aware-path.js, same
+  // convention as pass-batch.js's deviceXY/demarcXY) back into the [0,1]
+  // identity-frame fractions normToCanvasXY expects. Separate from
+  // confCW/confCH, which are already scaled to the 2.5x render viewport.
+  const vp1 = pdfPage.getViewport({ scale: 1 });
+  confPageWidthPts = vp1.width; confPageHeightPts = vp1.height;
   await renderToCanvas(cv, pdfPage, vp);
   confZoom = Math.min((wrap.offsetWidth || window.innerWidth * 0.88) / vp.width, 1.0);
 
