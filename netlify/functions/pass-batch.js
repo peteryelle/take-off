@@ -15,6 +15,7 @@ import { requireOrg, assertProjectInOrg, assertPageInOrg } from "./utils/auth.js
 import { buildDeviceList } from "../../public/lib/pipeline.js";
 import { parseSchedule } from "../../public/lib/schedule.js";
 import { buildGreedyPath } from "../../public/lib/waypoint-path.js";
+import { buildPageRouter } from "../../public/lib/wall-aware-path.js";
 import { toIdentityXY } from "../../public/lib/frame.js";
 import { hasUsableScale, resolveTiaLimit } from "../../public/lib/pipeline-guards.js";
 
@@ -171,12 +172,78 @@ export default async function handler(req) {
       const dy = (cy - pin.y_norm) * (page_height_pts ?? 1);
       return Math.sqrt(dx * dx + dy * dy);
     }
-    // Routed distance in points: greedy-walks the shared waypoint pool, falling back to
-    // the exact euclidPts straight line whenever no waypoint is on the way (or none
-    // exist on the page at all) — see buildGreedyPath's header for the algorithm.
+
+    // ── Tier 3 (wall-aware) routing gate ────────────────────────────
+    // Confirmed per-project, geometry persisted per-page — both required.
+    // Neither loads a PDF here; wall-aware-path.js has zero DOM/PDF
+    // dependency by design (proven by running it headlessly against real
+    // drawings during development), and the geometry it needs was already
+    // extracted client-side and persisted via pass-wall-geometry.js at
+    // confirm time. If either check fails, or a specific device's route
+    // comes back unreachable (result.total_dist === null — e.g. an enclosed
+    // room with no detected door), this falls straight back to Tier 1
+    // (buildGreedyPath) for that device — same behavior as before this gate
+    // existed. A page can route to more than one TR (scopedPins/unscopedPins
+    // above already assume this), so the router is cached per demarc_id, not
+    // built once for the whole page — each distinct TR gets its own shared
+    // Dijkstra field, reused across every device that routes to it.
+    const { data: calib } = await supabase
+      .from("wall_calibrations").select("status").eq("project_id", project_id).maybeSingle();
+    const { data: pageGeom } = await supabase
+      .from("page_wall_geometry").select("walls, doors, tray").eq("page_id", page_id).maybeSingle();
+    const tier3Available = calib?.status === "confirmed" && !!pageGeom?.walls?.length;
+    const tier3RouterCache = new Map(); // demarc_id -> router (buildPageRouter result)
+    const tier3Bounds = { x0: 0, y0: 0, x1: page_width_pts ?? 1, y1: page_height_pts ?? 1 };
+
+    // TEMPORARY DIAGNOSTIC — remove once the tier3_count=0-on-real-batch-runs
+    // bug is confirmed fixed. Every precondition checks out true directly
+    // against the database (wall_calibrations.status='confirmed',
+    // page_wall_geometry has 1749 walls for this exact page_id, device_instances
+    // all get total_ft/demarc_id so routedPts() is definitely being called) —
+    // yet routed_via_tier3 is false for 100% of devices on two separate
+    // projects. This counts what actually happens inside routedPts() itself,
+    // per call, so the next real batch run's response says definitively which
+    // of the three possible failure points it is: tier3Available false,
+    // getTier3Router returning null, or routeDevice() always unreachable.
+    const tier3Debug = {
+      calibStatus: calib?.status ?? null,
+      pageGeomFound: !!pageGeom,
+      pageGeomWallCount: pageGeom?.walls?.length ?? 0,
+      tier3Available,
+      project_id, page_id,
+      routerBuiltCount: 0, routerNullCount: 0,
+      tier3SuccessCount: 0, tier3UnreachableCount: 0, tier1FallbackCount: 0,
+    };
+
+    function getTier3Router(pin) {
+      const key = pin.demarc_id ?? `${pin.x_norm},${pin.y_norm}`;
+      if (tier3RouterCache.has(key)) return tier3RouterCache.get(key);
+      const demarcXY = [pin.x_norm * (page_width_pts ?? 1), pin.y_norm * (page_height_pts ?? 1)];
+      const router = buildPageRouter(demarcXY, pageGeom, tier3Bounds);
+      if (router) tier3Debug.routerBuiltCount++; else tier3Debug.routerNullCount++;
+      tier3RouterCache.set(key, router);
+      return router;
+    }
+
+    // Routed distance in points: Tier 3 (wall-aware grid + Dijkstra) if
+    // available and this device is reachable through it; otherwise Tier 1
+    // (greedy-walks the shared waypoint pool, falling back to the exact
+    // euclidPts straight line whenever no waypoint is on the way) — see
+    // buildGreedyPath's header for that algorithm. Either way the return
+    // shape is identical ({points, legs, total_dist, waypoint_ids_used}),
+    // so nothing downstream of this function needs to know which tier ran.
     function routedPts(cx, cy, pin) {
       const deviceXY = [cx * (page_width_pts ?? 1), cy * (page_height_pts ?? 1)];
       const demarcXY = [pin.x_norm * (page_width_pts ?? 1), pin.y_norm * (page_height_pts ?? 1)];
+      if (tier3Available) {
+        const router = getTier3Router(pin);
+        if (router) {
+          const result = router.routeDevice(deviceXY);
+          if (result.total_dist !== null) { tier3Debug.tier3SuccessCount++; return { ...result, _tier3: true }; }
+          tier3Debug.tier3UnreachableCount++;
+        }
+      }
+      tier3Debug.tier1FallbackCount++;
       return buildGreedyPath(deviceXY, waypointsPts, demarcXY);
     }
     function inBox(b, x, y) { return x >= b.x0 && x <= b.x1 && y >= b.y0 && y <= b.y1; }
@@ -399,7 +466,7 @@ export default async function handler(req) {
       const yFt = hasXY && ptsPerFt && page_height_pts ? parseFloat((cy * page_height_pts / ptsPerFt).toFixed(1)) : null;
 
       let demarcId = null, runLengthFt = null, totalFt = null, tiaFlag = false, tiaReason = null, outOfScope = false;
-      let routedViaWaypoints = null;
+      let routedViaWaypoints = null, routeGeometry = null, routedViaTier3 = false;
       if (hasXY) {
         const pin = assignPin(cx, cy);
         demarcId  = pin?.demarc_id ?? null;
@@ -408,6 +475,8 @@ export default async function handler(req) {
           const routed  = routedPts(cx, cy, pin);
           const distPts = routed.total_dist ?? euclidPts(cx, cy, pin);   // defensive: never lose a distance to a malformed route
           if (routed.waypoint_ids_used?.length) routedViaWaypoints = routed.waypoint_ids_used;
+          routedViaTier3 = !!routed._tier3;
+          routeGeometry  = routed.points?.length ? routed.points : null;
           runLengthFt = parseFloat((distPts * ROUTE_FACTOR / ptsPerFt).toFixed(1));
           totalFt     = parseFloat((runLengthFt + (pin.stub_ft ?? 0)).toFixed(1));
           // See public/lib/pipeline-guards.js for the (now fixture-tested) resolver.
@@ -435,6 +504,7 @@ export default async function handler(req) {
           data_ports: ports.data_ports, voice_ports: ports.voice_ports, node_labels: ports.node_labels,
           port_count_data: ports.port_count_data, port_count_voice: ports.port_count_voice,
           demarc_id: demarcId, run_length_ft: runLengthFt, total_ft: totalFt,
+          route_geometry: routeGeometry, routed_via_tier3: routedViaTier3,
           tia_flag: tiaFlag, tia_reason: tiaReason, confidence: dev.confidence,
           xy_source: dev.xy_source ?? null,
           symbol_via: dev.symbol_via ?? null,
@@ -473,6 +543,7 @@ export default async function handler(req) {
       leader_overrides: leaderOv,   // effective marks (body or persisted) so the UI can pre-fill
       tia_violations: instances.filter((x) => x.row.tia_flag).length,
       max_run_ft: Math.max(0, ...instances.map((x) => x.row.total_ft ?? 0)) || null,
+      _tier3_debug: tier3Debug,  // TEMPORARY — see comment at tier3Debug's declaration
       devices: instances.map((x, j) => ({
         id: inserted?.[j]?.id, device_type_id: x.dt.id ?? null,
         uin: x.dev.uin, type: x.dev.type, legend_id: x.dt.legend_id ?? null, name: x.dt.name ?? x.dev.type,
@@ -489,6 +560,7 @@ export default async function handler(req) {
         // session recomputes it client-side via buildGreedyPath rather than storing
         // redundant derived state.
         routed_via_waypoints: x.routed_via_waypoints,
+        routed_via_tier3: x.row.routed_via_tier3, route_geometry: x.row.route_geometry,
         raw_labels: x.row.raw_labels,
         sources: x.dev.sources, confidence: x.dev.confidence, flags: x.row.flags, attributes: x.dev.attributes,
         total_ft: x.row.total_ft, tia_flag: x.row.tia_flag, tia_reason: x.row.tia_reason, demarc_id: x.row.demarc_id
