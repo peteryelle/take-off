@@ -9,7 +9,7 @@
 import fs   from "fs";
 import path from "path";
 
-const BASE_URL   = "https://winquest-take-off.netlify.app";
+const BASE_URL   = process.env.BASE_URL || "http://localhost:8888";
 const PROJECT_ID = 4;  // your test project
 
 const [,, legendPath, floorplanPath] = process.argv;

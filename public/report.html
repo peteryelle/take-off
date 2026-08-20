@@ -147,8 +147,6 @@ tr:hover td { background: #131313; }
 
 <!-- ── Config bar ── -->
 <div class="config-bar">
-  <label>Netlify URL</label>
-  <input type="text" id="netlify-url" value="https://winquest-take-off.netlify.app">
   <label>Project ID</label>
   <input type="text" id="project-id" placeholder="e.g. 12" style="width:80px;">
   <button onclick="loadReport()">↓ Load</button>
@@ -181,7 +179,7 @@ function formatMoney(n) {
   return n == null ? '—' : n.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 }
 
-function base()  { return document.getElementById('netlify-url').value.replace(/\/$/, ''); }
+function base()  { return window.location.origin; }
 function projId(){ return document.getElementById('project-id').value.trim(); }
 
 function setStatus(msg, type = '') {
@@ -486,8 +484,6 @@ window.exportLaborCsv = function exportLaborCsv() {
   const pid = params.get('project_id') ?? sessionStorage.getItem('to_project_id') ?? '';
   if (pid) {
     document.getElementById('project-id').value = pid;
-    const nurl = sessionStorage.getItem('to_netlify_url');
-    if (nurl) document.getElementById('netlify-url').value = nurl;
     loadReport();
   }
 })();

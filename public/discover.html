@@ -151,8 +151,6 @@ button.lg { padding:8px 20px; font-size:13px; }
 </div>
 
 <div class="config-bar">
-  <label>Netlify URL</label>
-  <input type="text" id="netlify-url" value="https://winquest-take-off.netlify.app" style="width:260px">
   <label>Project ID</label>
   <input type="number" id="project-id" placeholder="4" style="width:65px">
 </div>
@@ -357,7 +355,7 @@ button.lg { padding:8px 20px; font-size:13px; }
 <script>
 // ── State ─────────────────────────────────────────────────────────
 const S = {
-  baseUrl:   'https://winquest-take-off.netlify.app',
+  baseUrl:   window.location.origin,
   projectId: null,
   pdf:       null,
   pageCount: 0,
@@ -382,11 +380,9 @@ const SYMBOL_MIN_SAMPLES = 3;
   const p=new URLSearchParams(window.location.search);
   const pid=p.get('project_id')||sessionStorage.getItem('to_project_id');
   if (pid) { document.getElementById('project-id').value=pid; S.projectId=parseInt(pid); }
-  const nu=sessionStorage.getItem('to_netlify_url');
-  if (nu)  { document.getElementById('netlify-url').value=nu; S.baseUrl=nu; }
 })();
 
-function base()    { return document.getElementById('netlify-url').value.replace(/\/$/,''); }
+function base()    { return window.location.origin; }
 function projId()  { return parseInt(document.getElementById('project-id').value)||0; }
 function setStatus(id,msg,cls='') { const e=document.getElementById(id); if(!e) return; e.textContent=msg; e.className='status '+cls; }
 function showPhase(p) { document.querySelectorAll('.phase').forEach(el=>el.classList.remove('active')); document.getElementById('phase-'+p).classList.add('active'); }
@@ -954,7 +950,6 @@ function showComplete() {
 
 function continuePipeline() {
   sessionStorage.setItem('to_project_id',S.projectId);
-  sessionStorage.setItem('to_netlify_url',S.baseUrl);
   window.location.href=`multi-page.html?project_id=${S.projectId}`;
 }
 

@@ -121,8 +121,6 @@ label { color: #888; font-size: 12px; display: block; margin-bottom: 3px; }
 <div class="header">
   <h1>⚡ Take-off</h1>
   <div class="sub">Project Manager</div>
-  <label style="color:#555; font-size:11px; margin:0;">Netlify URL</label>
-  <input type="text" id="netlify-url" value="https://winquest-take-off.netlify.app" style="width:300px;">
   <button class="info" onclick="loadCatalogs().then(loadProjects)">↻ Refresh</button>
 </div>
 <nav id="to-nav"></nav>
@@ -209,7 +207,7 @@ let deleteTarget  = null;
 let deleteStage   = 1;
 let deleteName    = '';
 
-function base() { return document.getElementById('netlify-url').value.replace(/\/$/, ''); }
+function base() { return window.location.origin; }
 
 function setStatus(id, msg, cls='') {
   const el = document.getElementById(id);
@@ -392,7 +390,6 @@ async function createProject() {
 
     // Save to localStorage and open
     localStorage.setItem('mp_project_id',  j.id);
-    localStorage.setItem('mp_netlify_url', base());
     await loadProjects();
     selectProject(j.id);
   } catch(e) { setStatus('create-status', 'Error: ' + e.message, 'err'); }
@@ -424,14 +421,12 @@ async function saveProjectEdits() {
 // ── Open project in take-off (multi-page) ──────────────────────────
 function openMultiPage(id) {
   localStorage.setItem('mp_project_id',  id);
-  localStorage.setItem('mp_netlify_url', base());
   localStorage.setItem('mp_origin', 'multi-page.html');
   window.location.href = `multi-page.html?project_id=${id}`;
 }
 
 function openDiscover(id) {
   localStorage.setItem('mp_project_id',  id);
-  localStorage.setItem('mp_netlify_url', base());
   sessionStorage.setItem('to_project_id', id);
   window.location.href = `discover.html?project_id=${id}`;
 }
@@ -506,8 +501,6 @@ async function confirmDelete() {
 
 // ── Init ──────────────────────────────────────────────────────────
 (async function init() {
-  const stored = localStorage.getItem('mp_netlify_url');
-  if (stored) document.getElementById('netlify-url').value = stored;
   await loadCatalogs();   // must resolve before loadProjects renders cards, so the picker isn't empty on first paint
   loadProjects();
 })();

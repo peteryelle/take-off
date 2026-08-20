@@ -142,8 +142,7 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
 <div class="section">
   <div class="section-title">1 · Project</div>
 
-  <!-- hidden fields still needed for base() -->
-  <input type="hidden" id="netlify-url" value="https://winquest-take-off.netlify.app">
+  <!-- hidden field still needed for pid() -->
   <input type="hidden" id="project-id" value="">
 
   <!-- Project card -->
@@ -680,7 +679,7 @@ let batchResults = {};           // pageNum → result
 let batchPayloads = {};          // pageNum → the pass-batch body sent (for leader re-runs)
 let scopeRegions = {};           // page_id → [ {x0,y0,x1,y1} ] — mark-area distance scope
 
-function base() { return document.getElementById('netlify-url').value.replace(/\/$/, ''); }
+function base() { return window.location.origin; }
 function pid()  { return parseInt(document.getElementById('project-id').value.trim()); }
 function setStatus(id, msg, cls='') {
   const el = document.getElementById(id);
@@ -696,9 +695,6 @@ function setStatus(id, msg, cls='') {
   if (urlPid) localStorage.setItem('mp_project_id', urlPid);
 
   const stored = urlPid ?? localStorage.getItem('mp_project_id');
-  const nurl   = localStorage.getItem('mp_netlify_url');
-
-  if (nurl) document.getElementById('netlify-url').value = nurl;
 
   if (stored) {
     document.getElementById('project-id').value = stored;
@@ -993,7 +989,6 @@ async function confirmProject() {
     if (id) {
       projectId = parseInt(id);
       sessionStorage.setItem('to_project_id',  id);
-      localStorage.setItem('mp_netlify_url', base());
       setStatus('project-status', `✓ Project ${id} confirmed`, 'ok');
       document.getElementById('device-type-bar').style.display = 'block';
     } else {

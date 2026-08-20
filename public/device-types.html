@@ -283,8 +283,6 @@ button.kit:hover { background: #163138; }
 
 <!-- ── Config bar ── -->
 <div class="config-bar">
-  <label>Netlify URL</label>
-  <input type="text" id="netlify-url" value="https://winquest-take-off.netlify.app">
   <label>Project ID</label>
   <input type="text" id="project-id" placeholder="e.g. 42" style="width:80px;">
   <button class="info" onclick="loadDeviceTypes()">↓ Load</button>
@@ -496,7 +494,7 @@ let catalogId     = null;
 let editingId     = null;   // device_type DB id being edited
 let uploadedImages = [];    // [{ name, base64, thumb }]
 
-function base() { return document.getElementById('netlify-url').value.replace(/\/$/, ''); }
+function base() { return window.location.origin; }
 function projId() { return document.getElementById('project-id').value.trim(); }
 
 function setStatus(id, msg, type='') {
@@ -1625,8 +1623,6 @@ async function copyFromProject() {
 
   if (pid) {
     document.getElementById('project-id').value = pid;
-    const nurl = sessionStorage.getItem('to_netlify_url');
-    if (nurl) document.getElementById('netlify-url').value = nurl;
     updateBackLink(pid);
     loadDeviceTypes();
   }
