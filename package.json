@@ -13,9 +13,16 @@
   },
   "devDependencies": {
     "jest": "^30.4.2",
-    "pdfjs-dist": "3.11.174"
+    "pdfjs-dist": "3.11.174",
+    "netlify-cli": "27.1.2",
+    "supabase": "2.115.0"
   },
   "scripts": {
-    "test": "node --test 'tests/**/*.mjs'"
+    "test": "node --test 'tests/**/*.mjs'",
+    "dev": "netlify dev",
+    "db:start": "supabase start",
+    "db:stop": "supabase stop",
+    "db:reset": "supabase db reset",
+    "db:status": "supabase status"
   }
 }

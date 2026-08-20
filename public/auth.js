@@ -7,15 +7,24 @@
 //   2. Gate the page: if there is no session, redirect to login.html.
 //   3. On any 401 from the API, bounce to login.
 //
-// The anon key is public-safe (it only grants what RLS allows). Paste yours
-// from Supabase → Project Settings → API, or set window.SUPABASE_ANON_KEY
-// before this script loads.
+// The anon key is public-safe (it only grants what RLS allows) — it's set on
+// window by /config.js (netlify/functions/public-config.js), which reads the
+// SUPABASE_URL / SUPABASE_ANON_KEY env vars for the current deploy context, so
+// this file loads a different Supabase project locally, on a branch deploy, or
+// in production without ever hardcoding a project into the page. Load
+// /config.js before this script.
 (function () {
-  var SUPABASE_URL =
-    window.SUPABASE_URL || "https://lpjpqmpjxtwsnakcwqvb.supabase.co";
-  var SUPABASE_ANON_KEY =
-    window.SUPABASE_ANON_KEY ||
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxwanBxbXBqeHR3c25ha2N3cXZiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk0OTQ0NTYsImV4cCI6MjA5NTA3MDQ1Nn0.S5V56gAfQa4EN5KB89ThFohbOKy17sj4-u9lkPP1knQ";
+  var SUPABASE_URL = window.SUPABASE_URL;
+  var SUPABASE_ANON_KEY = window.SUPABASE_ANON_KEY;
+
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    console.error(
+      "[auth] window.SUPABASE_URL / SUPABASE_ANON_KEY are not set — " +
+      "make sure /config.js loads before auth.js and SUPABASE_URL / " +
+      "SUPABASE_ANON_KEY are set in the environment (see .env.example)."
+    );
+    return;
+  }
 
   if (!window.supabase || !window.supabase.createClient) {
     console.error("[auth] supabase-js must load before auth.js");

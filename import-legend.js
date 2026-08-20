@@ -6,12 +6,13 @@
 
 import { createClient } from "@supabase/supabase-js";
 
-const SUPABASE_URL      = "https://lpjpqmpjxtwsnakcwqvb.supabase.co";
+const SUPABASE_URL      = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY; // set in terminal before running
 const PROJECT_ID        = 1;
 
-if (!SUPABASE_SERVICE_KEY) {
-  console.error("ERROR: set SUPABASE_SERVICE_KEY env var before running");
+if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
+  console.error("ERROR: set SUPABASE_URL and SUPABASE_SERVICE_KEY env vars before running");
+  console.error("  export SUPABASE_URL=https://<project-ref>.supabase.co");
   console.error("  export SUPABASE_SERVICE_KEY=your_service_role_key_here");
   process.exit(1);
 }

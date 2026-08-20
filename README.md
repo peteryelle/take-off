@@ -1,5 +1,9 @@
 # Take-Off
 
+> **For local development setup, see [DEVELOPER.md](DEVELOPER.md).** The rest of this file
+> predates the current Netlify Functions + Supabase architecture and is out of date (it describes
+> opening `index.html` directly / a Python static server — that's no longer how this app runs).
+
 A schematic drawing take-off application for efficient material estimation and quantity extraction from architectural and construction drawings.
 
 ## Overview
