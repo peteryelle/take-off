@@ -6,8 +6,8 @@
 // neighborhood + stitching pattern (real lines can be drawn as many short
 // disconnected segments too, not one continuous stroke), fitted via 2D total-
 // least-squares instead of a circle fit.
-import { isLineLike, findLineThroughCenter, stitchSegments } from './public/lib/geometry.js';
-import { blobsToInstances } from './public/lib/locate.js';
+import { isLineLike, findLineThroughCenter, stitchSegments } from '../public/lib/geometry.js';
+import { blobsToInstances } from '../public/lib/locate.js';
 
 let fail = 0; const A = (c, m) => { console.log((c ? '  PASS ' : '  FAIL ') + m); if (!c) fail++; };
 

@@ -8,7 +8,7 @@
 // device_types row, so those candidates' device_type_id always came back null.
 // Confirmed on a real project: 28 WAP candidates persisted with device_type_id
 // null before this fix.
-import { buildDeviceList } from './public/lib/pipeline.js';
+import { buildDeviceList } from '../public/lib/pipeline.js';
 let fail = 0; const A = (c,m)=>{ console.log((c?'  PASS ':'  FAIL ')+m); if(!c) fail++; };
 
 const tmpl = { single_type: 'WIRELESS ACCESS POINT', fill_rgb:[127,127,127], fill_tol:48, body_area:2e-5 };

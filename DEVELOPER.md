@@ -76,6 +76,11 @@ http://localhost:8888
 
 That is all you need for normal frontend, Netlify Function, and application development.
 
+Sign in with these test credentials that are created by `/sql/seed.sql` 
+```text
+email:    dev@example.com
+password: devpassword123
+```
 ---
 
 # Fully local database setup

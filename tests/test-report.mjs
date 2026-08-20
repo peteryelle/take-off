@@ -15,7 +15,7 @@
 //      that does not apply when reading device_instances directly.
 //
 // Run from repo root:  node test-report.mjs
-import { aggregateBom } from './public/lib/bom.js';
+import { aggregateBom } from '../public/lib/bom.js';
 
 let fails = 0;
 const eq = (got, want, msg) => {

@@ -5,7 +5,7 @@
 // landed on identical coordinates). The content-bbox offset alone
 // (this project's real page: xmin_frac 0.0321, ymin_frac 0.028) exceeded the
 // per-device cull box's own half-width (0.012), guaranteeing a miss.
-import { usesIdentityFrame, toIdentityXY } from './public/lib/frame.js';
+import { usesIdentityFrame, toIdentityXY } from '../public/lib/frame.js';
 
 let fail = 0; const A = (c, m) => { console.log((c ? '  PASS ' : '  FAIL ') + m); if (!c) fail++; };
 

@@ -6,8 +6,8 @@
 // counted as WAP. A candidate with no matching encircling ring is dropped
 // outright — the ring's absence is decisive negative evidence for this glyph
 // family, not an ambiguous case needing a flag.
-import { isCircleLike, findEncirclingRing, stitchSegments } from './public/lib/geometry.js';
-import { blobsToInstances } from './public/lib/locate.js';
+import { isCircleLike, findEncirclingRing, stitchSegments } from '../public/lib/geometry.js';
+import { blobsToInstances } from '../public/lib/locate.js';
 
 let fail = 0; const A = (c, m) => { console.log((c ? '  PASS ' : '  FAIL ') + m); if (!c) fail++; };
 

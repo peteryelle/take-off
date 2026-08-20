@@ -8,7 +8,7 @@
 // instead of shipping.
 //
 // Run from repo root:  node test-pipeline-guards.mjs
-import { hasUsableScale, resolveTiaLimit } from './public/lib/pipeline-guards.js';
+import { hasUsableScale, resolveTiaLimit } from '../public/lib/pipeline-guards.js';
 
 let fails = 0;
 const eq = (got, want, msg) => {

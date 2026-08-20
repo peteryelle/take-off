@@ -6,7 +6,7 @@
 // scoring, aggregation, POST body construction.
 import { createRequire } from "module";
 import { existsSync, readFileSync } from "node:fs";
-import { runWallCalibration, persistAllPageGeometry } from "./public/lib/wall-calibration-client.js";
+import { runWallCalibration, persistAllPageGeometry } from "../public/lib/wall-calibration-client.js";
 
 const require = createRequire(import.meta.url);
 const PDF_PATH = "/mnt/user-data/uploads/T1_1-BLDG-01-ZONE-A-F.pdf";

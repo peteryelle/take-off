@@ -1,6 +1,6 @@
 // test-labor.mjs — offline fixture gate for public/lib/labor.js
 // Run: node test-labor.mjs
-import { aggregateLaborHours } from './public/lib/labor.js';
+import { aggregateLaborHours } from '../public/lib/labor.js';
 
 let failures = 0;
 function check(label, cond) {

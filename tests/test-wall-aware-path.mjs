@@ -5,9 +5,9 @@
 // result: 186 devices, 0 unreachable, one shared Dijkstra pass.
 import { createRequire } from "module";
 import { existsSync, readFileSync } from "node:fs";
-import { extractStrokeSubpaths } from "./public/lib/geometry.js";
-import { scorePage, classifyGeometry } from "./public/lib/wall-calibration.js";
-import { buildPageRouter, buildWallAwarePath } from "./public/lib/wall-aware-path.js";
+import { extractStrokeSubpaths } from "../public/lib/geometry.js";
+import { scorePage, classifyGeometry } from "../public/lib/wall-calibration.js";
+import { buildPageRouter, buildWallAwarePath } from "../public/lib/wall-aware-path.js";
 
 const require = createRequire(import.meta.url);
 const PDF_PATH = "/mnt/user-data/uploads/T1_1_A-BLDG-01---LV-1---ZONE-A---NEW-WORK-Rev_0.pdf";

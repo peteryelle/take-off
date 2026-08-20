@@ -7,8 +7,8 @@
 // Setup (one-time): npm install pdfjs-dist@3.11.174 --no-save
 import { createRequire } from "module";
 import { existsSync } from "node:fs";
-import { extractStrokeSubpaths } from "./public/lib/geometry.js";
-import { scorePage, aggregateScores } from "./public/lib/wall-calibration.js";
+import { extractStrokeSubpaths } from "../public/lib/geometry.js";
+import { scorePage, aggregateScores } from "../public/lib/wall-calibration.js";
 
 const require = createRequire(import.meta.url);
 const PDF_PATH = "/mnt/user-data/uploads/T1_1-BLDG-01-ZONE-A-F.pdf";

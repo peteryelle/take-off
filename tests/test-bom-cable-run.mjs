@@ -2,7 +2,7 @@
 // scaling in public/lib/bom.js.
 //
 // Run from repo root:  node test-bom-cable-run.mjs
-import { expandInstance, aggregateBom } from './public/lib/bom.js';
+import { expandInstance, aggregateBom } from '../public/lib/bom.js';
 
 let fails = 0;
 const eq = (got, want, msg) => {
