@@ -546,8 +546,20 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
 <div id="conf-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.88);
      z-index:300; flex-direction:column; align-items:center; justify-content:center;">
   <div style="color:#f0c040; font-size:15px; font-weight:bold; margin-bottom:4px;" id="conf-title">Confidence Map</div>
+  <div style="color:#888; font-size:12px; margin-bottom:4px;" id="conf-tier-summary"></div>
   <div style="color:#aaa; font-size:13px; margin-bottom:8px;">
     Each star is a counted device · color = confidence · click a star to exclude it · click its number to isolate its path · ✕ = excluded · click empty space to add a missed device · filter by type to triage one device type at a time · hover for detail · scroll to zoom · drag to pan
+  </div>
+  <!-- ── Cable-length multiplier — human judgment call on run quality (predominantly
+       clean corridors vs. predominantly straight-line), applied after reviewing this
+       project's routed paths above. One value for the whole project — does not vary
+       by page. Also editable directly on the report. ── -->
+  <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:center;
+       margin-bottom:8px; padding:8px 12px; background:#1a1a1a; border:1px solid #333; border-radius:6px;">
+    <span style="color:#aaa; font-size:12px;">Cable-length multiplier (project-wide):</span>
+    <input id="conf-mult-input" type="number" step="0.01" min="0.01" style="width:70px; padding:3px 6px;">
+    <button onclick="saveLengthMultiplier()" style="padding:4px 12px; font-size:12px;">Save</button>
+    <span id="conf-mult-status" style="color:#888; font-size:11px;"></span>
   </div>
   <div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:8px; align-items:center; justify-content:center;">
     <button onclick="confZoomBtn(1.5)" style="padding:3px 12px;">＋</button>
@@ -673,6 +685,11 @@ pdfjsLib.GlobalWorkerOptions.workerSrc =
 
 // ── State ────────────────────────────────────────────────────────
 let projectId    = null;
+// Project-wide cable-length multiplier (projects.default_length_multiplier).
+// Single value for the whole project — does not vary by page. Set here in
+// the confidence map after reviewing route quality, or edited directly on
+// the report. See saveLengthMultiplier() / initLengthMultiplierControls().
+let projectDefaultMultiplier = 1.0;
 let pdfDoc       = null;
 let totalPages   = 0;
 let selectedPages = new Set();   // PDF page numbers
@@ -5121,8 +5138,58 @@ async function openConfidenceModal(pageNum) {
   document.getElementById('conf-hover-info').textContent = '';
   document.getElementById('conf-paths-toggle').textContent = confShowAllPaths ? '🔀 hide path confidence' : '🔀 show path confidence';
   document.getElementById('conf-path-legend').style.display = confShowAllPaths ? 'block' : 'none';
+
+  // Tier-mix summary — how many of this page's devices actually routed Tier 3
+  // (wall-aware) vs. Tier 1 (waypoint/straight-line) fallback. Informs the
+  // multiplier judgment call below: predominantly Tier 1 / straight-line runs
+  // are typically the ones that warrant a multiplier above 1.0.
+  const routedCount = confDevices.filter(d => d.x_norm != null).length;
+  const tier3Count  = confDevices.filter(d => d.routed_via_tier3).length;
+  document.getElementById('conf-tier-summary').textContent = routedCount
+    ? `Routing: ${tier3Count} of ${routedCount} devices via Tier 3 (wall-aware) · ${routedCount - tier3Count} via Tier 1`
+    : '';
+
+  initLengthMultiplierControls();
+
   document.getElementById('conf-modal').style.display = 'flex';
   confRedraw();
+}
+
+// Pre-fills the multiplier input with the current project-wide value.
+function initLengthMultiplierControls() {
+  document.getElementById('conf-mult-input').value = projectDefaultMultiplier;
+  document.getElementById('conf-mult-status').textContent = '';
+}
+
+// Persists the project-wide cable-length multiplier. One value for the whole
+// project — does not vary by page. Same action the report page's own
+// multiplier field uses, so either surface stays in sync.
+async function saveLengthMultiplier() {
+  const raw = document.getElementById('conf-mult-input').value;
+  const val = Number(raw);
+  const statusEl = document.getElementById('conf-mult-status');
+  if (!Number.isFinite(val) || val <= 0) {
+    statusEl.style.color = '#f07a7a';
+    statusEl.textContent = 'must be a positive number';
+    return;
+  }
+  if (!projectId) { statusEl.style.color = '#f07a7a'; statusEl.textContent = 'no project loaded'; return; }
+  statusEl.style.color = '#888';
+  statusEl.textContent = 'saving…';
+  try {
+    const r = await fetch(`${base()}/api/projects`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'update_project', project_id: projectId, default_length_multiplier: val })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || r.status);
+    projectDefaultMultiplier = val;
+    statusEl.style.color = '#7af07a';
+    statusEl.textContent = `saved (${val}×)`;
+  } catch (e) {
+    statusEl.style.color = '#f07a7a';
+    statusEl.textContent = `save failed: ${e.message}`;
+  }
 }
 
 function closeConfidenceModal() {
@@ -5441,6 +5508,7 @@ async function restoreFromSupabase(pid) {
 
     const projPages   = j.project_pages ?? [];
     const demarcs     = j.demarcs      ?? [];
+    projectDefaultMultiplier = j.default_length_multiplier ?? 1.0;
     const pageRegions = j.page_regions ?? [];   // schematics (page → 1+ regions)
     const regionById  = new Map(pageRegions.map(rg => [rg.id, rg]));
     // Distance-scope boxes, keyed by page_id (devices are scoped against these).

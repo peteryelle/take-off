@@ -174,6 +174,7 @@ import { aggregateLaborHours } from './lib/labor.js';
 // read the last-loaded report without recomputing it. Null until a report
 // has actually loaded once.
 let lastReport = null;
+let reportProjectId = null;   // set each loadReport() call — used by saveReportMultiplier()
 
 // $ formatting — material only. No labor cost/rate layer exists yet, so
 // every dollar figure on this page is material cost/sale, labeled as such.
@@ -235,6 +236,12 @@ window.loadReport = async function loadReport() {
   const demarcs = j.demarcs ?? [];
   const pages = j.pages ?? [];
 
+  // Project-wide cable-length multiplier — a human judgment call on route
+  // quality (corridor-following vs. straight-line), set here or in the
+  // confidence map. One value for the whole project — does not vary by page.
+  const lengthMultiplier = j.default_length_multiplier ?? 1.0;
+  reportProjectId = pid;   // for saveReportMultiplier() below
+
   // typesById keyed by the real numeric FK — device_instances.device_type_id
   // already matches device_types.id directly from the DB, so (unlike the live
   // batchResults path in multi-page.html, which has to key off legend_id/name
@@ -246,12 +253,18 @@ window.loadReport = async function loadReport() {
     device_type_id:  inst.device_type_id,
     raw_labels:      inst.raw_labels ?? [],
     removed_by_user: isCulled(inst),
-    total_ft:        inst.total_ft ?? null,
+    // Multiplier applied here — bom.js itself is untouched (keeps its own
+    // fixture gates valid); this is the ONLY place total_ft is adjusted for
+    // BOM math. Raw device_instances.total_ft in the DB is never overwritten.
+    total_ft: inst.total_ft != null ? inst.total_ft * lengthMultiplier : null,
   }));
 
   const activeInstances = rawInstances.filter(i => !isCulled(i));
   const tiaCount = activeInstances.filter(i => i.tia_flag).length;
   const culledCount = rawInstances.length - activeInstances.length;
+
+  // Raw (unmultiplied) footage total, for the multiplier detail line below.
+  const rawFtTotal = activeInstances.reduce((sum, i) => sum + (i.total_ft ?? 0), 0);
 
   const bom = aggregateBom(instances, typesById);
 
@@ -275,6 +288,7 @@ window.loadReport = async function loadReport() {
   html += statCard(culledCount, 'Culled', culledCount ? 'warn' : '');
   html += statCard(tiaCount, 'TIA Flags', tiaCount ? 'warn' : '');
   html += statCard(demarcs.length, 'Demarcs / TRs');
+  html += statCard(lengthMultiplier + '×', 'Cable-Length Multiplier', lengthMultiplier !== 1 ? 'warn' : '');
   html += statCard(bom.coverage.flagged_instances, 'Unmodeled', bom.coverage.flagged_instances ? 'warn' : '');
   html += statCard(bom.missing_distance.reduce((n, u) => n + u.instances, 0), 'No TR Distance', bom.missing_distance.length ? 'warn' : '');
   html += statCard(formatMoney(priced.totals.cost_total), 'Material Cost');
@@ -285,6 +299,23 @@ window.loadReport = async function loadReport() {
   if (!catalogId) {
     html += '<div class="empty" style="margin:-8px 0 16px;">No parts catalog assigned to this project — every line below is unpriced.</div>';
   }
+
+  // ── Cable-length multiplier — editable here or in the confidence map.
+  // One value for the whole project — does not vary by page. Applied to
+  // every per_run_ft BOM line above; raw measured footage shown for
+  // reference so the adjustment stays auditable.
+  html += `<div class="section"><div class="section-title">Cable-Length Multiplier</div>
+    <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:4px;">
+      <span style="color:#aaa; font-size:13px;">Multiplier:</span>
+      <input id="report-mult-input" type="number" step="0.01" min="0.01" value="${lengthMultiplier}" style="width:80px; padding:4px 6px;">
+      <button onclick="saveReportMultiplier()" style="padding:5px 14px; font-size:12px;">Save &amp; reload</button>
+      <span id="report-mult-status" style="color:#888; font-size:11px;"></span>
+    </div>
+    <div style="font-size:12px; color:#777;">
+      Raw measured footage: ${Math.round(rawFtTotal).toLocaleString('en-US')} ft · Adjusted (×${lengthMultiplier}): ${Math.round(rawFtTotal * lengthMultiplier).toLocaleString('en-US')} ft.
+      The Bill of Materials cable-footage figures below already reflect this multiplier.
+    </div>
+  </div>`;
 
   // ── Device counts by type ──
   const countsByType = new Map();
@@ -399,6 +430,36 @@ window.loadReport = async function loadReport() {
 
   document.getElementById('report-body').innerHTML = html;
   setStatus(`✓ Loaded — ${activeInstances.length} devices, ${bom.components.length} part line(s)`, 'ok');
+};
+
+// Persists the project-wide cable-length multiplier from the report page,
+// then reloads the report so the BOM/composite figures reflect it
+// immediately. Same field the confidence map's multiplier control writes —
+// one value for the whole project, does not vary by page.
+window.saveReportMultiplier = async function saveReportMultiplier() {
+  const statusEl = document.getElementById('report-mult-status');
+  const raw = document.getElementById('report-mult-input')?.value;
+  const val = Number(raw);
+  if (!Number.isFinite(val) || val <= 0) {
+    if (statusEl) { statusEl.style.color = '#f07a7a'; statusEl.textContent = 'must be a positive number'; }
+    return;
+  }
+  if (!reportProjectId) {
+    if (statusEl) { statusEl.style.color = '#f07a7a'; statusEl.textContent = 'no project loaded'; }
+    return;
+  }
+  if (statusEl) { statusEl.style.color = '#888'; statusEl.textContent = 'saving…'; }
+  try {
+    const r = await fetch(`${base()}/api/projects`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'update_project', project_id: reportProjectId, default_length_multiplier: val })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || r.status);
+    await loadReport();   // reload so BOM/composite reflect the new value immediately
+  } catch (e) {
+    if (statusEl) { statusEl.style.color = '#f07a7a'; statusEl.textContent = `save failed: ${e.message}`; }
+  }
 };
 
 function statCard(num, label, cls = '') {

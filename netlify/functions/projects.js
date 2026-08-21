@@ -28,7 +28,7 @@ export default async function handler(req) {
     // Fallback: base table
     const { data, error } = await supabase
       .from("projects")
-      .select("id, name, project_number, client, pdf_filename, pdf_page_count, pdf_storage_path, created_at, updated_at, last_run_at, catalog_id")
+      .select("id, name, project_number, client, pdf_filename, pdf_page_count, pdf_storage_path, created_at, updated_at, last_run_at, catalog_id, default_length_multiplier")
       .eq("org_id", orgId)
       .order("updated_at", { ascending: false });
 
@@ -311,7 +311,7 @@ export default async function handler(req) {
     }
 
     if (action === "update_project") {
-      const { id, is_library, library_name, name, number, client, pdf_filename, pdf_page_count, pdf_storage_path, catalog_id } = body;
+      const { id, is_library, library_name, name, number, client, pdf_filename, pdf_page_count, pdf_storage_path, catalog_id, default_length_multiplier } = body;
       const project_id = body.project_id ?? id;
       if (!project_id) return err("project_id required");
       if (!(await assertProjectInOrg(supabase, project_id, orgId)))
@@ -326,6 +326,15 @@ export default async function handler(req) {
       if (pdf_filename   !== undefined) patch.pdf_filename    = pdf_filename;
       if (pdf_page_count !== undefined) patch.pdf_page_count  = pdf_page_count;
       if (pdf_storage_path !== undefined) patch.pdf_storage_path = pdf_storage_path;
+      // Project-wide cable-length multiplier — a human judgment call on route
+      // quality (corridor-following vs. straight-line), applied uniformly
+      // across every page's per_run_ft BOM lines. Does not vary by page.
+      // Editable from the confidence map or directly on the report.
+      if (default_length_multiplier !== undefined) {
+        const m = Number(default_length_multiplier);
+        if (!Number.isFinite(m) || m <= 0) return err("default_length_multiplier must be a positive number");
+        patch.default_length_multiplier = m;
+      }
       // catalog_id must belong to the caller's own org — without this check
       // a project could be pointed at another tenant's parts catalog, which
       // then reads as zero parts once RLS/org-scoping filters it out (the
@@ -349,7 +358,7 @@ export default async function handler(req) {
         .from("projects")
         .update(patch)
         .eq("id", project_id)
-        .select("id, name, is_library, library_name, catalog_id")
+        .select("id, name, is_library, library_name, catalog_id, default_length_multiplier")
         .single();
 
       if (error) return err(error.message, 500);

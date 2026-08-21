@@ -79,10 +79,14 @@ export default async function handler(req) {
   // layer.
   const { data: projectRow } = await supabase
     .from("projects")
-    .select("catalog_id")
+    .select("catalog_id, default_length_multiplier")
     .eq("id", project_id)
     .single();
   const catalog_id = projectRow?.catalog_id ?? null;
+  // Project-wide cable-length multiplier, set by the user after reviewing
+  // route quality in the confidence map (or edited directly on the report).
+  // Single value for the whole project — does not vary by page.
+  const default_length_multiplier = projectRow?.default_length_multiplier ?? 1.0;
 
   // Run all queries in parallel
   const [
@@ -264,7 +268,8 @@ export default async function handler(req) {
     // catalog assigned yet; catalog_parts is [] in that case, not an error.
     catalog_id,
     catalog_parts:    catalogPartsRes.data ?? [],
-    labor_tasks:      laborTasksRes.data   ?? []
+    labor_tasks:      laborTasksRes.data   ?? [],
+    default_length_multiplier
   });
 }
 
