@@ -74,7 +74,13 @@ for (const a of aggregate.slice(0, 3)) console.log(`  score=${a.score}  color=${
 
 const winner = aggregate[0];
 check("aggregate winner is the known-correct wall signature", isWallSig(winner.color, winner.width));
-check("aggregate winner's pagesAgreeing is 6 (matches per-page result)", winner.pagesAgreeing === 6);
+// 7, not 6 — the color-clustering fix (see COLOR_CLUSTER_TOLERANCE in wall-calibration.js)
+// correctly recognizes T1.1.C's own top pick, (186,186,186), as the SAME real wall
+// signature as (119,119,119) rather than a flat mispick, so its page now counts toward
+// the winning cluster's agreement instead of against it. This is the aggregate 7/7 this
+// module's own header comment already documents as the validated result — the pre-fix
+// exact-match-only pagesAgreeing (6) undercounted relative to that documented target.
+check("aggregate winner's pagesAgreeing is 7 (all pages agree once T1.1.C's near-duplicate gray is correctly clustered)", winner.pagesAgreeing === 7);
 
 console.log(fails === 0 ? "\nALL PASS — wall-calibration.js reproduces the validated Python results" : `\n${fails} FAILURE(S)`);
 process.exit(fails === 0 ? 0 : 1);
