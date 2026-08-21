@@ -294,16 +294,17 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
      asks for it. Pure client-side, does NOT touch device_instances/total_ft/
      BOM — nothing here is persisted or affects Batch Run's output. Wall
      calibration itself runs silently, with no UI of its own — see
-     runWallCalibrationAuto(), called from lockDemarcs() right before the
-     batch starts. Its outcome shows as a status line in step 4 below. ── -->
+     ensureWallCalibrationRun(), triggered here on first open, or from
+     lockDemarcs() before the batch starts if this was never opened. Its
+     outcome shows as a status line in step 4 below. ── -->
 <div class="section">
   <div class="section-title">3 · Test Auto Route <span style="font-size:11px; color:#888; font-weight:normal;">(optional preview — writes nothing)</span></div>
   <button class="info" id="test-route-toggle" onclick="toggleTestRouteSection()">▶ Test auto-route (optional)</button>
   <div id="test-route-section" style="display:none; margin-top:10px;">
     <div style="font-size:13px; color:#aaa; margin-bottom:8px;">
       Click a point for the TR, then a point for a device, to see the routed path computed live in the
-      browser — Tier 3 wall-aware if wall calibration (runs automatically once you confirm demarc config
-      below) came back confirmed, Tier 1 straight-line/waypoint otherwise. Nothing here is saved.
+      browser — Tier 3 wall-aware if wall calibration comes back confirmed (checked automatically the
+      first time you open this), Tier 1 straight-line/waypoint otherwise. Nothing here is saved.
     </div>
     <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
       <button onclick="setTestRouteMode('tr')">1. Click TR point</button>
@@ -1792,30 +1793,42 @@ async function toggleTestRouteSection() {
   section.style.display = opening ? 'block' : 'none';
   toggle.textContent = opening ? '▼ Test auto-route (optional)' : '▶ Test auto-route (optional)';
   if (opening) {
-    await ensureWallCalibStateLoaded();
+    await ensureWallCalibrationRun();
     ensureTestRouteCanvasReady().catch((e) => console.warn('Test-route canvas pre-render failed:', e.message));
   }
 }
 
-// wallCalibConfirmed otherwise only reflects a LIVE run of
-// runWallCalibrationAuto() during THIS page load (triggered by step 4's
-// confirm button). That's wrong the moment the page is reloaded, or if this
-// preview is opened before step 4 has been clicked yet in the current
-// session — calibration may already be confirmed in the database from an
-// earlier run. Pulls the real persisted state so the preview reflects
-// reality, not just this session's in-memory flag.
-async function ensureWallCalibStateLoaded() {
-  if (!projectId || wallCalibConfirmed) return;   // already know it's confirmed this session — no need to re-check
+// Wall calibration is cheap (client-side geometry scoring, no LLM) and has
+// nothing to do with the expensive Batch Run scan — but it used to only ever
+// fire inside lockDemarcs(), the SAME click that starts that full scan. That
+// meant there was no way to preview Tier 3 routing without first committing
+// to the real run, defeating the point of a preview.
+//
+// This is now the single entry point for both callers (opening Test Auto
+// Route, and lockDemarcs() before the batch starts): checks the persisted
+// wall_calibrations row first — if it's already confirmed, trust it and
+// skip re-scoring. Otherwise runs calibration fresh right now, silently, no
+// UI, no click, so a preview opened right after setup (before ever touching
+// step 4) gets a real answer instead of "hasn't run yet."
+async function ensureWallCalibrationRun() {
+  if (wallCalibConfirmed) return;                                // already known good this session
+  if (!projectId || !pdfDoc || !selectedPages.size) return;       // nothing to calibrate against yet
+
   try {
     const r = await fetch(`${base()}/api/pass-wall-calibrate?project_id=${projectId}`);
     const row = await r.json().catch(() => null);
     if (row && row.status === 'confirmed') {
       wallCalibResult = row;
       wallCalibConfirmed = true;
+      return;
     }
   } catch (e) {
     console.warn('Could not check wall calibration status:', e.message);
   }
+
+  // Nothing confirmed on record (null, rejected, or a stale 'suggested' row
+  // from before selection changed) — score it now.
+  await runWallCalibrationAuto();
 }
 
 function setTestRouteMode(mode) {
@@ -3564,7 +3577,7 @@ async function lockDemarcs() {
 
   document.getElementById('batch-progress-wrap-outer').style.display = 'block';
   document.getElementById('batch-section').scrollIntoView({ behavior: 'smooth' });
-  await runWallCalibrationAuto();   // silent — no UI, no click; sets Tier 3/Tier 1 before routing needs it
+  await ensureWallCalibrationRun();   // no-op if the preview above already resolved it this session
   await runBatch();
 }
 
@@ -4467,6 +4480,7 @@ const CULL_PAD_FRAC = 0.012;
 let confClickStart = null;   // {x,y} client coords at mousedown, to distinguish a click from a pan drag
 let confPendingAddXY = null; // {x,y} identity-frame coords awaiting a type choice in the add panel
 let confWaypoints = [], confDemarcs = {};   // for routed-path visualization on hover
+let confExclusionZones = [];                // page_regions kind='exclude' rows for this page — green boxes
 let confShowAllPaths = false;               // path-confidence layer toggle
 let confZoom = 1, confPanX = 0, confPanY = 0, confDrag = null, confCW = 0, confCH = 0;
 let confPageWidthPts = 0, confPageHeightPts = 0;   // raw PDF point-space page size — see openConfidenceModal
@@ -4491,12 +4505,49 @@ function confReset() { confZoom = 1; confPanX = 0; confPanY = 0; confApplyTransf
 
 function confRedraw() {
   const layer = document.getElementById('conf-layer');
-  layer.querySelectorAll('.conf-star, .conf-wp').forEach(e => e.remove());
+  layer.querySelectorAll('.conf-star, .conf-wp, .conf-excl-zone, .conf-demarc-star').forEach(e => e.remove());
 
   // Waypoints are placed via the same full-page-fraction click mechanic as demarc
   // pins, so they use the identity bbox — same reasoning as bboxForDevice's llm-symbol
   // case, just always identity rather than conditional.
   const identityBbox = { xmin_frac: 0, ymin_frac: 0, w_frac: 1, h_frac: 1 };
+
+  // Exclusion zones (page_regions kind='exclude') — green boxes, drawn first so
+  // everything else layers on top. x0/y0/x1/y1 are identity-frame fractions,
+  // same convention as waypoints/demarc pins (see loadExclConfirmedZones).
+  for (const z of confExclusionZones) {
+    const p0 = normToCanvasXY(z.x0, z.y0, identityBbox, confCW, confCH);
+    const p1 = normToCanvasXY(z.x1, z.y1, identityBbox, confCW, confCH);
+    const box = document.createElement('div');
+    box.className = 'conf-excl-zone';
+    box.style.cssText = `position:absolute; left:${Math.min(p0.x,p1.x)}px; top:${Math.min(p0.y,p1.y)}px;
+      width:${Math.abs(p1.x-p0.x)}px; height:${Math.abs(p1.y-p0.y)}px;
+      border:${2/confZoom}px solid #4ad86a; background:rgba(74,216,106,0.12);
+      pointer-events:none; z-index:5;`;
+    box.title = 'Exclusion zone';
+    layer.appendChild(box);
+  }
+
+  // Demarc location(s) — bright red star, larger and distinct from device
+  // confidence stars so it reads as "the target," not another detection.
+  for (const dm of Object.values(confDemarcs)) {
+    if (dm.x_norm == null || dm.y_norm == null) continue;
+    const pos = normToCanvasXY(dm.x_norm, dm.y_norm, identityBbox, confCW, confCH);
+    const size = 22 / confZoom;
+    const star = document.createElement('div');
+    star.className = 'conf-demarc-star';
+    star.style.cssText = `position:absolute; width:${size}px; height:${size}px;
+      transform:translate(-50%,-50%); pointer-events:none; z-index:8;
+      display:flex; align-items:center; justify-content:center;
+      font-size:${size}px; line-height:1; color:#ff2020;
+      text-shadow:0 0 ${3/confZoom}px rgba(0,0,0,0.95), 0 0 ${1.5/confZoom}px rgba(0,0,0,0.95);`;
+    star.textContent = '★';
+    star.title = `Demarc: ${dm.name ?? 'TR'}`;
+    star.style.left = pos.x + 'px';
+    star.style.top  = pos.y + 'px';
+    layer.appendChild(star);
+  }
+
   for (const w of confWaypoints) {
     const dot = document.createElement('div');
     dot.className = 'conf-wp';
@@ -5098,17 +5149,20 @@ async function openConfidenceModal(pageNum) {
   // Waypoints + demarcs, for the routed-path-on-hover overlay. Best-effort: a fetch
   // failure just means no path line draws, never blocks opening the map.
   const pageId = pageCache[pageNum]?.pageId;
-  confWaypoints = []; confDemarcs = {};
+  confWaypoints = []; confDemarcs = {}; confExclusionZones = [];
   if (pageId) {
     try {
-      const [wpR, dmR] = await Promise.all([
+      const [wpR, dmR, rgR] = await Promise.all([
         fetch(`${base()}/api/pass-waypoint?page_id=${pageId}`),
-        fetch(`${base()}/api/pass-demarc?page_id=${pageId}`)
+        fetch(`${base()}/api/pass-demarc?page_id=${pageId}`),
+        fetch(`${base()}/api/page-regions?page_id=${pageId}`)
       ]);
       confWaypoints = wpR.ok ? await wpR.json() : [];
       const demarcRows = dmR.ok ? await dmR.json() : [];
       confDemarcs = Object.fromEntries(demarcRows.map(dm => [dm.id, dm]));
-    } catch (e) { console.warn('[confidence map] waypoint/demarc fetch failed', e.message); }
+      const regionRows = rgR.ok ? await rgR.json() : [];
+      confExclusionZones = (regionRows ?? []).filter(z => z.kind === 'exclude' && z.x0 != null);
+    } catch (e) { console.warn('[confidence map] waypoint/demarc/region fetch failed', e.message); }
   }
 
   confApplyTransform();
