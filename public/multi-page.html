@@ -1785,14 +1785,36 @@ let testRouteMode   = null;      // 'tr' | 'device' | null
 let testRoutePoints = { tr: null, device: null };  // in canvas pixel coords
 const TEST_ROUTE_SCALE = 1.5;
 
-function toggleTestRouteSection() {
+async function toggleTestRouteSection() {
   const section = document.getElementById('test-route-section');
   const toggle  = document.getElementById('test-route-toggle');
   const opening = section.style.display === 'none';
   section.style.display = opening ? 'block' : 'none';
   toggle.textContent = opening ? '▼ Test auto-route (optional)' : '▶ Test auto-route (optional)';
   if (opening) {
+    await ensureWallCalibStateLoaded();
     ensureTestRouteCanvasReady().catch((e) => console.warn('Test-route canvas pre-render failed:', e.message));
+  }
+}
+
+// wallCalibConfirmed otherwise only reflects a LIVE run of
+// runWallCalibrationAuto() during THIS page load (triggered by step 4's
+// confirm button). That's wrong the moment the page is reloaded, or if this
+// preview is opened before step 4 has been clicked yet in the current
+// session — calibration may already be confirmed in the database from an
+// earlier run. Pulls the real persisted state so the preview reflects
+// reality, not just this session's in-memory flag.
+async function ensureWallCalibStateLoaded() {
+  if (!projectId || wallCalibConfirmed) return;   // already know it's confirmed this session — no need to re-check
+  try {
+    const r = await fetch(`${base()}/api/pass-wall-calibrate?project_id=${projectId}`);
+    const row = await r.json().catch(() => null);
+    if (row && row.status === 'confirmed') {
+      wallCalibResult = row;
+      wallCalibConfirmed = true;
+    }
+  } catch (e) {
+    console.warn('Could not check wall calibration status:', e.message);
   }
 }
 
