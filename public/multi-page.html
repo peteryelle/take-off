@@ -287,40 +287,23 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
     </div>
 
     <div id="tr-cards" style="display:flex; flex-direction:column; gap:12px; margin-top:4px;"></div>
-    <div style="margin-top:14px;">
-      <button class="amber" onclick="lockDemarcs()">✓ Confirm Demarc Config → Start Batch</button>
-    </div>
   </div>
 </div>
 
-<!-- ── STEP 3: WALL CALIBRATION — fully automatic, no review step. Either
-     the aggregated signature clears the confidence gate and Tier 3 routing
-     goes live, or it stays on Tier 1. Nothing here for a human to edit.
-     Needs only pageId (set in step 2) — no dependency on Demarc Scan or
-     Batch Run below it. ─────────────────────────────────────────────── -->
-<div class="section">
-  <div class="section-title">3 · Wall Calibration <span style="font-size:11px; color:#888; font-weight:normal;">(automatic — enables Tier 3 auto path routing, or falls back to Tier 1)</span></div>
-  <div style="font-size:13px; color:#aaa; margin-bottom:8px;">
-    Scores every selected page's stroke geometry to find the wall convention this drawing set uses,
-    aggregated across pages so one unusual sheet can't outvote the rest. If a signature clears the
-    confidence bar it's used automatically for Tier 3 wall-aware routing — otherwise the project stays
-    on Tier 1 (waypoint/straight-line) routing. There's nothing to review or edit here.
-  </div>
-  <button onclick="runWallCalibrationUI()">▶ Run Wall Calibration</button>
-  <div class="status" id="wallcal-status">—</div>
-</div>
-
-<!-- ── STEP 3B: TEST AUTO ROUTE — optional preview, collapsed until the user
+<!-- ── STEP 3: TEST AUTO ROUTE — optional preview, collapsed until the user
      asks for it. Pure client-side, does NOT touch device_instances/total_ft/
-     BOM — nothing here is persisted or affects Batch Run's output. ────── -->
+     BOM — nothing here is persisted or affects Batch Run's output. Wall
+     calibration itself runs silently, with no UI of its own — see
+     runWallCalibrationAuto(), called from lockDemarcs() right before the
+     batch starts. Its outcome shows as a status line in step 4 below. ── -->
 <div class="section">
-  <div class="section-title">3B · Test Auto Route <span style="font-size:11px; color:#888; font-weight:normal;">(optional preview — writes nothing)</span></div>
-  <button class="info" id="test-route-toggle" onclick="toggleTestRouteSection()" style="display:none;">▶ Test auto-route (optional)</button>
+  <div class="section-title">3 · Test Auto Route <span style="font-size:11px; color:#888; font-weight:normal;">(optional preview — writes nothing)</span></div>
+  <button class="info" id="test-route-toggle" onclick="toggleTestRouteSection()">▶ Test auto-route (optional)</button>
   <div id="test-route-section" style="display:none; margin-top:10px;">
     <div style="font-size:13px; color:#aaa; margin-bottom:8px;">
       Click a point for the TR, then a point for a device, to see the routed path computed live in the
-      browser — Tier 3 wall-aware if calibration confirmed above, Tier 1 straight-line/waypoint otherwise.
-      Nothing here is saved.
+      browser — Tier 3 wall-aware if wall calibration (runs automatically once you confirm demarc config
+      below) came back confirmed, Tier 1 straight-line/waypoint otherwise. Nothing here is saved.
     </div>
     <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
       <button onclick="setTestRouteMode('tr')">1. Click TR point</button>
@@ -336,11 +319,17 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
 <!-- ── STEP 4: BATCH RUN ─────────────────────────────────────────── -->
 <div class="section" id="batch-section" style="display:none;">
   <div class="section-title">4 · Batch Run</div>
-  <div class="progress-wrap">
-    <div class="progress-bar" id="batch-progress" style="width:0%"></div>
+  <div id="start-batch-wrap" style="margin-bottom:14px;">
+    <button class="amber" onclick="lockDemarcs()">✓ Confirm Demarc Config → Start Batch</button>
   </div>
-  <div class="status" id="batch-status">—</div>
-  <div id="batch-log" style="margin-top:8px; font-size:13px; color:#888; max-height:160px; overflow-y:auto; line-height:1.6;"></div>
+  <div id="batch-progress-wrap-outer" style="display:none;">
+    <div class="status" id="wallcal-auto-status" style="margin-bottom:8px;">—</div>
+    <div class="progress-wrap">
+      <div class="progress-bar" id="batch-progress" style="width:0%"></div>
+    </div>
+    <div class="status" id="batch-status">—</div>
+    <div id="batch-log" style="margin-top:8px; font-size:13px; color:#888; max-height:160px; overflow-y:auto; line-height:1.6;"></div>
+  </div>
 </div>
 
 <!-- ── STEP 5: RESULTS ───────────────────────────────────────────── -->
@@ -1694,10 +1683,16 @@ async function runDemarcScan() {
 // the aggregated signature clears the confidence gate below and Tier 3
 // routing goes live, or it doesn't and the project stays on Tier 1
 // (waypoint/straight-line) routing. There is nothing here for a human to
-// edit or correct — an overlay the user can look at but not act on isn't an
-// informed decision, so this doesn't ask for one. Runs off pageId alone
-// (set as soon as a page gets a role in step 2) — no dependency on the
-// Demarc Scan or Batch Run passes below it.
+// ── Wall Calibration — runs silently, no UI, no click. Called from
+// lockDemarcs() right before runBatch(), so Tier 3/Tier 1 is already settled
+// before routing needs it. Zero human-in-the-loop: either the aggregated
+// signature clears the confidence gate below and Tier 3 routing goes live,
+// or it doesn't and the project stays on Tier 1 (waypoint/straight-line)
+// routing. There is nothing here for a human to review, edit, or click —
+// an overlay the user can look at but not act on isn't an informed
+// decision, so this doesn't present one. Runs off pageId alone (set as
+// soon as a page gets a role in step 2) — no dependency on the Demarc Scan
+// or Batch Run passes around it.
 //
 // Auto-accept gate (documented here so it can be tuned later without
 // hunting through the function):
@@ -1719,14 +1714,12 @@ let wallCalibResult    = null;   // last wall_calibrations row returned by the A
 let wallCalibPages     = [];     // [{pageNum, pageId, pdfPage}] built fresh each run
 let wallCalibConfirmed = false;  // true only if the auto-accept gate below passed
 
-async function runWallCalibrationUI() {
-  if (!projectId)         { alert('Confirm project first'); return; }
-  if (!pdfDoc)            { alert('Load a PDF first'); return; }
-  if (!selectedPages.size){ alert('Select pages first'); return; }
+async function runWallCalibrationAuto() {
+  if (!projectId || !pdfDoc || !selectedPages.size) return;   // nothing to calibrate against yet — silently skip, Batch Run's own gates will catch a genuinely incomplete setup
 
   const V = window.TakeoffVec;
-  setStatus('wallcal-status', `Scoring ${selectedPages.size} pages…`, 'running');
-  document.getElementById('test-route-toggle').style.display = 'none';
+  const statusEl = document.getElementById('wallcal-auto-status');
+  if (statusEl) { statusEl.textContent = 'Checking wall geometry…'; statusEl.className = 'status running'; }
   wallCalibConfirmed = false;
 
   try {
@@ -1734,12 +1727,12 @@ async function runWallCalibrationUI() {
     wallCalibPages = [];
     for (const pageNum of sortedPages) {
       const pageId = pageCache[pageNum]?.pageId;
-      if (!pageId) { console.warn(`Page ${pageNum} has no pageId yet — assign it a role in step 2 first, skipping.`); continue; }
+      if (!pageId) continue;   // no role assigned yet for this page — Batch Run's own role gate handles that case
       const pdfPage = await pdfDoc.getPage(pageNum);
       wallCalibPages.push({ pageNum, pageId, pdfPage });
     }
     if (!wallCalibPages.length) {
-      setStatus('wallcal-status', 'No pages ready — assign a role to at least one page in step 2 first.', 'err');
+      if (statusEl) { statusEl.textContent = ''; statusEl.className = 'status'; }
       return;
     }
 
@@ -1756,38 +1749,38 @@ async function runWallCalibrationUI() {
     wallCalibConfirmed = passes;
 
     if (passes) {
-      setStatus('wallcal-status', `Confirming — ${agreeing}/${evaluated} pages agree…`, 'running');
       await V.confirmWallCalibration({ apiBase: base(), projectId });
       const signature = { color: wallCalibResult.stroke_color, width: wallCalibResult.stroke_width };
       const results = await V.persistAllPageGeometry({
         apiBase: base(), projectId, pages: wallCalibPages, OPS: pdfjsLib.OPS, signature,
       });
       const failed = results.filter((r) => !r.ok);
-      setStatus('wallcal-status',
-        failed.length
-          ? `✓ Confirmed (${agreeing}/${evaluated} pages agree), but ${failed.length}/${results.length} pages failed to persist geometry — check console.`
-          : `✓ Wall calibration confirmed — ${agreeing}/${evaluated} pages agree. Tier 3 routing is live for this project.`,
-        failed.length ? 'err' : 'ok');
+      if (statusEl) {
+        statusEl.textContent = failed.length
+          ? `⚠ Wall calibration confirmed but ${failed.length}/${results.length} pages failed to persist geometry — check console.`
+          : `✓ Tier 3 routing (wall-aware) — ${agreeing}/${evaluated} pages agree.`;
+        statusEl.className = failed.length ? 'status err' : 'status ok';
+      }
       if (failed.length) console.warn('Geometry persist failures:', failed);
     } else {
       await V.rejectWallCalibration({ apiBase: base(), projectId });
-      const scoreNote = wallCalibResult.runner_up_score
-        ? ` — top signature scored ${wallCalibResult.score} vs runner-up ${wallCalibResult.runner_up_score}` : '';
-      setStatus('wallcal-status',
-        `Inconclusive (${agreeing}/${evaluated} pages agree${scoreNote}) — staying on Tier 1 (waypoint/straight-line) routing.`,
-        '');
+      if (statusEl) {
+        statusEl.textContent = `Tier 1 routing (waypoint/straight-line) — wall signature inconclusive (${agreeing}/${evaluated} pages agree).`;
+        statusEl.className = 'status';
+      }
     }
-    document.getElementById('test-route-toggle').style.display = 'inline-block';
   } catch (e) {
-    setStatus('wallcal-status', 'Calibration error: ' + e.message, 'err');
+    console.warn('Wall calibration error (falling back to Tier 1):', e.message);
+    if (statusEl) { statusEl.textContent = 'Tier 1 routing (waypoint/straight-line) — calibration check failed.'; statusEl.className = 'status'; }
   }
 }
 
-// ── Test Auto Route (3B) — pure client-side. Computes a route with
+// ── Test Auto Route — pure client-side. Computes a route with
 // buildPageRouter directly in the browser; writes nothing anywhere. Safe to
-// use freely to sanity-check auto-routing before it's wired into batch.
-// Collapsed by default — only appears (as a toggle link) after wall
-// calibration runs, and only opens/computes when the user clicks it. ──
+// use freely to sanity-check auto-routing. Collapsed by default — only
+// opens/computes when the user clicks it; available any time after setup,
+// independent of wall calibration's outcome (correctly falls back to a
+// "Tier 1 in effect" message below if calibration didn't confirm). ──
 let testRouteMode   = null;      // 'tr' | 'device' | null
 let testRoutePoints = { tr: null, device: null };  // in canvas pixel coords
 const TEST_ROUTE_SCALE = 1.5;
@@ -2345,6 +2338,7 @@ function renderTRMap(trs) {
   const container = document.getElementById('tr-cards');
   container.innerHTML = '';
   document.getElementById('tr-map-section').style.display = 'block';
+  document.getElementById('batch-section').style.display = 'block';   // reveal step 4's heading + confirm button together with the TR review above it
 
   // Summary bar
   const onSheet      = trs.filter(t => t.on_sheet);
@@ -3546,8 +3540,9 @@ async function lockDemarcs() {
     }
   }
 
-  document.getElementById('batch-section').style.display = 'block';
+  document.getElementById('batch-progress-wrap-outer').style.display = 'block';
   document.getElementById('batch-section').scrollIntoView({ behavior: 'smooth' });
+  await runWallCalibrationAuto();   // silent — no UI, no click; sets Tier 3/Tier 1 before routing needs it
   await runBatch();
 }
 
@@ -5645,6 +5640,7 @@ async function restoreFromSupabase(pid) {
         const container = document.getElementById('tr-cards');
         if (container) container.innerHTML = '';
         document.getElementById('tr-map-section').style.display = 'none';
+        document.getElementById('batch-section').style.display = 'none';
       }
     } catch (e) {
       console.error('restoreFromSupabase: TR map restoration failed, continuing to results —', e);
