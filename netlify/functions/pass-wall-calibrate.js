@@ -81,6 +81,16 @@ export default async function handler(req) {
       .eq("project_id", project_id).eq("status", "suggested")
       .select("*").single();
     if (error) return err(error.message, 500);
+
+    // Append-only log for deriving the auto-accept margin threshold later —
+    // see wall_calibration_runs' table comment. Fire-and-forget: a logging
+    // failure must never block the actual confirm.
+    await supabase.from("wall_calibration_runs").insert({
+      project_id, outcome: "confirmed",
+      score: data.score, runner_up_score: data.runner_up_score,
+      pages_agreeing: data.pages_agreeing, pages_evaluated: data.pages_evaluated,
+    }).then(null, (e) => console.error("wall_calibration_runs log insert failed:", e));
+
     return ok(data);
   }
 
@@ -96,6 +106,15 @@ export default async function handler(req) {
       .eq("project_id", project_id)
       .select("*").single();
     if (error) return err(error.message, 500);
+
+    // Same append-only log as the confirm branch above — captures the
+    // ambiguous/losing case too, since deriving a real threshold needs both
+    // sides of the distribution, not just the wins.
+    await supabase.from("wall_calibration_runs").insert({
+      project_id, outcome: "rejected",
+      score: data.score, runner_up_score: data.runner_up_score,
+      pages_agreeing: data.pages_agreeing, pages_evaluated: data.pages_evaluated,
+    }).then(null, (e) => console.error("wall_calibration_runs log insert failed:", e));
 
     if (wasConfirmed) {
       const { data: pages } = await supabase.from("pages").select("id").eq("project_id", project_id);
