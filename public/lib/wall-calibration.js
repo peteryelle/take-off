@@ -27,6 +27,24 @@ const WALL_ANGLE_TOL = 3;       // degrees from 0/90 to still count as "orthogon
 const DOOR_MIN_LEN = 10;
 const DOOR_MAX_LEN = 60;
 const TEXT_PAD = 3;             // px; how close a segment can be to a text box before we discard it as label/leader-line noise
+// Per-channel RGB distance under which two (color,width) candidates are
+// treated as the SAME wall signature rather than competitors. Exists because
+// a single real wall convention can render as two near-identical grays
+// across a drawing set — e.g. (186,186,186) vs (119,119,119), same width —
+// from anti-aliasing or a CAD export quirk, which otherwise splits one
+// clear signal into two candidates that fight each other in aggregateScores
+// and can make a decisive win look like an ambiguous tie (this is exactly
+// what happened on project 18: winner beat runner-up by only 12.2%, just
+// under the 15% auto-accept margin in multi-page.html, and the two
+// candidates were (186,186,186) and (119,119,119), both width 0.36 — almost
+// certainly one real signature, not two). That pair's actual per-channel
+// gap is 67 — the tolerance has to clear that with some margin, or it
+// doesn't catch the one real case it exists for. 70 is a starting number,
+// not a derived one — same situation as the 15% margin: no real dataset to
+// tune it against yet, picked to clear the project-18 gap (67) without
+// merging genuinely distinct pen colors like black vs. red (gap of 255 on
+// at least one channel).
+const COLOR_CLUSTER_TOLERANCE = 70;
 
 function dist(x1, y1, x2, y2) { return Math.hypot(x2 - x1, y2 - y1); }
 
@@ -37,6 +55,14 @@ function roundColor(rgb) {
   // together regardless of which PDF operator set them.
   const to255 = (v) => (v <= 1 ? v * 255 : v);
   return rgb.map((v) => Math.round(to255(v)));
+}
+
+// True if two colors are within COLOR_CLUSTER_TOLERANCE on every channel —
+// used both to cluster candidates before aggregating (aggregateScores) and
+// to match a page's actual stroke color against a confirmed signature that
+// may represent a cluster, not one exact RGB triple (classifyGeometry).
+function colorsClose(a, b, tol = COLOR_CLUSTER_TOLERANCE) {
+  return Math.abs(a[0] - b[0]) <= tol && Math.abs(a[1] - b[1]) <= tol && Math.abs(a[2] - b[2]) <= tol;
 }
 
 function keyOf(color, width) {
@@ -132,26 +158,65 @@ export async function scorePage(strokeSubpaths, page) {
  * their own #1 — informational, shown on the review card, NOT used to
  * decide the winner; the aggregate SUM decides the winner).
  *
+ * Candidates within COLOR_CLUSTER_TOLERANCE of each other (same width) are
+ * merged into one cluster BEFORE summing — otherwise one real wall
+ * convention rendered as two near-identical grays across a drawing set
+ * splits its own vote and can lose to an unrelated third candidate, or look
+ * like a narrow/ambiguous win against a "runner-up" that was actually the
+ * same signature. See COLOR_CLUSTER_TOLERANCE's comment for the project-18
+ * case this fixes. Clustering is greedy: candidates are processed
+ * highest-individual-score first, each either joining the nearest existing
+ * cluster (same width, within tolerance) or starting a new one — so the
+ * cluster's reported color is always its highest-scoring member's exact
+ * color, which is also what gets persisted as the confirmed signature.
+ *
  * @param {Array<{pageId, scores: Array}>} perPage  output of scorePage per page, tagged with pageId
  * @returns {Array<{color, width, score, pagesAgreeing}>}
  */
 export function aggregateScores(perPage) {
-  const totals = new Map();
+  // Flatten every page's candidates into one list, summing raw per-key
+  // scores first (same as before) so we cluster on genuinely-observed
+  // (color,width) pairs rather than re-deriving them some other way.
+  const rawTotals = new Map();   // key -> { color, width, score }
   for (const { scores } of perPage) {
     for (const s of scores) {
       const k = keyOf(s.color, s.width);
-      const t = totals.get(k) ?? { color: s.color, width: s.width, score: 0, pagesAgreeing: 0 };
+      const t = rawTotals.get(k) ?? { color: s.color, width: s.width, score: 0 };
       t.score += s.score;
-      totals.set(k, t);
+      rawTotals.set(k, t);
     }
   }
+
+  // Greedy clustering, highest raw score first, so each cluster's
+  // representative color is its strongest member.
+  const ordered = [...rawTotals.values()].sort((a, b) => b.score - a.score);
+  const clusters = [];   // { color, width, score, memberKeys: Set<string> }
+  for (const cand of ordered) {
+    const home = clusters.find(c => c.width === cand.width && colorsClose(c.color, cand.color));
+    if (home) {
+      home.score += cand.score;
+      home.memberKeys.add(keyOf(cand.color, cand.width));
+    } else {
+      clusters.push({ color: cand.color, width: cand.width, score: cand.score, memberKeys: new Set([keyOf(cand.color, cand.width)]) });
+    }
+  }
+
+  // pagesAgreeing: for each page's own top pick, find which cluster its
+  // exact (color,width) landed in, via the memberKeys built above — a page
+  // whose own top pick was the "runner-up" gray now correctly counts toward
+  // the SAME cluster as a page whose top pick was the winning gray.
+  const keyToCluster = new Map();
+  for (const c of clusters) for (const k of c.memberKeys) keyToCluster.set(k, c);
   for (const { scores } of perPage) {
     if (!scores.length) continue;
     const top = scores[0];
-    const k = keyOf(top.color, top.width);
-    if (totals.has(k)) totals.get(k).pagesAgreeing++;
+    const c = keyToCluster.get(keyOf(top.color, top.width));
+    if (c) c.pagesAgreeing = (c.pagesAgreeing ?? 0) + 1;
   }
-  return [...totals.values()].sort((a, b) => b.score - a.score);
+
+  return clusters
+    .map(({ color, width, score, pagesAgreeing }) => ({ color, width, score, pagesAgreeing: pagesAgreeing ?? 0 }))
+    .sort((a, b) => b.score - a.score);
 }
 
 /**
@@ -179,16 +244,26 @@ export function aggregateScores(perPage) {
  */
 export async function classifyGeometry(strokeSubpaths, page, signature) {
   const groups = segmentsByKey(strokeSubpaths);
-  const key = keyOf(signature.color, signature.width);
-  const match = groups.get(key);
+  // Fuzzy match, not exact key lookup: the confirmed signature is one
+  // representative color (a cluster's strongest member, from
+  // aggregateScores), but THIS page's own walls might render in a nearby-
+  // but-not-identical gray from the same cluster (anti-aliasing, CAD export
+  // quirk — see COLOR_CLUSTER_TOLERANCE's comment). An exact match here
+  // would silently classify such a page as zero walls instead of erroring,
+  // which is worse than the vote-splitting bug this was meant to fix.
+  // Segments from every matching group are merged before classification.
+  const matchingGroups = [...groups.values()].filter(
+    g => g.width === signature.width && colorsClose(g.color, signature.color)
+  );
   const walls = [], doors = [];
-  if (!match) return { walls, doors };
+  if (!matchingGroups.length) return { walls, doors };
+  const segments = matchingGroups.flatMap(g => g.segments);
 
   const vp = page.getViewport({ scale: 1 });
   const flipY = (y) => vp.height - y;
 
   const boxes = await textBoxes(page);
-  for (const [x1, y1, x2, y2] of match.segments) {
+  for (const [x1, y1, x2, y2] of segments) {
     const dx = x2 - x1, dy = y2 - y1;
     const length = Math.hypot(dx, dy);
     if (length < 2) continue;
