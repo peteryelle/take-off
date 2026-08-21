@@ -253,6 +253,14 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
     <div class="progress-bar" id="scan-progress" style="width:0%"></div>
   </div>
 
+  <!-- Collapsed-state summary, shown once the user collapses the TR setup below.
+       Kept in sync with tr-summary-text whenever renderTRMap runs. ── -->
+  <div id="tr-map-collapsed" style="display:none; margin-top:10px; padding:8px 12px; background:#0a0a0a;
+       border:1px solid #2a2a2a; border-radius:4px; font-size:13px; display:flex; align-items:center; gap:10px;">
+    <span id="tr-map-collapsed-text" style="color:#aaa; flex:1;">—</span>
+    <button class="info" onclick="toggleTRSetupCollapse()" style="font-size:11px; padding:3px 10px;">▼ Expand setup</button>
+  </div>
+
   <!-- TR Map -->
   <div id="tr-map-section" style="display:none; margin-top:12px;">
     <!-- Summary bar -->
@@ -261,6 +269,7 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
       <span id="tr-warnings-text" style="color:#f0c040;"></span>
       <button class="info" onclick="openAddSchematic()" style="font-size:11px; padding:3px 10px;"
         title="Draw a schematic boundary on a page and add its primary TR">+ Add schematic</button>
+      <button class="info" onclick="toggleTRSetupCollapse()" style="font-size:11px; padding:3px 10px;">▲ Collapse setup</button>
     </div>
     <!-- Page → TR Assignment Table -->
     <div id="pa-table-wrap" style="display:none; margin-bottom:16px;">
@@ -2369,10 +2378,24 @@ async function deleteTRRoom(trName) {
   if (projectId) { await restoreFromSupabase(projectId); await attemptAutoLoadPdf(projectId); }
 }
 
+// Collapses/expands the whole TR-setup body (summary bar, assignment table,
+// TR cards) once the user is done reviewing it — mirrors the collapse pattern
+// used elsewhere (Test Auto Route, confidence map). Leaves step 4's
+// "Confirm Demarc Config → Start Batch" button untouched either way, since
+// that lives in its own section now.
+function toggleTRSetupCollapse() {
+  const section   = document.getElementById('tr-map-section');
+  const collapsed = document.getElementById('tr-map-collapsed');
+  const opening   = section.style.display === 'none';
+  section.style.display   = opening ? 'block' : 'none';
+  collapsed.style.display = opening ? 'none'  : 'flex';
+}
+
 function renderTRMap(trs) {
   const container = document.getElementById('tr-cards');
   container.innerHTML = '';
   document.getElementById('tr-map-section').style.display = 'block';
+  document.getElementById('tr-map-collapsed').style.display = 'none';   // a fresh scan needs review — don't leave it collapsed from a prior run
   document.getElementById('batch-section').style.display = 'block';   // reveal step 4's heading + confirm button together with the TR review above it
 
   // Summary bar
@@ -2381,6 +2404,7 @@ function renderTRMap(trs) {
   const schematicIds = [...new Set(trs.map(t => t.schematic_id).filter(v => v != null))];
   document.getElementById('tr-summary-text').textContent =
     `${trs.length} TR room${trs.length !== 1 ? 's' : ''} · ${schematicIds.length} schematic${schematicIds.length !== 1 ? 's' : ''} · ${onSheet.length} on-sheet · ${offSheet.length} off-sheet`;
+  document.getElementById('tr-map-collapsed-text').textContent = document.getElementById('tr-summary-text').textContent;
   const noDemarc = trs.filter(t => !t.demarc_id);
   document.getElementById('tr-warnings-text').textContent =
     noDemarc.length > 0 ? `⚠ ${noDemarc.length} TR${noDemarc.length > 1 ? 's' : ''} need a demarc + pin` : '';
