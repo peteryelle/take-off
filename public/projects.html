@@ -284,7 +284,8 @@ function renderList(projects) {
     const updated  = p.updated_at
       ? new Date(p.updated_at).toLocaleDateString()
       : '—';
-    const devices  = p.total_devices ?? 0;
+    const devices  = p.total_device_instances ?? 0;
+    const types    = p.device_type_count ?? 0;
     const pages    = p.pages_selected ?? 0;
     const tia      = p.tia_violations ?? 0;
 
@@ -300,6 +301,7 @@ function renderList(projects) {
         </div>
         <div class="project-stats">
           <div><span class="stat-val">${pages}</span> pages</div>
+          <div><span class="stat-val">${types}</span> device types</div>
           <div><span class="stat-val">${devices}</span> devices</div>
           ${tia > 0 ? `<div><span class="stat-val stat-warn">${tia} TIA</span> flags</div>` : ''}
           <div>last run: ${lastRun}</div>
