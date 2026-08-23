@@ -279,7 +279,7 @@ function renderList(projects) {
     const isActive = p.id === selectedId;
     const hasPDF   = !!p.pdf_filename;
     const lastRun  = p.last_run_at
-      ? new Date(p.last_run_at).toLocaleDateString()
+      ? new Date(p.last_run_at).toLocaleString()
       : 'never run';
     const updated  = p.updated_at
       ? new Date(p.updated_at).toLocaleDateString()
@@ -288,12 +288,21 @@ function renderList(projects) {
     const types    = p.device_type_count ?? 0;
     const pages    = p.pages_selected ?? 0;
     const tia      = p.tia_violations ?? 0;
+    // Accepted-final-run lock — a manual sign-off bookmark on the current
+    // state (device_instances is delete-then-insert per run, no history to
+    // pick among). Locked routes "Take-off →" to the Report page instead,
+    // since count-changing writes are refused server-side while locked.
+    const locked   = !!p.accepted_final_run_at;
 
     return `
     <div class="project-card ${isActive ? 'active' : ''}"
          onclick="selectProject(${p.id})" id="card-${p.id}">
       <div>
-        <div class="project-name">${esc(p.name ?? '—')}${p.is_library ? ' <span style="background:#2a1e3a; border:1px solid #6a4a8a; color:#c79af0; padding:1px 7px; border-radius:3px; font-size:11px; font-weight:normal;">📚 Library</span>' : ''}</div>
+        <div class="project-name">${esc(p.name ?? '—')}${p.is_library ? ' <span style="background:#2a1e3a; border:1px solid #6a4a8a; color:#c79af0; padding:1px 7px; border-radius:3px; font-size:11px; font-weight:normal;">📚 Library</span>' : ''}
+          <span style="${locked ? 'background:#1a2e1a; border:1px solid #3a6a3a; color:#8fd08f;' : 'background:#2a2a1a; border:1px solid #6a6a3a; color:#d0c78f;'} padding:1px 7px; border-radius:3px; font-size:11px; font-weight:normal; margin-left:4px;">
+            ${locked ? '🔒 Locked' : '🔓 Open'}
+          </span>
+        </div>
         <div class="project-meta">
           ${p.project_number ? `<span>#${esc(p.project_number)}</span>` : ''}
           ${p.client         ? `<span>${esc(p.client)}</span>`         : ''}
@@ -316,10 +325,16 @@ function renderList(projects) {
                 style="padding:4px 12px; font-size:12px; margin-top:4px; color:#c79af0; border-color:#6a4a8a;">
           🔍 Discover →
         </button>
-        <button class="info" onclick="openMultiPage(${p.id}); event.stopPropagation();"
+        ${locked
+          ? `<button class="info" onclick="openReport(${p.id}); event.stopPropagation();"
+                style="padding:4px 12px; font-size:12px; margin-top:4px; color:#8fd08f; border-color:#3a6a3a;">
+              📋 View Report →
+            </button>`
+          : `<button class="info" onclick="openMultiPage(${p.id}); event.stopPropagation();"
                 style="padding:4px 12px; font-size:12px; margin-top:4px;">
-          Take-off →
-        </button>
+              Take-off →
+            </button>`
+        }
         <button class="info" onclick="toggleLibrary(${p.id}, ${p.is_library ? 'true' : 'false'}); event.stopPropagation();"
                 style="padding:4px 12px; font-size:11px; margin-top:4px; ${p.is_library ? 'color:#c79af0; border-color:#6a4a8a;' : 'color:#888;'}">
           ${p.is_library ? '📚 Is Library ✓' : '☆ Mark as Library'}
@@ -436,6 +451,14 @@ function openDiscover(id) {
   localStorage.setItem('mp_netlify_url', base());
   sessionStorage.setItem('to_project_id', id);
   window.location.href = `discover.html?project_id=${id}`;
+}
+
+// Locked projects route here instead of into the take-off editor — counts
+// can't change while locked, so Report is the useful landing page.
+function openReport(id) {
+  sessionStorage.setItem('to_project_id', id);
+  sessionStorage.setItem('to_netlify_url', base());
+  window.location.href = `report.html?project_id=${id}`;
 }
 
 async function toggleLibrary(id, currentlyLibrary) {
