@@ -28,7 +28,7 @@ export default async function handler(req) {
     // Fallback: base table
     const { data, error } = await supabase
       .from("projects")
-      .select("id, name, project_number, client, pdf_filename, pdf_page_count, pdf_storage_path, created_at, updated_at, last_run_at, catalog_id, default_length_multiplier")
+      .select("id, name, project_number, client, pdf_filename, pdf_page_count, pdf_storage_path, created_at, updated_at, last_run_at, catalog_id, default_length_multiplier, accepted_final_run_at")
       .eq("org_id", orgId)
       .order("updated_at", { ascending: false });
 
@@ -311,7 +311,7 @@ export default async function handler(req) {
     }
 
     if (action === "update_project") {
-      const { id, is_library, library_name, name, number, client, pdf_filename, pdf_page_count, pdf_storage_path, catalog_id, default_length_multiplier } = body;
+      const { id, is_library, library_name, name, number, client, pdf_filename, pdf_page_count, pdf_storage_path, catalog_id, default_length_multiplier, accepted_final_run_at } = body;
       const project_id = body.project_id ?? id;
       if (!project_id) return err("project_id required");
       if (!(await assertProjectInOrg(supabase, project_id, orgId)))
@@ -354,11 +354,19 @@ export default async function handler(req) {
         }
       }
 
+      // Accepted-final-run lock. This IS the lock toggle, so it's always
+      // writable — count-changing endpoints (pass-batch, pass-extract,
+      // pass-visual-augment, set-page-role's count-clearing path) check this
+      // column, but nothing here blocks setting/clearing it.
+      if (accepted_final_run_at !== undefined) {
+        patch.accepted_final_run_at = accepted_final_run_at ? new Date() : null;
+      }
+
       const { data, error } = await supabase
         .from("projects")
         .update(patch)
         .eq("id", project_id)
-        .select("id, name, is_library, library_name, catalog_id, default_length_multiplier")
+        .select("id, name, is_library, library_name, catalog_id, default_length_multiplier, accepted_final_run_at")
         .single();
 
       if (error) return err(error.message, 500);

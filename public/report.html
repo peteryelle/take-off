@@ -276,13 +276,32 @@ window.loadReport = async function loadReport() {
   const catalogId    = j.catalog_id ?? null;
   const catalogParts = j.catalog_parts ?? [];
   const priced       = priceBom(bom, catalogParts);
+  const acceptedFinalRunAt = j.accepted_final_run_at ?? null;
 
   // Labor — HOURS only, no $/hr rate wired up yet, so this is intentionally
   // not converted to a dollar figure anywhere on this page.
   const labor = aggregateLaborHours(instances, typesById);
 
+  // ── Accepted-final-run lock banner ──
+  // Manual sign-off bookmark, not a run-history snapshot: device_instances is
+  // delete-then-insert on every run, so this is one timestamp on the current
+  // state, not a choice among stored runs. While set, pass-batch/pass-extract/
+  // pass-visual-augment/set-page-role's count-clearing path all refuse writes.
+  let html = acceptedFinalRunAt
+    ? `<div class="note" style="background:#1a2e1a; border-color:#3a6a3a; color:#8fd08f;">
+        🔒 Project is Locked — accepted final run on ${new Date(acceptedFinalRunAt).toLocaleString()}.
+        Counts cannot change until unlocked.
+        <button onclick="setAcceptedFinalRun(false)" style="margin-left:10px; padding:3px 10px; font-size:12px;">Unlock</button>
+        <span id="lock-status" style="margin-left:8px; color:#888; font-size:11px;"></span>
+      </div>`
+    : `<div class="note" style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+        <span>This run is not yet accepted as final — counts can still change.</span>
+        <button onclick="setAcceptedFinalRun(true)" style="padding:3px 10px; font-size:12px;">✓ Mark as Accepted Final Run</button>
+        <span id="lock-status" style="color:#888; font-size:11px;"></span>
+      </div>`;
+
   // ── Stat strip ──
-  let html = '<div class="stat-strip">';
+  html += '<div class="stat-strip">';
   html += statCard(pages.length, 'Pages');
   html += statCard(activeInstances.length, 'Devices Counted');
   html += statCard(culledCount, 'Culled', culledCount ? 'warn' : '');
@@ -459,6 +478,31 @@ window.saveReportMultiplier = async function saveReportMultiplier() {
     await loadReport();   // reload so BOM/composite reflect the new value immediately
   } catch (e) {
     if (statusEl) { statusEl.style.color = '#f07a7a'; statusEl.textContent = `save failed: ${e.message}`; }
+  }
+};
+
+// Toggles the accepted-final-run lock. Locking is a manual sign-off bookmark
+// on the CURRENT state (device_instances is delete-then-insert per run, so
+// there's no history to choose among) — setting it stamps now(), clearing it
+// sets null. Backend enforces the lock on count-changing endpoints; this just
+// flips the flag and reloads so the banner reflects it immediately.
+window.setAcceptedFinalRun = async function setAcceptedFinalRun(locked) {
+  const statusEl = document.getElementById('lock-status');
+  if (!reportProjectId) {
+    if (statusEl) { statusEl.style.color = '#f07a7a'; statusEl.textContent = 'no project loaded'; }
+    return;
+  }
+  if (statusEl) { statusEl.style.color = '#888'; statusEl.textContent = locked ? 'locking…' : 'unlocking…'; }
+  try {
+    const r = await fetch(`${base()}/api/projects`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'update_project', project_id: reportProjectId, accepted_final_run_at: locked })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || r.status);
+    await loadReport();   // reload so the banner reflects the new lock state immediately
+  } catch (e) {
+    if (statusEl) { statusEl.style.color = '#f07a7a'; statusEl.textContent = `failed: ${e.message}`; }
   }
 };
 

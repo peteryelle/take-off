@@ -11,7 +11,7 @@
 // ─────────────────────────────────────────────────────────────────
 
 import { getSupabase, ok, err, CORS } from "./utils/clients.js";
-import { requireOrg, assertProjectInOrg, assertPageInOrg } from "./utils/auth.js";
+import { requireOrg, assertProjectInOrg, assertPageInOrg, assertProjectUnlocked } from "./utils/auth.js";
 import { buildDeviceList } from "../../public/lib/pipeline.js";
 import { parseSchedule } from "../../public/lib/schedule.js";
 import { buildGreedyPath } from "../../public/lib/waypoint-path.js";
@@ -49,6 +49,8 @@ export default async function handler(req) {
   const { supabase, orgId } = gate;
 
   if (!(await assertProjectInOrg(supabase, project_id, orgId))) return err("Project not found in your organization", 404);
+  if (!(await assertProjectUnlocked(supabase, project_id)))
+    return err("Project is locked (accepted final run) — unlock it from the Report page before re-running.", 423);
   await supabase.from("pages").update({ status: "running", status_msg: null }).eq("id", page_id);
 
   // Persist the client-computed sheet_class probe (substep 4 wiring tail). Passive,
@@ -527,6 +529,14 @@ export default async function handler(req) {
     const pageUpdate = { status: "done", status_msg: doneMsg };
     if (leader_overrides !== undefined) pageUpdate.leader_overrides = leader_overrides;  // redo replaces
     await supabase.from("pages").update(pageUpdate).eq("id", page_id);
+
+    // Stamp the project's last_run_at now that this page's counts are written
+    // and about to be reported back to the caller. Called once per page (the
+    // browser orchestrates the sequence), so the final call in a batch leaves
+    // last_run_at reflecting when the whole run actually finished. Best-effort —
+    // never fail the count response over this.
+    try { await supabase.from("projects").update({ last_run_at: new Date() }).eq("id", project_id); }
+    catch (e) { console.warn("[last_run_at stamp]", e?.message); }
 
     const byType = {};
     for (const { dt, dev, row } of instances) {

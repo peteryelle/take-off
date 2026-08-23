@@ -28,7 +28,7 @@
 
 import { getSupabase, ok, err, CORS } from "./utils/clients.js";
 
-import { requireOrg, assertProjectInOrg, assertPageInOrg } from "./utils/auth.js";
+import { requireOrg, assertProjectInOrg, assertPageInOrg, assertProjectUnlocked } from "./utils/auth.js";
 const ROLES        = new Set(["plan", "schedule", "legend", "detail", "skip"]);
 const NON_COUNTING = new Set(["legend", "schedule", "detail", "skip"]);
 
@@ -78,6 +78,13 @@ export default async function handler(req) {
   }
 
   if (!(await assertProjectInOrg(supabase, project_id, orgId))) return err("Project not found in your organization", 404);
+
+  // Guard only the branch that actually clears device_instances (a role change
+  // into a non-counting role, further down). A tr_name-only call never touches
+  // counts and stays available even on a locked project.
+  if (hasRole && role && NON_COUNTING.has(role) && !(await assertProjectUnlocked(supabase, project_id))) {
+    return err("Project is locked (accepted final run) — unlock it from the Report page before clearing page counts.", 423);
+  }
 
   // Resolve (or create) the page row BEFORE checking assertPageInOrg — page_id is
   // absent on the "preferred" pattern (every call the client actually makes: role

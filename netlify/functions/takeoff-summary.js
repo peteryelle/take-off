@@ -79,7 +79,7 @@ export default async function handler(req) {
   // layer.
   const { data: projectRow } = await supabase
     .from("projects")
-    .select("catalog_id, default_length_multiplier")
+    .select("catalog_id, default_length_multiplier, accepted_final_run_at")
     .eq("id", project_id)
     .single();
   const catalog_id = projectRow?.catalog_id ?? null;
@@ -87,6 +87,9 @@ export default async function handler(req) {
   // route quality in the confidence map (or edited directly on the report).
   // Single value for the whole project — does not vary by page.
   const default_length_multiplier = projectRow?.default_length_multiplier ?? 1.0;
+  // Accepted-final-run lock — null unless a human has marked this run as final
+  // on the Report page. Count-changing endpoints refuse writes while set.
+  const accepted_final_run_at = projectRow?.accepted_final_run_at ?? null;
 
   // Run all queries in parallel
   const [
@@ -269,7 +272,8 @@ export default async function handler(req) {
     catalog_id,
     catalog_parts:    catalogPartsRes.data ?? [],
     labor_tasks:      laborTasksRes.data   ?? [],
-    default_length_multiplier
+    default_length_multiplier,
+    accepted_final_run_at
   });
 }
 

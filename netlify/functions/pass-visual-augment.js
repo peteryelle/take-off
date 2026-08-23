@@ -17,7 +17,7 @@
 // ─────────────────────────────────────────────────────────────────
 
 import { getSupabase, getAnthropic, ok, err, CORS } from "./utils/clients.js";
-import { requireOrg, assertProjectInOrg, assertPageInOrg } from "./utils/auth.js";
+import { requireOrg, assertProjectInOrg, assertPageInOrg, assertProjectUnlocked } from "./utils/auth.js";
 import { makeStrips, toFullCoords, dedup } from "./utils/strips.js";
 
 const N_STRIPS        = 8;
@@ -49,6 +49,8 @@ export default async function handler(req) {
 
   if (!(await assertProjectInOrg(supabase, project_id, orgId))) return err("Project not found in your organization", 404);
   if (!(await assertPageInOrg(supabase, page_id, orgId))) return err("Page not found in your organization", 404);
+  if (!(await assertProjectUnlocked(supabase, project_id)))
+    return err("Project is locked (accepted final run) — unlock it from the Report page before re-running.", 423);
   const anthropic = getAnthropic();
 
   // ── Load page + device type ───────────────────────────────────

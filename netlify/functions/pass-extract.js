@@ -11,7 +11,7 @@
 // ─────────────────────────────────────────────────────────────────
 
 import { getSupabase, ok, err, CORS } from "./utils/clients.js";
-import { requireOrg, assertProjectInOrg, assertPageInOrg } from "./utils/auth.js";
+import { requireOrg, assertProjectInOrg, assertPageInOrg, assertProjectUnlocked } from "./utils/auth.js";
 import { buildDeviceList } from "../../public/lib/pipeline.js";
 
 const TIA_MAX_PERMANENT_LINK_FT = 295;
@@ -45,6 +45,8 @@ export default async function handler(req) {
 
   if (!(await assertProjectInOrg(supabase, project_id, orgId))) return err("Project not found in your organization", 404);
   if (!(await assertPageInOrg(supabase, page_id, orgId))) return err("Page not found in your organization", 404);
+  if (!(await assertProjectUnlocked(supabase, project_id)))
+    return err("Project is locked (accepted final run) — unlock it from the Report page before re-running.", 423);
 
   if (clear_only) {
     await supabase.from("device_instances").delete().eq("page_id", page_id);
@@ -167,6 +169,10 @@ export default async function handler(req) {
   if (leader_overrides !== undefined) {
     await supabase.from("pages").update({ leader_overrides }).eq("id", page_id);
   }
+
+  // Counts are written and about to be reported — same "it ran" criterion as pass-batch.js.
+  try { await supabase.from("projects").update({ last_run_at: new Date() }).eq("id", project_id); }
+  catch (e) { console.warn("[last_run_at stamp]", e?.message); }
 
   // ── Summary ────────────────────────────────────────────────────
   const byType = {};
