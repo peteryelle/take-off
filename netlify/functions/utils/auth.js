@@ -69,3 +69,34 @@ export async function assertPageInOrg(supabase, pageId, orgId) {
     .maybeSingle();
   return !error && !!data;
 }
+
+// True iff this project is NOT locked (accepted_final_run_at is null).
+// Call this in every endpoint that inserts/deletes device_instances rows —
+// i.e. anything that changes device COUNTS — right after assertProjectInOrg.
+// Endpoints that only edit metadata (flags, cull reason, xy, catalog
+// assignment, pricing multiplier) are out of scope; the lock only guards
+// counts, per the design decision, not every mutation on the project.
+export async function assertProjectUnlocked(supabase, projectId) {
+  if (!projectId) return true; // caller's own project-existence check handles this case
+  const { data, error } = await supabase
+    .from("projects")
+    .select("accepted_final_run_at")
+    .eq("id", projectId)
+    .maybeSingle();
+  if (error || !data) return true; // let the caller's own not-found check fire
+  return data.accepted_final_run_at == null;
+}
+
+// Same check, but resolves project_id from a page_id first — for endpoints
+// (pass-extract, set-page-role, pass-visual-augment) that only receive a
+// page_id, not a project_id, in the request body.
+export async function assertProjectUnlockedForPage(supabase, pageId) {
+  if (!pageId) return true;
+  const { data: page, error: pageErr } = await supabase
+    .from("pages")
+    .select("project_id")
+    .eq("id", pageId)
+    .maybeSingle();
+  if (pageErr || !page) return true;
+  return assertProjectUnlocked(supabase, page.project_id);
+}
