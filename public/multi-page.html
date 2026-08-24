@@ -4171,8 +4171,16 @@ function renderByPage() {
 
     let noDistCount = 0;
     (res.devices ?? []).forEach((d, i) => {
+      // Routing indicator — same badge as the report/confidence map, here inline
+      // next to the distance figure since that's what it qualifies. Only shown
+      // when there's a distance to qualify (no-dist rows have neither tier set).
+      const routeIcon = d.total_ft != null
+        ? (d.routed_via_tier3
+            ? ' <span title="Tier 3 — wall-aware routed path" style="font-size:10px;">🔵</span>'
+            : ' <span title="Tier 1 — straight-line fallback (route came back unreachable through the wall graph)" style="font-size:10px;">⚠️</span>')
+        : '';
       const dist = d.total_ft != null
-        ? `<strong style="color:${d.tia_flag ? '#f07a7a' : '#7af07a'}">${d.total_ft}ft</strong>`
+        ? `<strong style="color:${d.tia_flag ? '#f07a7a' : '#7af07a'}">${d.total_ft}ft</strong>${routeIcon}`
         : '—';
       const fl = d.flags ?? [];
       const culled = fl.includes('manual_excluded');
@@ -4623,9 +4631,22 @@ function confRedraw() {
     star.style.top  = pos.y + 'px';
     if (!culled) {
       star.onmouseenter = () => {
+        // routed_via_tier3 tells us Tier 3 vs Tier 1 directly. There is no
+        // "routed_via_waypoints" field on the persisted device row — the
+        // previous version of this note checked one, which meant every
+        // fallback device's hover text silently said nothing about routing
+        // at all. Tier 1's actual waypoint-corroboration level (high/medium/
+        // low) only exists as a live computeDevicePath() result, same as the
+        // path-confidence overlay — so compute it here rather than guess.
         const routeNote = d.routed_via_tier3
-          ? `  ·  Tier 3 (wall-aware, ${d.route_geometry?.length ?? '?'} pts)`
-          : d.routed_via_waypoints?.length ? `  ·  via ${d.routed_via_waypoints.length} waypoint(s)` : '';
+          ? `  ·  🔵 Tier 3 (wall-aware, ${d.route_geometry?.length ?? '?'} pts)`
+          : d.total_ft != null
+          ? (() => {
+              const p = computeDevicePath(d);
+              const tierLabel = { high: 'via 2+ waypoints', medium: 'via 1 waypoint', low: 'straight line, no waypoints' };
+              return `  ·  ⚠️ Tier 1 fallback (${tierLabel[p?.tier] ?? 'straight line'})`;
+            })()
+          : '';
         const cullNote = armed ? '  ·  click again to exclude' : '  ·  click to exclude';
         document.getElementById('conf-hover-info').textContent =
           `${d.name ?? d.type ?? '—'}  ·  ${(d.raw_labels ?? []).join(' · ')}  ·  confidence: ${d.confidence ?? '—'}${routeNote}${cullNote}`;
