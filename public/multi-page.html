@@ -5109,6 +5109,16 @@ async function openAddDevicePanel(e) {
   sel.innerHTML = types.length
     ? types.map(t => `<option value="${t.id}">${t.name ?? t.legend_id}</option>`).join('')
     : '<option value="">No device types configured</option>';
+
+  // If the confidence map is filtered to a single type, pre-select that type here —
+  // triaging one type at a time (e.g. hunting missed WAPs) shouldn't require
+  // re-picking it from this dropdown on every add. Holds until the filter itself
+  // changes (setConfTypeFilter/openConfidenceModal reset confTypeFilter, not this).
+  // "All types" (confTypeFilter === null) leaves the dropdown's default untouched.
+  if (confTypeFilter) {
+    const match = types.find(t => (t.name ?? t.legend_id) === confTypeFilter);
+    if (match) sel.value = String(match.id);
+  }
 }
 
 function cancelManualAdd() {
