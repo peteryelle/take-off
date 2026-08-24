@@ -1401,6 +1401,23 @@ async function setPageRole(n, role) {
     const j = await r.json().catch(() => ({}));
     if (!r.ok) { setStatus('selection-status', `pg${n} role save failed: ${j.error || r.status}`, 'err'); return; }
     if (j?.page_id) pageCache[n].pageId = j.page_id;
+    // set-page-role.js just deleted this page's device_instances server-side
+    // (any non-counting role clears counts — see its own comment). batchResults
+    // is a client-side cache runBatch fills in and every view (results table,
+    // project total, BOM, confidence map) reads from directly rather than the
+    // DB, so without this the browser kept showing the pre-skip device list
+    // and count indefinitely — correct in Supabase, stale on screen — until a
+    // full reload ran restoreFromSupabase() and resynced everything. Clearing
+    // it here (only when the role is actually a non-counting one — runBatch's
+    // own gate, reused so this never drifts from what the runner considers
+    // "counted") and re-rendering makes the UI catch up immediately instead
+    // of silently disagreeing with the database until the next reload.
+    const Vg = window.TakeoffVec;
+    const isNonCounting = Vg?.runnerWorkForRole?.(pageRole) === 'skip';
+    if (isNonCounting && batchResults[n]) {
+      delete batchResults[n];
+      renderResults();
+    }
   } catch (e) {
     setStatus('selection-status', `pg${n} role save failed: ${e.message}`, 'err');
   }
@@ -1469,6 +1486,20 @@ async function bulkSetRole(role) {
   setStatus('selection-status',
     `Saved ${okN}/${pages.length} page${pages.length !== 1 ? 's' : ''} → ${label}`,
     okN === pages.length ? 'ok' : 'err');
+
+  // Same staleness fix as setPageRole: a bulk skip/legend/schedule/detail
+  // assignment clears device_instances server-side for every one of these
+  // pages, but batchResults is a client cache every view reads from directly
+  // — without this, all of them keep showing their pre-change counts until a
+  // full reload. Only clear the ones that actually saved.
+  const Vg = window.TakeoffVec;
+  if (Vg?.runnerWorkForRole?.(role || null) === 'skip') {
+    let anyCleared = false;
+    pages.forEach((n, i) => {
+      if (results[i] && batchResults[n]) { delete batchResults[n]; anyCleared = true; }
+    });
+    if (anyCleared) renderResults();
+  }
 }
 
 // Clearing ROLES is distinct from clearing the SELECTION. Guarded so it can't be
@@ -1587,6 +1618,23 @@ function updateThumbStates() {
   const count = selectedPages.size;
   setStatus('selection-status', count ? `${count} pages selected` : '—',
     count ? 'ok' : '');
+
+  // Keep the Page Assignment table (2B) in sync with the CURRENT selection.
+  // togglePage()/applyRange()/clearSelection() all funnel through here, and
+  // previously none of them re-rendered that table — it was only ever built
+  // at scan time (runDemarcScan) or on a pin save, so changing the selection
+  // afterward (e.g. re-selecting a wider range on a second pass) left it
+  // frozen on whichever pages were selected during the LAST scan. Every
+  // already-configured page's data (role, TR, pin, exclude zones) lives in
+  // pageCache/trMap/the DB and was never actually lost — the table just
+  // wasn't re-reading the selection against it. Only re-renders once the
+  // table has been shown at least once (the initial pre-scan state stays
+  // untouched, matching the existing gate at restore time) so this doesn't
+  // pop the table into view before there's anything scanned to show.
+  const paWrap = document.getElementById('pa-table-wrap');
+  if (paWrap && paWrap.style.display !== 'none') {
+    renderPageAssignmentTable(Object.values(trMap));
+  }
 }
 
 // Parse range string: "5-31" or "5,7,9-14" or "5, 7, 9-14"
@@ -1629,6 +1677,7 @@ async function runDemarcScan() {
 
   const sortedPages = [...selectedPages].sort((a,b) => a-b);
   const pageBResults = [];
+  const failedPages = [];   // { pageNum, reason } — surfaced in the final status instead of only console.warn
   let done = 0;
 
   for (const pageNum of sortedPages) {
@@ -1661,12 +1710,27 @@ async function runDemarcScan() {
         // suggest_skip/reason) set before this scan, tripping the Step-4 role gate.
         pageCache[pageNum] = { ...pageCache[pageNum], passBResult: j, pageId: j.page_id };
         pageBResults.push({ eval_page_num: pageNum, page_b_result: j });
+      } else {
+        failedPages.push({ pageNum, reason: j.error || `HTTP ${r.status}` });
       }
-    } catch(e) { console.warn(`Page ${pageNum} scan failed:`, e.message); }
+    } catch(e) { failedPages.push({ pageNum, reason: e.message }); }
     done++;
   }
 
   document.getElementById('scan-progress').style.width = '100%';
+
+  // If every selected page's own Pass B call failed, stop here with the real
+  // per-page reason(s) rather than sending an empty pages array to pass-scan —
+  // that endpoint's own "project_id and pages array required" is accurate but
+  // misleading in this case: project_id IS present, the array is just empty
+  // because nothing upstream succeeded. Previously this branch was silent
+  // (console.warn only), so the only thing the user ever saw was pass-scan's
+  // generic message with no indication anything page-specific had failed.
+  if (!pageBResults.length) {
+    const detail = failedPages.map(f => `pg${f.pageNum}: ${f.reason}`).join(' · ');
+    setStatus('scan-status', `Scan failed for all ${failedPages.length} selected page(s) — ${detail}`, 'err');
+    return;
+  }
 
   // Send to pass-scan
   const r2 = await fetch(`${base()}/api/pass-scan`, {
@@ -1680,9 +1744,13 @@ async function runDemarcScan() {
     return;
   }
 
+  const failNote = failedPages.length
+    ? ` · ⚠ ${failedPages.length} page(s) failed: ${failedPages.map(f => `pg${f.pageNum} (${f.reason})`).join(', ')}`
+    : '';
+
   setStatus('scan-status',
-    `✓ ${scanResult.pages_scanned} pages scanned · ${scanResult.tr_rooms} TR rooms found · ${scanResult.off_sheet} need configuration`,
-    scanResult.off_sheet > 0 ? '' : 'ok');
+    `✓ ${scanResult.pages_scanned} pages scanned · ${scanResult.tr_rooms} TR rooms found · ${scanResult.off_sheet} need configuration${failNote}`,
+    (scanResult.off_sheet > 0 || failedPages.length) ? '' : 'ok');
 
   // Merge, don't overwrite — same principle as the pageCache merge above.
   // pass-scan only returns schedule-derived TRs (empty for a no-schedule project
