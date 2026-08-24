@@ -79,14 +79,18 @@ export default async function handler(req) {
   // layer.
   const { data: projectRow } = await supabase
     .from("projects")
-    .select("catalog_id, default_length_multiplier, accepted_final_run_at")
+    .select("catalog_id, default_length_multiplier, fallback_length_multiplier, accepted_final_run_at")
     .eq("id", project_id)
     .single();
   const catalog_id = projectRow?.catalog_id ?? null;
-  // Project-wide cable-length multiplier, set by the user after reviewing
+  // Project-wide cable-length multipliers, set by the user after reviewing
   // route quality in the confidence map (or edited directly on the report).
-  // Single value for the whole project — does not vary by page.
+  // default_length_multiplier applies to Tier 3 (wall-aware routed) device
+  // instances; fallback_length_multiplier applies to Tier 1 (straight-line)
+  // ones — see device_instances.routed_via_tier3. Each is a single value
+  // for the whole project — does not vary by page.
   const default_length_multiplier = projectRow?.default_length_multiplier ?? 1.0;
+  const fallback_length_multiplier = projectRow?.fallback_length_multiplier ?? 1.0;
   // Accepted-final-run lock — null unless a human has marked this run as final
   // on the Report page. Count-changing endpoints refuse writes while set.
   const accepted_final_run_at = projectRow?.accepted_final_run_at ?? null;
@@ -273,6 +277,7 @@ export default async function handler(req) {
     catalog_parts:    catalogPartsRes.data ?? [],
     labor_tasks:      laborTasksRes.data   ?? [],
     default_length_multiplier,
+    fallback_length_multiplier,
     accepted_final_run_at
   });
 }

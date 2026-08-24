@@ -236,10 +236,15 @@ window.loadReport = async function loadReport() {
   const demarcs = j.demarcs ?? [];
   const pages = j.pages ?? [];
 
-  // Project-wide cable-length multiplier — a human judgment call on route
-  // quality (corridor-following vs. straight-line), set here or in the
-  // confidence map. One value for the whole project — does not vary by page.
-  const lengthMultiplier = j.default_length_multiplier ?? 1.0;
+  // Project-wide cable-length multipliers — a human judgment call on route
+  // quality, set here or in the confidence map. Two values, not one: a device
+  // routed Tier 3 (wall-aware — already follows corridors/walls) typically
+  // only needs a small multiplier for slack and termination loops, while a
+  // device that fell back to Tier 1 (straight-line — no detour at all) needs
+  // a larger one to not systematically undercount. Which applies is decided
+  // per device by device_instances.routed_via_tier3, not chosen here.
+  const routedMultiplier   = j.default_length_multiplier  ?? 1.0;
+  const fallbackMultiplier = j.fallback_length_multiplier ?? 1.0;
   reportProjectId = pid;   // for saveReportMultiplier() below
 
   // typesById keyed by the real numeric FK — device_instances.device_type_id
@@ -253,18 +258,26 @@ window.loadReport = async function loadReport() {
     device_type_id:  inst.device_type_id,
     raw_labels:      inst.raw_labels ?? [],
     removed_by_user: isCulled(inst),
-    // Multiplier applied here — bom.js itself is untouched (keeps its own
-    // fixture gates valid); this is the ONLY place total_ft is adjusted for
-    // BOM math. Raw device_instances.total_ft in the DB is never overwritten.
-    total_ft: inst.total_ft != null ? inst.total_ft * lengthMultiplier : null,
+    // Multiplier applied here, per-device by routed_via_tier3 — bom.js itself
+    // is untouched (keeps its own fixture gates valid); this is the ONLY
+    // place total_ft is adjusted for BOM math. Raw device_instances.total_ft
+    // in the DB is never overwritten.
+    total_ft: inst.total_ft != null
+      ? inst.total_ft * (inst.routed_via_tier3 ? routedMultiplier : fallbackMultiplier)
+      : null,
   }));
 
   const activeInstances = rawInstances.filter(i => !isCulled(i));
   const tiaCount = activeInstances.filter(i => i.tia_flag).length;
   const culledCount = rawInstances.length - activeInstances.length;
 
-  // Raw (unmultiplied) footage total, for the multiplier detail line below.
-  const rawFtTotal = activeInstances.reduce((sum, i) => sum + (i.total_ft ?? 0), 0);
+  // Raw (unmultiplied) footage totals, split by which tier actually routed
+  // each device — for the multiplier detail line below.
+  const routedInstances   = activeInstances.filter(i => i.routed_via_tier3);
+  const fallbackInstances = activeInstances.filter(i => !i.routed_via_tier3);
+  const routedFtTotal     = routedInstances.reduce((sum, i) => sum + (i.total_ft ?? 0), 0);
+  const fallbackFtTotal   = fallbackInstances.reduce((sum, i) => sum + (i.total_ft ?? 0), 0);
+  const rawFtTotal        = routedFtTotal + fallbackFtTotal;
 
   const bom = aggregateBom(instances, typesById);
 
@@ -307,7 +320,8 @@ window.loadReport = async function loadReport() {
   html += statCard(culledCount, 'Culled', culledCount ? 'warn' : '');
   html += statCard(tiaCount, 'TIA Flags', tiaCount ? 'warn' : '');
   html += statCard(demarcs.length, 'Demarcs / TRs');
-  html += statCard(lengthMultiplier + '×', 'Cable-Length Multiplier', lengthMultiplier !== 1 ? 'warn' : '');
+  html += statCard(routedMultiplier + '×', 'Routed Multiplier (' + routedInstances.length + ')', routedMultiplier !== 1 ? 'warn' : '');
+  html += statCard(fallbackMultiplier + '×', 'Fallback Multiplier (' + fallbackInstances.length + ')', fallbackMultiplier !== 1 ? 'warn' : '');
   html += statCard(bom.coverage.flagged_instances, 'Unmodeled', bom.coverage.flagged_instances ? 'warn' : '');
   html += statCard(bom.missing_distance.reduce((n, u) => n + u.instances, 0), 'No TR Distance', bom.missing_distance.length ? 'warn' : '');
   html += statCard(formatMoney(priced.totals.cost_total), 'Material Cost');
@@ -319,20 +333,44 @@ window.loadReport = async function loadReport() {
     html += '<div class="empty" style="margin:-8px 0 16px;">No parts catalog assigned to this project — every line below is unpriced.</div>';
   }
 
-  // ── Cable-length multiplier — editable here or in the confidence map.
-  // One value for the whole project — does not vary by page. Applied to
-  // every per_run_ft BOM line above; raw measured footage shown for
-  // reference so the adjustment stays auditable.
-  html += `<div class="section"><div class="section-title">Cable-Length Multiplier</div>
-    <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:4px;">
-      <span style="color:#aaa; font-size:13px;">Multiplier:</span>
-      <input id="report-mult-input" type="number" step="0.01" min="0.01" value="${lengthMultiplier}" style="width:80px; padding:4px 6px;">
+  // ── Cable-length multipliers — editable here or in the confidence map.
+  // Two values, not one: which applies to a given device is decided by
+  // device_instances.routed_via_tier3 (set at batch-run time, per device —
+  // see the confidence map for which devices landed in which bucket).
+  // Each is one value for the whole project — does not vary by page.
+  // Applied to every per_run_ft BOM line above; raw measured footage shown
+  // per tier for reference so the adjustment stays auditable.
+  html += `<div class="section"><div class="section-title">Cable-Length Multipliers</div>
+    <div style="display:flex; flex-wrap:wrap; gap:24px; margin-bottom:8px;">
+      <div>
+        <div style="display:flex; gap:10px; align-items:center; margin-bottom:4px;">
+          <span style="color:#aaa; font-size:13px;">🔵 Routed (Tier 3, wall-aware):</span>
+          <input id="report-mult-routed-input" type="number" step="0.01" min="0.01" value="${routedMultiplier}" style="width:80px; padding:4px 6px;">
+        </div>
+        <div style="font-size:12px; color:#777;">
+          ${routedInstances.length} device(s) · raw ${Math.round(routedFtTotal).toLocaleString('en-US')} ft
+          · adjusted ${Math.round(routedFtTotal * routedMultiplier).toLocaleString('en-US')} ft
+        </div>
+      </div>
+      <div>
+        <div style="display:flex; gap:10px; align-items:center; margin-bottom:4px;">
+          <span style="color:#aaa; font-size:13px;">⚠️ Fallback (Tier 1, straight-line):</span>
+          <input id="report-mult-fallback-input" type="number" step="0.01" min="0.01" value="${fallbackMultiplier}" style="width:80px; padding:4px 6px;">
+        </div>
+        <div style="font-size:12px; color:#777;">
+          ${fallbackInstances.length} device(s) · raw ${Math.round(fallbackFtTotal).toLocaleString('en-US')} ft
+          · adjusted ${Math.round(fallbackFtTotal * fallbackMultiplier).toLocaleString('en-US')} ft
+        </div>
+      </div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px; margin-bottom:4px;">
       <button onclick="saveReportMultiplier()" style="padding:5px 14px; font-size:12px;">Save &amp; reload</button>
       <span id="report-mult-status" style="color:#888; font-size:11px;"></span>
     </div>
     <div style="font-size:12px; color:#777;">
-      Raw measured footage: ${Math.round(rawFtTotal).toLocaleString('en-US')} ft · Adjusted (×${lengthMultiplier}): ${Math.round(rawFtTotal * lengthMultiplier).toLocaleString('en-US')} ft.
-      The Bill of Materials cable-footage figures below already reflect this multiplier.
+      Combined raw: ${Math.round(rawFtTotal).toLocaleString('en-US')} ft · combined adjusted:
+      ${Math.round(routedFtTotal * routedMultiplier + fallbackFtTotal * fallbackMultiplier).toLocaleString('en-US')} ft.
+      The Bill of Materials cable-footage figures below already reflect these multipliers.
     </div>
   </div>`;
 
@@ -451,16 +489,16 @@ window.loadReport = async function loadReport() {
   setStatus(`✓ Loaded — ${activeInstances.length} devices, ${bom.components.length} part line(s)`, 'ok');
 };
 
-// Persists the project-wide cable-length multiplier from the report page,
-// then reloads the report so the BOM/composite figures reflect it
-// immediately. Same field the confidence map's multiplier control writes —
-// one value for the whole project, does not vary by page.
+// Persists the project-wide cable-length multipliers (routed + fallback)
+// from the report page, then reloads the report so the BOM/composite figures
+// reflect them immediately. Same fields the confidence map's multiplier
+// controls write — one value each for the whole project, do not vary by page.
 window.saveReportMultiplier = async function saveReportMultiplier() {
   const statusEl = document.getElementById('report-mult-status');
-  const raw = document.getElementById('report-mult-input')?.value;
-  const val = Number(raw);
-  if (!Number.isFinite(val) || val <= 0) {
-    if (statusEl) { statusEl.style.color = '#f07a7a'; statusEl.textContent = 'must be a positive number'; }
+  const routedVal   = Number(document.getElementById('report-mult-routed-input')?.value);
+  const fallbackVal = Number(document.getElementById('report-mult-fallback-input')?.value);
+  if (!Number.isFinite(routedVal) || routedVal <= 0 || !Number.isFinite(fallbackVal) || fallbackVal <= 0) {
+    if (statusEl) { statusEl.style.color = '#f07a7a'; statusEl.textContent = 'both multipliers must be positive numbers'; }
     return;
   }
   if (!reportProjectId) {
@@ -471,11 +509,14 @@ window.saveReportMultiplier = async function saveReportMultiplier() {
   try {
     const r = await fetch(`${base()}/api/projects`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'update_project', project_id: reportProjectId, default_length_multiplier: val })
+      body: JSON.stringify({
+        action: 'update_project', project_id: reportProjectId,
+        default_length_multiplier: routedVal, fallback_length_multiplier: fallbackVal
+      })
     });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || r.status);
-    await loadReport();   // reload so BOM/composite reflect the new value immediately
+    await loadReport();   // reload so BOM/composite reflect the new values immediately
   } catch (e) {
     if (statusEl) { statusEl.style.color = '#f07a7a'; statusEl.textContent = `save failed: ${e.message}`; }
   }

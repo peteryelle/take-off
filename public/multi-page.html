@@ -547,14 +547,21 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
   <div style="color:#aaa; font-size:13px; margin-bottom:8px;">
     Each star is a counted device · color = confidence · click a star to exclude it · click its number to isolate its path · ✕ = excluded · click empty space to add a missed device · filter by type to triage one device type at a time · hover for detail · scroll to zoom · drag to pan
   </div>
-  <!-- ── Cable-length multiplier — human judgment call on run quality (predominantly
-       clean corridors vs. predominantly straight-line), applied after reviewing this
-       project's routed paths above. One value for the whole project — does not vary
-       by page. Also editable directly on the report. ── -->
-  <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:center;
+  <!-- ── Cable-length multipliers — human judgment call on run quality, applied after
+       reviewing this project's routed paths above. Two values, not one: which applies
+       to a given device is decided by its own routed_via_tier3 flag (blue path above =
+       Tier 3/routed, red-yellow-green = Tier 1/fallback). Each is one value for the
+       whole project — does not vary by page. Also editable directly on the report. ── -->
+  <div style="display:flex; flex-wrap:wrap; gap:16px; align-items:center; justify-content:center;
        margin-bottom:8px; padding:8px 12px; background:#1a1a1a; border:1px solid #333; border-radius:6px;">
-    <span style="color:#aaa; font-size:12px;">Cable-length multiplier (project-wide):</span>
-    <input id="conf-mult-input" type="number" step="0.01" min="0.01" style="width:70px; padding:3px 6px;">
+    <span style="display:flex; gap:6px; align-items:center;">
+      <span style="color:#aaa; font-size:12px;">🔵 Routed multiplier:</span>
+      <input id="conf-mult-routed-input" type="number" step="0.01" min="0.01" style="width:70px; padding:3px 6px;">
+    </span>
+    <span style="display:flex; gap:6px; align-items:center;">
+      <span style="color:#aaa; font-size:12px;">⚠️ Fallback multiplier:</span>
+      <input id="conf-mult-fallback-input" type="number" step="0.01" min="0.01" style="width:70px; padding:3px 6px;">
+    </span>
     <button onclick="saveLengthMultiplier()" style="padding:4px 12px; font-size:12px;">Save</button>
     <span id="conf-mult-status" style="color:#888; font-size:11px;"></span>
   </div>
@@ -686,7 +693,8 @@ let projectId    = null;
 // Single value for the whole project — does not vary by page. Set here in
 // the confidence map after reviewing route quality, or edited directly on
 // the report. See saveLengthMultiplier() / initLengthMultiplierControls().
-let projectDefaultMultiplier = 1.0;
+let projectDefaultMultiplier = 1.0;   // Tier 3 (routed) multiplier
+let projectFallbackMultiplier = 1.0;  // Tier 1 (straight-line fallback) multiplier
 let pdfDoc       = null;
 let totalPages   = 0;
 let selectedPages = new Set();   // PDF page numbers
@@ -5240,22 +5248,23 @@ async function openConfidenceModal(pageNum) {
   confRedraw();
 }
 
-// Pre-fills the multiplier input with the current project-wide value.
+// Pre-fills both multiplier inputs with the current project-wide values.
 function initLengthMultiplierControls() {
-  document.getElementById('conf-mult-input').value = projectDefaultMultiplier;
+  document.getElementById('conf-mult-routed-input').value = projectDefaultMultiplier;
+  document.getElementById('conf-mult-fallback-input').value = projectFallbackMultiplier;
   document.getElementById('conf-mult-status').textContent = '';
 }
 
-// Persists the project-wide cable-length multiplier. One value for the whole
-// project — does not vary by page. Same action the report page's own
-// multiplier field uses, so either surface stays in sync.
+// Persists both project-wide cable-length multipliers. One value each for the
+// whole project — does not vary by page. Same action the report page's own
+// multiplier fields use, so either surface stays in sync.
 async function saveLengthMultiplier() {
-  const raw = document.getElementById('conf-mult-input').value;
-  const val = Number(raw);
+  const routedVal   = Number(document.getElementById('conf-mult-routed-input').value);
+  const fallbackVal = Number(document.getElementById('conf-mult-fallback-input').value);
   const statusEl = document.getElementById('conf-mult-status');
-  if (!Number.isFinite(val) || val <= 0) {
+  if (!Number.isFinite(routedVal) || routedVal <= 0 || !Number.isFinite(fallbackVal) || fallbackVal <= 0) {
     statusEl.style.color = '#f07a7a';
-    statusEl.textContent = 'must be a positive number';
+    statusEl.textContent = 'both multipliers must be positive numbers';
     return;
   }
   if (!projectId) { statusEl.style.color = '#f07a7a'; statusEl.textContent = 'no project loaded'; return; }
@@ -5264,13 +5273,17 @@ async function saveLengthMultiplier() {
   try {
     const r = await fetch(`${base()}/api/projects`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'update_project', project_id: projectId, default_length_multiplier: val })
+      body: JSON.stringify({
+        action: 'update_project', project_id: projectId,
+        default_length_multiplier: routedVal, fallback_length_multiplier: fallbackVal
+      })
     });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || r.status);
-    projectDefaultMultiplier = val;
+    projectDefaultMultiplier = routedVal;
+    projectFallbackMultiplier = fallbackVal;
     statusEl.style.color = '#7af07a';
-    statusEl.textContent = `saved (${val}×)`;
+    statusEl.textContent = `saved (routed ${routedVal}× · fallback ${fallbackVal}×)`;
   } catch (e) {
     statusEl.style.color = '#f07a7a';
     statusEl.textContent = `save failed: ${e.message}`;
@@ -5608,6 +5621,7 @@ async function restoreFromSupabase(pid) {
     const projPages   = j.project_pages ?? [];
     const demarcs     = j.demarcs      ?? [];
     projectDefaultMultiplier = j.default_length_multiplier ?? 1.0;
+    projectFallbackMultiplier = j.fallback_length_multiplier ?? 1.0;
     const pageRegions = j.page_regions ?? [];   // schematics (page → 1+ regions)
     const regionById  = new Map(pageRegions.map(rg => [rg.id, rg]));
     // Distance-scope boxes, keyed by page_id (devices are scoped against these).
