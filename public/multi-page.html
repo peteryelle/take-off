@@ -575,6 +575,8 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
     <span style="color:#f07a7a; font-size:11px;">● low</span>
     <button id="conf-paths-toggle" onclick="toggleConfPaths()" class="info"
       style="padding:3px 10px; font-size:11px; margin-left:12px;">🔀 show path confidence</button>
+    <button id="conf-recalc-btn" onclick="recalcPendingManualAdds()" style="padding:3px 10px; font-size:11px; margin-left:12px;
+      background:#3a2a1a; border-color:#7a5a2a; color:#e0a860; display:none;">⟳ Recalculate (0 pending)</button>
     <select id="conf-type-filter" onchange="setConfTypeFilter(this.value)"
       style="padding:3px 8px; font-size:11px; margin-left:12px; max-width:220px;"></select>
   </div>
@@ -3731,6 +3733,11 @@ async function runBatch(quiet = false) {
 
   // ── Prefetch device types with llm_description for visual augment ─
   let augmentTypes = [];
+  // ── Prefetch symbol-disambiguation pairs — a variant type (anchor: null,
+  // detection_config.disambiguate_from = <base_type_id>) whose instances need
+  // splitting off the base type's shared-anchor detections by visual match
+  // against each type's own reference crop. See pass-symbol-classify.js.
+  let disambiguatePairs = [];
   try {
     const dtR = await fetch(`${base()}/api/takeoff-summary?project_id=${projectId}`);
     const dtD = await dtR.json();
@@ -3739,6 +3746,15 @@ async function runBatch(quiet = false) {
       dt.llm_description && dt.llm_description.trim().length > 20
     );
     console.log('[augment] augmentTypes after filter:', augmentTypes.map(d => d.name));
+    const allTypes = dtD.device_types ?? [];
+    disambiguatePairs = allTypes
+      .filter(dt => dt.detection_config?.disambiguate_from)
+      .map(variant => ({
+        variant,
+        base: allTypes.find(t => t.id === variant.detection_config.disambiguate_from)
+      }))
+      .filter(p => p.base);
+    if (disambiguatePairs.length) console.log('[symbol-classify] pairs:', disambiguatePairs.map(p => `${p.base.name} / ${p.variant.name}`));
   } catch(e) { console.warn('[augment] prefetch failed:', e.message); }
   const log         = document.getElementById('batch-log');
 
@@ -3999,6 +4015,68 @@ async function runBatch(quiet = false) {
       if (!quiet) {
         log.innerHTML += `<div style="color:${r.ok ? '#7af07a' : '#f07a7a'}">${msg}</div>`;
         log.scrollTop = log.scrollHeight;
+      }
+
+      // ── Symbol-classify follow-up — split any shared-anchor detections
+      // between a base type and its variant(s) by visual match against each
+      // type's own reference crop. Runs after pass-batch so it has real
+      // persisted instances (under the base type) to reclassify, not a fresh
+      // detection. One page render, reused across every pair on this page.
+      if (r.ok && disambiguatePairs.length) {
+        let clsPageImgB64 = null;
+        for (const { base: baseDt, variant: variantDt } of disambiguatePairs) {
+          setPhase(`pg${pageNum}: symbol classify (${variantDt.name})`);
+          try {
+            if (!clsPageImgB64) {
+              const clsVP = pdfPage.getViewport({ scale: 1.8 });
+              const clsCV = document.createElement('canvas');
+              clsCV.width = clsVP.width; clsCV.height = clsVP.height;
+              await pdfPage.render({ canvasContext: clsCV.getContext('2d'), viewport: clsVP }).promise;
+              clsPageImgB64 = clsCV.toDataURL('image/jpeg', 0.9).split(',')[1];
+            }
+            const clsR = await fetch(`${base()}/api/pass-symbol-classify`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                project_id: projectId, page_id: pageId,
+                base_type_id: baseDt.id, variant_type_id: variantDt.id,
+                page_image_base64: clsPageImgB64,
+                page_width_pts: W, page_height_pts: H
+              })
+            });
+            const clsJ = await clsR.json();
+            if (clsR.ok && clsJ.reclassified_ids?.length) {
+              const idSet = new Set(clsJ.reclassified_ids);
+              const devs = batchResults[pageNum]?.devices ?? [];
+              for (const d of devs) {
+                if (idSet.has(d.id)) {
+                  d.device_type_id = variantDt.id;
+                  d.name = variantDt.name;
+                  d.legend_id = variantDt.legend_id ?? d.legend_id;
+                }
+              }
+              // by_type summary line (used by renderByPage's per-page header) is
+              // built once at pass-batch response time and doesn't auto-recount —
+              // rebuild it from the now-patched devices list so it stays accurate.
+              const byType = {};
+              for (const d of devs) {
+                const k = d.legend_id ?? d.type ?? d.name;
+                byType[k] = byType[k] ?? { legend_id: d.legend_id ?? null, name: d.name, count: 0, tia: 0 };
+                byType[k].count++;
+                if (d.tia_flag) byType[k].tia++;
+              }
+              if (batchResults[pageNum]) batchResults[pageNum].by_type = Object.values(byType);
+            }
+            if (!quiet) {
+              const clsMsg = clsR.ok
+                ? `pg${pageNum}: symbol-classify — ${clsJ.reclassified} of ${clsJ.candidates} "${baseDt.name}" reclassified as "${variantDt.name}"`
+                : `pg${pageNum}: symbol-classify (${variantDt.name}) ERROR — ${clsJ.error}`;
+              log.innerHTML += `<div style="color:${clsR.ok ? '#7af07a' : '#f07a7a'};">${clsMsg}</div>`;
+              log.scrollTop = log.scrollHeight;
+            }
+          } catch (e) {
+            if (!quiet) log.innerHTML += `<div style="color:#f07a7a;">pg${pageNum}: symbol-classify (${variantDt.name}) — ${e.message}</div>`;
+          }
+        }
       }
 
 
@@ -4589,6 +4667,10 @@ let confArmedForCull = null;   // _num of a device clicked once, awaiting a seco
 const CULL_PAD_FRAC = 0.012;
 let confClickStart = null;   // {x,y} client coords at mousedown, to distinguish a click from a pan drag
 let confPendingAddXY = null; // {x,y} identity-frame coords awaiting a type choice in the add panel
+// Manual adds are batched, not auto-recalculated — see submitManualAdd/recalcPendingManualAdds.
+// Keyed per page number since re-opening the confidence map on a different page shouldn't
+// carry over another page's pending count.
+let confPendingManualCounts = {};
 let confWaypoints = [], confDemarcs = {};   // for routed-path visualization on hover
 let confExclusionZones = [];                // page_regions kind='exclude' rows for this page — green boxes
 let confShowAllPaths = false;               // path-confidence layer toggle
@@ -5076,23 +5158,56 @@ async function submitManualAdd() {
     if (bt) bt.count = (bt.count ?? 0) + 1;
     else (res.by_type ?? (res.by_type = [])).push({ legend_id: dt?.legend_id ?? null, name: dt?.name ?? 'device', count: 1, tia: 0 });
   }
-  document.getElementById('conf-hover-info').textContent = 'Added — re-running this page for distance…';
+  document.getElementById('conf-hover-info').textContent = 'Added — click Recalculate when done adding to compute distance';
   confDevices = (res?.devices || [])
     .map((d, i) => ({ ...d, _num: i + 1 }))
     .filter(d => d.x_norm != null && d.y_norm != null);
   confRedraw();
   renderResults();
 
+  // Batched, not automatic — a manual add here just records the position and
+  // shows it with distance pending (total_ft: null on the pushed entry above).
+  // The full pipeline rerun (symbol detection, reconcile, routing — everything
+  // rerunPageAfterManualAdd/runBatch does) only fires once, when the user
+  // clicks Recalculate, however many devices they've tagged in the meantime.
+  confPendingManualCounts[confPageNum] = (confPendingManualCounts[confPageNum] ?? 0) + 1;
+  updateConfRecalcButton();
+}
+
+// Reflects the current page's pending-add count on the Recalculate button —
+// hidden at 0 so it doesn't sit there as a permanent no-op control.
+function updateConfRecalcButton() {
+  const btn = document.getElementById('conf-recalc-btn');
+  if (!btn) return;
+  const n = confPendingManualCounts[confPageNum] ?? 0;
+  btn.style.display = n > 0 ? 'inline-block' : 'none';
+  btn.textContent = `⟳ Recalculate (${n} pending)`;
+}
+
+// Fires the one deferred pipeline rerun for every manual add batched since the
+// last recalc (or since the modal opened). Same rerunPageAfterManualAdd/
+// runBatch(true) call submitManualAdd used to fire per-add — just deferred to
+// a single explicit click instead of automatically after every single tag.
+async function recalcPendingManualAdds() {
+  const n = confPendingManualCounts[confPageNum] ?? 0;
+  if (!n) return;
+  const btn = document.getElementById('conf-recalc-btn');
+  if (btn) { btn.disabled = true; btn.textContent = `⟳ Recalculating…`; }
+  document.getElementById('conf-hover-info').textContent = `Recalculating distance for ${n} added device${n !== 1 ? 's' : ''}…`;
+
   await rerunPageAfterManualAdd(confPageNum);
 
   // runBatch() replaced batchResults[confPageNum] wholesale with the server's
-  // authoritative pass — re-sync the map from it (the optimistic entry above is
+  // authoritative pass — re-sync the map from it (every optimistic entry is
   // now superseded, distance included).
   const fresh = batchResults[confPageNum];
   confDevices = (fresh?.devices || [])
     .map((d, i) => ({ ...d, _num: i + 1 }))
     .filter(d => d.x_norm != null && d.y_norm != null);
   document.getElementById('conf-hover-info').textContent = '';
+  confPendingManualCounts[confPageNum] = 0;
+  if (btn) btn.disabled = false;
+  updateConfRecalcButton();
   confRedraw();
 }
 
@@ -5235,6 +5350,7 @@ async function openConfidenceModal(pageNum) {
   confPinnedPath = null;
   confTypeFilter = null;
   document.getElementById('conf-cull-panel').style.display = 'none';
+  updateConfRecalcButton();
   confDevices = (res.devices || [])
     .map((d, i) => ({ ...d, _num: i + 1 }))   // matches the # column in the by-page device table
     .filter(d => d.x_norm != null && d.y_norm != null);
@@ -5380,6 +5496,10 @@ async function saveLengthMultiplier() {
 }
 
 function closeConfidenceModal() {
+  const n = confPendingManualCounts[confPageNum] ?? 0;
+  if (n > 0 && !confirm(`${n} added device${n !== 1 ? 's' : ''} on this page still ${n !== 1 ? 'have' : 'has'} no distance calculated — the BOM/report will show them with a missing run length until you click Recalculate. Close anyway?`)) {
+    return;
+  }
   document.getElementById('conf-modal').style.display = 'none';
   confArmedForCull = null;
   confCullTarget = null;
