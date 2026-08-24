@@ -374,6 +374,47 @@ window.loadReport = async function loadReport() {
     </div>
   </div>`;
 
+  // ── Cable Runs — per-device routing detail ──
+  // The badge answers "which multiplier did THIS device get" — the stat cards
+  // and section above only give the project-wide split. Fallback (straight-line)
+  // rows sorted first since those are the ones worth spot-checking against the
+  // drawing; routed rows follow. pageById gives sheet context per row.
+  const pageById = new Map(pages.map(p => [p.id, p]));
+  const cableRunRows = activeInstances
+    .filter(i => i.total_ft != null)
+    .map(i => {
+      const dt = typesById[i.device_type_id];
+      const mult = i.routed_via_tier3 ? routedMultiplier : fallbackMultiplier;
+      return {
+        name: dt?.name ?? `type ${i.device_type_id}`,
+        sheet: pageById.get(i.page_id)?.sheet_title ?? `page ${i.page_id ?? '—'}`,
+        routed: !!i.routed_via_tier3,
+        rawFt: i.total_ft,
+        adjFt: i.total_ft * mult,
+      };
+    })
+    .sort((a, b) => (a.routed === b.routed ? b.rawFt - a.rawFt : a.routed ? 1 : -1));
+
+  html += `<div class="section"><div class="section-title">Cable Runs — Routing Detail</div>
+    <div style="font-size:12px; color:#777; margin:-4px 0 8px;">
+      Per-device routing badge and the multiplier it received. 🔵 Routed = Tier 3 wall-aware path.
+      ⚠️ Straight-line = Tier 1 fallback (route came back unreachable through the wall graph) —
+      worth a spot-check against the drawing before accepting the run.
+    </div>`;
+  if (cableRunRows.length) {
+    html += '<div style="max-height:420px; overflow:auto;"><table><thead><tr><th>Device Type</th><th>Sheet</th><th>Routing</th><th style="text-align:right;">Raw ft</th><th style="text-align:right;">Adjusted ft</th></tr></thead><tbody>';
+    for (const r of cableRunRows) {
+      const badge = r.routed
+        ? '<span class="badge badge-info">🔵 routed</span>'
+        : '<span class="badge badge-warn">⚠️ straight-line</span>';
+      html += `<tr><td>${escHtml(r.name)}</td><td>${escHtml(r.sheet)}</td><td>${badge}</td><td class="num-cell">${Math.round(r.rawFt).toLocaleString('en-US')}</td><td class="num-cell">${Math.round(r.adjFt).toLocaleString('en-US')}</td></tr>`;
+    }
+    html += '</tbody></table></div>';
+  } else {
+    html += '<div class="empty">No devices with a computed cable run yet for this project</div>';
+  }
+  html += '</div>';
+
   // ── Device counts by type ──
   const countsByType = new Map();
   for (const inst of activeInstances) {
