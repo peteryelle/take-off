@@ -1724,12 +1724,11 @@ async function runDemarcScan() {
     trMap[tr.name] = { ...(trMap[tr.name] ?? {}), ...tr };
   }
 
-  // Coded-note TR cross-references — run AFTER the trMap merge above so any
-  // on-sheet TR just confirmed by this same scan (with a real pin already on
-  // file from prior work) is available to copy from. See wireTrReference/
-  // autoResolveTrReference in tr-reference.js's wiring: this only ever copies
-  // an already-vetted coordinate, never invents one, so it's safe to run
-  // unconditionally on every scan.
+  // Coded-note TR cross-references — run AFTER the trMap merge above so
+  // buildPageAssignments/renderPageAssignmentTable's self-reference check
+  // (trMap[refName].demarc_page_num) has fresh host data to compare against.
+  // Registers the served-page relationship only — see wireTrReference's own
+  // header for why it never writes a coordinate itself.
   for (const pageNum of sortedPages) {
     if (pageTexts[pageNum]) await wireTrReference(pageNum, pageTexts[pageNum]);
   }
@@ -2189,10 +2188,10 @@ function renderPageAssignmentTable(trs) {
     // than a generic status. Four real states here, not two: a page can have no
     // TR reference at all (genuinely unassigned), a TR reference to a room that
     // isn't hosted anywhere in this dataset (can't resolve, needs a manual
-    // pin), a TR reference to a room that IS hosted here but doesn't have its
-    // own exit pin on this page yet (the case autoResolveTrReference normally
-    // closes automatically — seeing this state after a scan means that
-    // auto-resolve hasn't run yet or the host TR itself has no pin), or a
+    // pin), a TR reference to a room that IS hosted here but has no exit pin
+    // on this page yet — always requires a human via suggestExitPin's visual
+    // modal; a same-floor different-zone sheet's coordinate space isn't
+    // comparable to another zone's, so this is never auto-written — or a
     // fully resolved served page.
     const hasExitPin = trMap[trName]?.extra_pins?.[pgNum] != null;
     let roleHtml;
@@ -2430,53 +2429,17 @@ async function wireTrReference(pgNum, pageText) {
     trMap[refName] = { name: refName, on_sheet: false, demarc_page_num: null, source: 'off_sheet' };
   }
   await ensureServedPage(refName, pgNum, /* viaTextRef */ true);
-  await autoResolveTrReference(refName, pgNum);
-}
-
-// Writes the exit pin immediately, no dialog, no modal, no click required —
-// deliberately assumes confirmed. This only fires when the referenced TR
-// ALREADY has a real, human-placed serving pin somewhere else in the project
-// (trMap[refName].pin_x/pin_y from a prior openPinModal confirm) — it is
-// copying a coordinate a human already vetted, at a position the sheet's own
-// coded note says is correct, not inventing one. That's a meaningfully
-// different claim than a cold guess, which is why this can skip review while
-// the demarc pin itself (openPinModal/confirmPin) still always requires a
-// human click. Written with source 'suggested' so the existing "⚡
-// Auto-placed ... override" badge and link (see renderTRCard) still let a
-// human catch and fix it later — visible and correctable, just never
-// blocking.
-async function autoResolveTrReference(refName, pgNum) {
-  const tr = trMap[refName];
-  if (!tr) return;
-  if (tr.extra_pins?.[pgNum]) return;   // already has an exit pin — never overwrite
-
-  const servingX = tr.pin_x ?? tr.demarc_x;
-  const servingY = tr.pin_y ?? tr.demarc_y;
-  if (servingX == null || servingY == null) return;   // TR itself not yet pinned anywhere — nothing to copy
-
-  const pageId = pageCache[pgNum]?.pageId ?? null;
-  try {
-    const r = await fetch(`${base()}/api/pass-demarc`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        project_id: projectId,
-        page_id:    pageId,
-        name:       `${refName}_exit_pg${pgNum}`,
-        source:     'suggested',
-        x_norm:     servingX,
-        y_norm:     servingY,
-        stub_ft:    0,
-        note:       `Auto-resolved from "${refName}" coded-note reference on this sheet`
-      })
-    });
-    const j = await r.json();
-    if (!r.ok) { console.warn(`[tr-reference] auto-resolve failed for ${refName} pg${pgNum}:`, j.error); return; }
-    if (!tr.extra_pins) tr.extra_pins = {};
-    tr.extra_pins[pgNum] = { x_norm: servingX, y_norm: servingY, stub_ft: 0, demarc_id: j.id, source: 'suggested' };
-  } catch (e) {
-    console.warn(`[tr-reference] auto-resolve error for ${refName} pg${pgNum}:`, e.message);
-  }
+  // Deliberately does NOT auto-write a pin. autoResolveTrReference previously
+  // copied the serving TR's raw (x_norm, y_norm) onto this page, which only
+  // means anything when two pages share the same physical footprint (e.g.
+  // stacked floors with a riser at the same plan position) — it does NOT hold
+  // between same-floor ZONE sheets (T1.3.J and T1.3.K are both "third floor"
+  // but different crops of different areas), so the copied coordinate landed
+  // in unrelated white space off the actual plan on a real project (T1.3.J,
+  // confirmed on screen). Per "flag, don't guess": registering the served-page
+  // relationship (above) is enough to surface the "exit pin needed" badge in
+  // renderPageAssignmentTable/renderTRCard — a human places the real pin via
+  // suggestExitPin's visual modal, same as any other unresolved exit pin.
 }
 
 async function ensureServedPage(name, pgNum, viaTextRef = false) {
