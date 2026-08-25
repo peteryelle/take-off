@@ -252,18 +252,17 @@ export async function classifyGeometry(strokeSubpaths, page, signature) {
   // would silently classify such a page as zero walls instead of erroring,
   // which is worse than the vote-splitting bug this was meant to fix.
   // Segments from every matching group are merged before classification.
-  const matchingGroups = [...groups.values()].filter(
+  const wallGroups = [...groups.values()].filter(
     g => g.width === signature.width && colorsClose(g.color, signature.color)
   );
   const walls = [], doors = [];
-  if (!matchingGroups.length) return { walls, doors };
-  const segments = matchingGroups.flatMap(g => g.segments);
 
   const vp = page.getViewport({ scale: 1 });
   const flipY = (y) => vp.height - y;
-
   const boxes = await textBoxes(page);
-  for (const [x1, y1, x2, y2] of segments) {
+
+  // Walls: unchanged — gated on the confirmed wall signature.
+  for (const [x1, y1, x2, y2] of wallGroups.flatMap(g => g.segments)) {
     const dx = x2 - x1, dy = y2 - y1;
     const length = Math.hypot(dx, dy);
     if (length < 2) continue;
@@ -271,10 +270,32 @@ export async function classifyGeometry(strokeSubpaths, page, signature) {
     const by0 = Math.min(y1, y2), by1 = Math.max(y1, y2);
     if (nearText(boxes, bx0, by0, bx1, by1)) continue;
     const angle = Math.abs((Math.atan2(dy, dx) * 180) / Math.PI) % 90;
-    const orthogonal = angle < WALL_ANGLE_TOL || angle > 90 - WALL_ANGLE_TOL;
-    if (orthogonal && length > WALL_MIN_LEN) {
+    if ((angle < WALL_ANGLE_TOL || angle > 90 - WALL_ANGLE_TOL) && length > WALL_MIN_LEN) {
       walls.push([x1, flipY(y1), x2, flipY(y2)]);
-    } else if (!orthogonal && length > DOOR_MIN_LEN && length < DOOR_MAX_LEN) {
+    }
+  }
+
+  // Doors: geometric test only (diagonal + length window) — deliberately NOT
+  // gated on matching the wall's own color/width. Confirmed on real project
+  // data (T1.3.H and 9 other sheets, Gainesville EHRM, VA project 573-21-106):
+  // door leaves are drawn solid black at a heavy line weight (rgb(0,0,0),
+  // ~14pt raw) while the confirmed wall signature on every sheet in that set
+  // was a light gray at a thin weight (rgb(186,186,186), 0.36pt) — a
+  // completely disjoint stroke group the old wall-signature-gated search
+  // could never reach. Searching all groups (not just wallGroups) is what
+  // fixes it; the angle/length/near-text filters below are what keeps this
+  // from also picking up unrelated diagonal noise (furniture, hatch lines,
+  // leaders).
+  for (const [x1, y1, x2, y2] of [...groups.values()].flatMap(g => g.segments)) {
+    const dx = x2 - x1, dy = y2 - y1;
+    const length = Math.hypot(dx, dy);
+    if (length <= DOOR_MIN_LEN || length >= DOOR_MAX_LEN) continue;
+    const bx0 = Math.min(x1, x2), bx1 = Math.max(x1, x2);
+    const by0 = Math.min(y1, y2), by1 = Math.max(y1, y2);
+    if (nearText(boxes, bx0, by0, bx1, by1)) continue;
+    const angle = Math.abs((Math.atan2(dy, dx) * 180) / Math.PI) % 90;
+    const orthogonal = angle < WALL_ANGLE_TOL || angle > 90 - WALL_ANGLE_TOL;
+    if (!orthogonal) {
       doors.push({ x: (x1 + x2) / 2, y: flipY((y1 + y2) / 2) });
     }
   }
