@@ -2762,7 +2762,7 @@ function renderTRCard(tr, container) {
         // demarc marker, rather than the generic amber "needs pin" badge, so it
         // reads as "the drawing says this" not "unconfigured."
         const needsPinBadge = pg.viaTextRef
-          ? `<span class="badge off" id="floor-badge-${pinKey}" style="font-size:10px; background:#3a0000; border-color:#c02020; color:#ff5050;">★ TR named on sheet — confirm pin</span>`
+          ? `<span class="badge off" id="floor-badge-${pinKey}" style="font-size:12px; background:#3a0000; border-color:#c02020; color:#ff5050;">★ TR named on sheet — confirm pin</span>`
           : `<span class="badge off" id="floor-badge-${pinKey}" style="font-size:10px;">⚠ needs pin</span>`;
         row.innerHTML = `
           <div class="floor-row-header">
