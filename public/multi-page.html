@@ -675,6 +675,7 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
   import { runWallCalibration, renderCalibrationPreview, confirmWallCalibration,
            rejectWallCalibration, tryNextCandidate, persistAllPageGeometry } from './lib/wall-calibration-client.js';
   import { buildPageRouter } from './lib/wall-aware-path.js';
+  import { extractTrReference } from './lib/tr-reference.js';
   window.TakeoffVec = { contentFrame, extractFilledSubpaths, extractCameraBlobs, debugNearbyStrokes,
                         classifySheetClass, deriveSheetClassSignals,
                         planSymbolDetection, locateVector, blobsToInstances,
@@ -683,7 +684,7 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
                         extractStrokeSubpaths, scorePage, aggregateScores, classifyGeometry,
                         runWallCalibration, renderCalibrationPreview, confirmWallCalibration,
                         rejectWallCalibration, tryNextCandidate, persistAllPageGeometry,
-                        buildPageRouter };
+                        buildPageRouter, extractTrReference };
 </script>
 <script>
 pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -882,88 +883,34 @@ async function suggestAllExitPins(trName) {
   renderTRMap(Object.values(trMap));
 }
 
+// Opens the real pin-canvas modal with the suggested position pre-plotted on
+// the actual rendered plan (see openPinModal's suggestedXY param) instead of
+// writing straight from a confirm() dialog full of raw numbers. Nothing is
+// saved here — confirmPin() (triggered by the user's own "✓ Confirm Pin"
+// click in the modal) does the actual write, exactly like any manually-placed
+// pin. That also means every pin confirmed this way is correctly source
+// 'user_pin', not 'suggested' — a human looked at it on the real drawing and
+// accepted or moved it, which is a stronger claim than "unreviewed guess."
 async function suggestExitPin(trName, pageNum) {
   const tr = trMap[trName];
   if (!tr) return;
 
-  // Get serving demarc coordinates
   const servingX = tr.pin_x ?? tr.demarc_x;
   const servingY = tr.pin_y ?? tr.demarc_y;
-
   if (servingX == null || servingY == null) {
     alert(`No serving demarc pin set for ${trName} yet.\nSet the serving demarc pin first, then suggest exit pins.`);
     return;
   }
 
-  const pageId   = pageCache[pageNum]?.pageId ?? null;
-  const pinKey   = `${trName}_pg${pageNum}`;
-  const jumperEl = document.getElementById(`jumper-${pinKey}`);
-  const stubFt   = parseFloat(jumperEl?.value ?? 0) || 0;
+  await openPinModal(trName, pageNum, { x: servingX, y: servingY });
 
-  // Confirm with user — show what we're about to do
-  const confirmed = confirm(
-    `Set exit pin for pg${pageNum} (${tr.name})\n\n` +
-    `Position: (${servingX.toFixed(3)}, ${servingY.toFixed(3)})\n` +
-    `→ Same as serving demarc on pg${tr.demarc_page_num}\n\n` +
-    `This assumes the riser shaft is at the same plan position on both floors.\n` +
-    `You can adjust the pin manually afterwards if needed.\n\n` +
-    `Backbone distance (ft): ${stubFt || '⚠ not set — enter in the field first'}`
-  );
-  if (!confirmed) return;
-
-  try {
-    const pinName = `${trName}_exit_pg${pageNum}`;
-    const r = await fetch(`${base()}/api/pass-demarc`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        project_id: projectId,
-        page_id:    pageId,
-        name:       pinName,
-        source:     'suggested',
-        x_norm:     servingX,
-        y_norm:     servingY,
-        stub_ft:    stubFt,
-        note:       `Suggested from ${trName} serving demarc position`
-      })
-    });
-    const j = await r.json();
-    if (!r.ok) { alert('Save error: ' + j.error); return; }
-
-    // Store in trMap
-    if (!tr.extra_pins) tr.extra_pins = {};
-    tr.extra_pins[pageNum] = {
-      x_norm:   servingX,
-      y_norm:   servingY,
-      stub_ft:  stubFt,
-      demarc_id: j.id,
-      source:   'suggested'
-    };
-
-    // Collapse only the pin buttons for this floor row (no full re-render)
-    const pinBtns2  = document.getElementById(`floor-body-${pinKey}`);
-    const pinStNum2 = document.getElementById(`pin-stepnum-${pinKey}`);
-    const badge2    = document.getElementById(`floor-badge-${pinKey}`);
-    if (pinBtns2 && !document.getElementById(`floor-auto-${pinKey}`)) {
-      pinBtns2.style.display = 'none';
-      const autoLine2 = document.createElement('div');
-      autoLine2.className = 'floor-auto-line';
-      autoLine2.id = `floor-auto-${pinKey}`;
-      autoLine2.style.cssText = 'padding:3px 0; background:none; font-size:12px; color:#7af07a;';
-      autoLine2.innerHTML = `⚡ Auto-placed
-        <a href="#" onclick="expandFloorRow('${pinKey}'); return false;"
-           style="color:#aaa; font-size:11px; margin-left:8px;">override</a>`;
-      pinBtns2.parentElement.insertBefore(autoLine2, pinBtns2);
-    }
-    if (pinStNum2) pinStNum2.classList.remove('pending');
-    if (badge2) { badge2.className = 'badge on'; badge2.style.fontSize='10px'; badge2.textContent = '✓ pin set'; }
-
-    const log = document.getElementById('batch-log');
-    if (log) {
-      log.innerHTML += `<div style="color:#7ac0f0;">⚡ Exit pin for ${trName} pg${pageNum} suggested from serving demarc (${servingX.toFixed(3)}, ${servingY.toFixed(3)})</div>`;
-    }
-
-  } catch(e) { alert('Error: ' + e.message); }
+  // Carry over a jumper distance the user already typed into the floor row
+  // before clicking Suggest — openPinModal's own pre-fill only knows about
+  // an already-SAVED pin's stub_ft, which doesn't exist yet for a fresh
+  // suggestion, so it would otherwise reset this to 0.
+  const jumperEl = document.getElementById(`jumper-${trName}_pg${pageNum}`);
+  const typedFt  = parseFloat(jumperEl?.value ?? '') || 0;
+  if (typedFt > 0) document.getElementById('pin-jumper-ft').value = typedFt;
 }
 
 function openCopyDevices() {
@@ -2370,11 +2317,96 @@ function wpBtnHtml(pgNum) {
   </div>`;
 }
 
-async function ensureServedPage(name, pgNum) {
+// Text-detected cross-sheet TR reference (see tr-reference.js). Runs once per
+// page right after text extraction, using the same coded-note text pass-b
+// already has in hand — no extra LLM call, no extra pass. Only ever
+// REGISTERS the served-page relationship (ensureServedPage), which is purely
+// informational bookkeeping already used by the manual placeManualExit flow;
+// it never writes a pin itself. Actually placing the pin still goes through
+// suggestExitPin/suggestAllExitPins, which already show the exact position in
+// a confirm() dialog before writing and leave a permanent "override" link
+// afterward — this only replaces the manual prompt() step of typing in which
+// TR a page belongs to, not the human confirmation of where the pin lands.
+//
+// viaTextRef is stamped on the served-page entry (see ensureServedPage) so
+// renderTRCard can show a distinct "detected, not yet confirmed" badge (a
+// filled red star, matching the confidence map's demarc marker) instead of
+// the generic "needs pin" badge a page nobody has looked at yet would show —
+// the two states look identical to a computer (no pin exists either way) but
+// mean very different things to a human triaging a project: one is "nobody's
+// touched this," the other is "the sheet itself is telling you where this
+// needs to go."
+async function wireTrReference(pgNum, pageText) {
+  const V = window.TakeoffVec;
+  const refName = V?.extractTrReference?.(pageText);
+  if (!refName) return;
+
+  // If this page's OWN TR already resolved to the same name (self-reference,
+  // e.g. T1.3.H's note pointing at H335-1 which is drawn on T1.3.H itself),
+  // there's nothing to register — the page already serves itself.
+  if (pageAssignments[pgNum]?.trName === refName) return;
+
+  if (!trMap[refName]) {
+    trMap[refName] = { name: refName, on_sheet: false, demarc_page_num: null, source: 'off_sheet' };
+  }
+  await ensureServedPage(refName, pgNum, /* viaTextRef */ true);
+  await autoResolveTrReference(refName, pgNum);
+}
+
+// Writes the exit pin immediately, no dialog, no modal, no click required —
+// deliberately assumes confirmed. This only fires when the referenced TR
+// ALREADY has a real, human-placed serving pin somewhere else in the project
+// (trMap[refName].pin_x/pin_y from a prior openPinModal confirm) — it is
+// copying a coordinate a human already vetted, at a position the sheet's own
+// coded note says is correct, not inventing one. That's a meaningfully
+// different claim than a cold guess, which is why this can skip review while
+// the demarc pin itself (openPinModal/confirmPin) still always requires a
+// human click. Written with source 'suggested' so the existing "⚡
+// Auto-placed ... override" badge and link (see renderTRCard) still let a
+// human catch and fix it later — visible and correctable, just never
+// blocking.
+async function autoResolveTrReference(refName, pgNum) {
+  const tr = trMap[refName];
+  if (!tr) return;
+  if (tr.extra_pins?.[pgNum]) return;   // already has an exit pin — never overwrite
+
+  const servingX = tr.pin_x ?? tr.demarc_x;
+  const servingY = tr.pin_y ?? tr.demarc_y;
+  if (servingX == null || servingY == null) return;   // TR itself not yet pinned anywhere — nothing to copy
+
+  const pageId = pageCache[pgNum]?.pageId ?? null;
+  try {
+    const r = await fetch(`${base()}/api/pass-demarc`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: projectId,
+        page_id:    pageId,
+        name:       `${refName}_exit_pg${pgNum}`,
+        source:     'suggested',
+        x_norm:     servingX,
+        y_norm:     servingY,
+        stub_ft:    0,
+        note:       `Auto-resolved from "${refName}" coded-note reference on this sheet`
+      })
+    });
+    const j = await r.json();
+    if (!r.ok) { console.warn(`[tr-reference] auto-resolve failed for ${refName} pg${pgNum}:`, j.error); return; }
+    if (!tr.extra_pins) tr.extra_pins = {};
+    tr.extra_pins[pgNum] = { x_norm: servingX, y_norm: servingY, stub_ft: 0, demarc_id: j.id, source: 'suggested' };
+  } catch (e) {
+    console.warn(`[tr-reference] auto-resolve error for ${refName} pg${pgNum}:`, e.message);
+  }
+}
+
+async function ensureServedPage(name, pgNum, viaTextRef = false) {
   trMap[name].pages = trMap[name].pages ?? [];
-  if (!trMap[name].pages.find(p => p.eval_page_num === pgNum)) {
+  const existing = trMap[name].pages.find(p => p.eval_page_num === pgNum);
+  if (!existing) {
     const pb = pageCache[pgNum]?.passBResult ?? {};
-    trMap[name].pages.push({ eval_page_num: pgNum, building: pb.building ?? null, floor: pb.level ?? null });
+    trMap[name].pages.push({ eval_page_num: pgNum, building: pb.building ?? null, floor: pb.level ?? null, viaTextRef });
+  } else if (viaTextRef) {
+    existing.viaTextRef = true;   // a later text-detect pass can upgrade a manual entry's badge
   }
   // Persist so restoreFromSupabase can reconstruct this page's TR assignment —
   // shared by both placeManualTR (serving) and placeManualExit (off-sheet exit).
@@ -2680,11 +2712,20 @@ function renderTRCard(tr, container) {
         // If already auto-suggested, start collapsed
         const isAutoSuggested = hasPin?.source === 'suggested';
 
+        // A page whose OWN coded notes named this TR (viaTextRef) but has no pin
+        // yet is a materially different state than a page nobody's looked at —
+        // the sheet is actively telling a human where this needs to go. Flag it
+        // with the same red-star visual language the confidence map uses for its
+        // demarc marker, rather than the generic amber "needs pin" badge, so it
+        // reads as "the drawing says this" not "unconfigured."
+        const needsPinBadge = pg.viaTextRef
+          ? `<span class="badge off" id="floor-badge-${pinKey}" style="font-size:10px; background:#3a0000; border-color:#c02020; color:#ff5050;">★ TR named on sheet — confirm pin</span>`
+          : `<span class="badge off" id="floor-badge-${pinKey}" style="font-size:10px;">⚠ needs pin</span>`;
         row.innerHTML = `
           <div class="floor-row-header">
             <span style="color:#f0c040; font-size:12px; font-weight:bold;">pg${pg.eval_page_num}</span>
             <span class="floor-row-label">${pgLabel}</span>
-            <span class="badge ${hasPin ? 'on' : 'off'}" id="floor-badge-${pinKey}" style="font-size:10px;">${hasPin ? '✓ pin set' : '⚠ needs pin'}</span>
+            ${hasPin ? `<span class="badge on" id="floor-badge-${pinKey}" style="font-size:10px;">✓ pin set</span>` : needsPinBadge}
           </div>
 
           <div class="floor-row-body" style="padding:10px 12px; display:flex; flex-direction:column; gap:8px;">
@@ -2842,20 +2883,41 @@ function redrawPinDot() {
   if (pinTarget?.xNorm != null) {
     const dot = document.createElement('div');
     dot.className = 'placed-pin';
+    // Suggested-but-not-yet-reviewed position gets a distinct look (dashed
+    // amber ring + label) so it never reads as an already-saved pin — the
+    // moment the user clicks anywhere to place/move it, pinTarget.isSuggested
+    // clears and it becomes a normal solid dot.
+    if (pinTarget.isSuggested) {
+      dot.style.cssText = 'position:absolute; width:22px; height:22px; border-radius:50%;' +
+        'border:3px dashed #f0c040; background:rgba(240,192,64,0.15); box-sizing:border-box;';
+      const label = document.createElement('div');
+      label.textContent = '⚡ suggested — click to adjust';
+      label.style.cssText = 'position:absolute; left:26px; top:-8px; white-space:nowrap;' +
+        'background:#1a1a00; color:#f0c040; font-size:12px; padding:2px 6px; border-radius:3px; border:1px solid #f0c040;';
+      dot.appendChild(label);
+    }
     // Native canvas px inside the transformed layer; counter-scale so the marker
     // stays a constant on-screen size as the layer zooms.
     dot.style.left = (pinTarget.xNorm * pinCanvasNativeW) + 'px';
     dot.style.top  = (pinTarget.yNorm * pinCanvasNativeH) + 'px';
-    dot.style.transform = `translate(-50%, -50%) scale(${1 / pinZoomLevel})`;
+    dot.style.transform += ` translate(-50%, -50%) scale(${1 / pinZoomLevel})`;
     dot.style.transformOrigin = 'center';
     layer.appendChild(dot);
   }
 }
 
-async function openPinModal(trName, targetPageNum) {
+/**
+ * @param {string} trName
+ * @param {number} [targetPageNum]
+ * @param {{x:number, y:number}} [suggestedXY]  when opening to review an
+ *   auto-derived position (e.g. from suggestExitPin) rather than an already-
+ *   saved pin or a blank canvas. Ignored if a real pin already exists for
+ *   this trName/page — never overwrites a human's prior placement.
+ */
+async function openPinModal(trName, targetPageNum, suggestedXY) {
   const isExtraPin = targetPageNum && targetPageNum !== trMap[trName]?.demarc_page_num;
   const pageNum = targetPageNum ?? trMap[trName]?.demarc_page_num ?? [...selectedPages].sort((a,b)=>a-b)[0];
-  pinTarget = { trName, pageNum, isExtraPin, xNorm: null, yNorm: null };
+  pinTarget = { trName, pageNum, isExtraPin, xNorm: null, yNorm: null, isSuggested: false };
   pinZoomLevel = 1.0; pinPanX = 0; pinPanY = 0;
 
   document.getElementById('pin-modal-title').textContent = isExtraPin
@@ -2884,13 +2946,24 @@ async function openPinModal(trName, targetPageNum) {
   pinPanY = 0;
   applyPinTransform();
 
-  // Set up existing pin if any
+  // Set up existing pin if any — a real saved pin always wins over a suggestion,
+  // never silently overwritten by re-opening this modal.
   const existing = isExtraPin
     ? trMap[trName]?.extra_pins?.[pageNum]
     : trMap[trName];
   if (existing?.pin_x != null || existing?.x_norm != null) {
     pinTarget.xNorm = existing.pin_x ?? existing.x_norm;
     pinTarget.yNorm = existing.pin_y ?? existing.y_norm;
+    redrawPinDot();
+  } else if (suggestedXY?.x != null && suggestedXY?.y != null) {
+    // No real pin yet — show the suggested position pre-plotted on the actual
+    // rendered plan (dashed amber marker, see redrawPinDot) instead of making
+    // the user picture raw x/y numbers. Any click clears isSuggested; either
+    // way, "Confirm Pin" saves through the normal confirmPin() path.
+    pinTarget.xNorm = suggestedXY.x;
+    pinTarget.yNorm = suggestedXY.y;
+    pinTarget.isSuggested = true;
+    setStatus('pin-status', '⚡ Suggested position shown — drag/click to adjust, or Confirm Pin to accept as-is', 'ok');
     redrawPinDot();
   }
 
@@ -2919,6 +2992,7 @@ async function openPinModal(trName, targetPageNum) {
     // rendered size and collapsed every click toward the corner).
     pinTarget.xNorm = Math.min(1, Math.max(0, (e.clientX - cvRect.left) / cvRect.width));
     pinTarget.yNorm = Math.min(1, Math.max(0, (e.clientY - cvRect.top)  / cvRect.height));
+    pinTarget.isSuggested = false;   // user has now actively placed it themselves
     document.getElementById('pin-coords').textContent =
       `Pin at (${pinTarget.xNorm.toFixed(3)}, ${pinTarget.yNorm.toFixed(3)})`;
     setStatus('pin-status', '✓ Pin placed — Confirm Pin to save', 'ok');
@@ -3842,6 +3916,12 @@ async function runBatch(quiet = false) {
           font_size: 10
         });
       }
+
+      // Cross-sheet TR reference (coded-note text, e.g. "...PATCH PANELS IN TR
+      // H335-1") — registers the served-page relationship only, never writes a
+      // pin. See wireTrReference's own header for why this is safe to run
+      // unconditionally on every page, every run.
+      await wireTrReference(pageNum, allRaw.map((r) => r.s).join(' '));
 
       // Build demarc pins for this page
       const demarcPins = buildPinsForPage(pageNum, passBRes, W, H);
