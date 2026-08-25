@@ -2309,19 +2309,53 @@ function updatePageRoleBadge(pgNum) {
 }
 
 // ── Manual demarc placement ───────────────────────────────────────
-// Shown on any page that has no confirmed on-sheet host pin (the no-TR-detected
-// case the scan leaves stranded). Both paths seed an ad-hoc entry in trMap and
-// reuse openPinModal/confirmPin/buildPinsForPage unchanged — a serving pin is an
-// on-sheet TR (demarc_page_num === this page), an exit pin is an off-sheet TR.
+// Shown per-page in the assignment table, state-aware rather than one fixed
+// pair of buttons regardless of status — the previous version showed "+ exit
+// pin" identically whether a pin already existed or not, which is exactly
+// the ambiguity that prompted this rewrite.
 function pinBtnsHtml(pgNum) {
   const assign = pageAssignments[pgNum] ?? {};
-  const tr     = trMap[assign.trName];
-  const hasServingPin = tr && tr.demarc_page_num === pgNum && tr.on_sheet
-                        && (tr.pin_x != null || tr.demarc_x != null);
-  if (hasServingPin) return '';
-  return `<div style="margin-top:5px; display:flex; gap:5px;">
-    <button class="info" style="padding:2px 8px; font-size:11px;" onclick="placeManualTR(${pgNum})">📍 set TR pin</button>
-    <button style="padding:2px 8px; font-size:11px;" onclick="placeManualExit(${pgNum})">＋ exit pin</button>
+  const trName = assign.trName ?? '—';
+  const tr     = trMap[trName];
+  const isHost = tr?.demarc_page_num === pgNum && tr?.on_sheet;
+  const hasServingPin = isHost && (tr.pin_x != null || tr.demarc_x != null);
+  if (hasServingPin) return '';   // hosts its own TR and it's pinned — nothing to do
+
+  if (trName === '—') {
+    // Genuinely unassigned — no TR reference known at all for this page.
+    return `<div style="margin-top:5px; display:flex; gap:5px;">
+      <button class="info" style="padding:2px 8px; font-size:11px;" onclick="placeManualTR(${pgNum})">📍 set TR pin</button>
+      <button style="padding:2px 8px; font-size:11px;" onclick="placeManualExit(${pgNum})">＋ exit pin</button>
+    </div>`;
+  }
+
+  if (isHost) {
+    // Hosts its own named TR but has no pin placed yet.
+    return `<div style="margin-top:5px;">
+      <button class="amber" style="padding:2px 8px; font-size:11px;" onclick="openPinModal('${trName}', ${pgNum})">📍 set TR pin</button>
+    </div>`;
+  }
+
+  // Served page (TR hosted elsewhere) — the trName is already known, so
+  // "needs a pin" and "review the pin" both go through suggestExitPin, which
+  // opens the visual pin-canvas modal pre-seeded at the serving demarc's
+  // coordinates — never placeManualExit's from-scratch name prompt, which
+  // doesn't apply once the TR is already identified.
+  const exitPin = tr?.extra_pins?.[pgNum];
+  if (exitPin) {
+    const ft = exitPin.stub_ft ?? 0;
+    const ftWarn = ft > 0
+      ? `${ft} ft`
+      : `<span style="color:#f0c040;">0 ft ⚠ enter jumper distance</span>`;
+    return `<div style="margin-top:5px; font-size:12px; color:#7af07a;">
+      ✓ exit pin set — ${ftWarn}
+      <a href="#" onclick="suggestExitPin('${trName}', ${pgNum}); return false;"
+         style="color:#aaa; font-size:11px; margin-left:8px;">review / adjust</a>
+    </div>`;
+  }
+  return `<div style="margin-top:5px;">
+    <button style="padding:2px 8px; font-size:11px; background:#3a0000; border:1px solid #c02020; color:#ff5050;"
+      onclick="suggestExitPin('${trName}', ${pgNum})">⚠ exit pin needed — place</button>
   </div>`;
 }
 
