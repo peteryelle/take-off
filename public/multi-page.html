@@ -1626,6 +1626,7 @@ async function runDemarcScan() {
 
   const sortedPages = [...selectedPages].sort((a,b) => a-b);
   const pageBResults = [];
+  const pageTexts    = {};   // pgNum -> flat text, for wireTrReference after the scan below
   const failedPages = [];   // { pageNum, reason } — surfaced in the final status instead of only console.warn
   let done = 0;
 
@@ -1643,6 +1644,17 @@ async function runDemarcScan() {
       cv.height     = vp.height;
       await pdfPage.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
       const b64 = cv.toDataURL('image/jpeg', 0.75).split(',')[1];
+
+      // Cheap text pull (no LLM call, same pdf.js page already in hand) — used
+      // below by wireTrReference for coded-note TR cross-references. Doing this
+      // here, not just in the later batch-run loop, means a page's off-sheet TR
+      // can resolve as early as this scan step instead of only after a full
+      // batch run — the earliest point a real coordinate might already exist
+      // for it (this project's on-sheet TRs already had pins from prior work).
+      try {
+        const tc = await pdfPage.getTextContent({ includeMarkedContent: false });
+        pageTexts[pageNum] = tc.items.map((it) => it.str ?? '').join(' ');
+      } catch (e) { console.warn(`[tr-reference] text pull failed pg${pageNum}:`, e.message); }
 
       // Run Pass B
       const r = await fetch(`${base()}/api/pass-b-page`, {
@@ -1710,6 +1722,16 @@ async function runDemarcScan() {
   // list just went blank.
   for (const tr of (scanResult.tr_map ?? [])) {
     trMap[tr.name] = { ...(trMap[tr.name] ?? {}), ...tr };
+  }
+
+  // Coded-note TR cross-references — run AFTER the trMap merge above so any
+  // on-sheet TR just confirmed by this same scan (with a real pin already on
+  // file from prior work) is available to copy from. See wireTrReference/
+  // autoResolveTrReference in tr-reference.js's wiring: this only ever copies
+  // an already-vetted coordinate, never invents one, so it's safe to run
+  // unconditionally on every scan.
+  for (const pageNum of sortedPages) {
+    if (pageTexts[pageNum]) await wireTrReference(pageNum, pageTexts[pageNum]);
   }
 
   renderPageAssignmentTable(Object.values(trMap));
@@ -2163,7 +2185,16 @@ function renderPageAssignmentTable(trs) {
     // Trim "TELECOMMUNICATIONS PLAN" and long suffixes for display
     const title = raw.replace(/[-–]\s*TELECOMMUNICATIONS.*/i, '').trim().replace(/[-–·]+$/, '').trim();
 
-    // Role
+    // Role — states the actual TR name and exactly what's still needed, rather
+    // than a generic status. Four real states here, not two: a page can have no
+    // TR reference at all (genuinely unassigned), a TR reference to a room that
+    // isn't hosted anywhere in this dataset (can't resolve, needs a manual
+    // pin), a TR reference to a room that IS hosted here but doesn't have its
+    // own exit pin on this page yet (the case autoResolveTrReference normally
+    // closes automatically — seeing this state after a scan means that
+    // auto-resolve hasn't run yet or the host TR itself has no pin), or a
+    // fully resolved served page.
+    const hasExitPin = trMap[trName]?.extra_pins?.[pgNum] != null;
     let roleHtml;
     if (isHost) {
       roleHtml = `<span class="pa-role-host">✓ host</span>`;
@@ -2173,11 +2204,15 @@ function renderPageAssignmentTable(trs) {
     } else if (split) {
       roleHtml = `<span class="pa-role-split">⚠ split</span>`;
       splitNotes.push(`pg${pgNum} references both <strong>${trName}</strong> and <strong>${split}</strong>`);
-    } else if (!hasHost) {
-      roleHtml = `<span class="pa-role-offsheet">off-sheet TR</span>
-                  <div style="font-size:10px; color:#666; margin-top:2px;">host page not in dataset</div>`;
+    } else if (trName !== '—' && !hasHost) {
+      roleHtml = `<span class="pa-role-offsheet">⚠ ${trName} — not in this dataset</span>
+                  <div style="font-size:10px; color:#666; margin-top:2px;">TR named on sheet, but not drawn/hosted on any loaded page — place pin manually</div>`;
+    } else if (trName !== '—' && hasHost && !hasExitPin) {
+      roleHtml = `<span style="background:#3a0000; border:1px solid #c02020; color:#ff5050; padding:2px 8px; border-radius:3px; font-size:12px; font-weight:bold;">★ ${trName} — exit pin needed</span>`;
+    } else if (trName !== '—') {
+      roleHtml = `<span class="pa-role-served">✓ served — ${trName}</span>`;
     } else {
-      roleHtml = `<span class="pa-role-served">served</span>`;
+      roleHtml = `<span class="pa-role-offsheet" style="opacity:0.6;">— unassigned —</span>`;
     }
 
     // TR dropdown
@@ -2251,18 +2286,24 @@ async function reassignPage(pgNum, newTR) {
 function updatePageRoleBadge(pgNum) {
   const el     = document.getElementById(`pa-role-${pgNum}`);
   if (!el) return;
-  const assign = pageAssignments[pgNum] ?? {};
-  const tr     = trMap[assign.trName];
-  const isHost = tr?.demarc_page_num === pgNum && tr?.on_sheet;
+  const assign  = pageAssignments[pgNum] ?? {};
+  const trName  = assign.trName ?? '—';
+  const tr      = trMap[trName];
+  const isHost  = tr?.demarc_page_num === pgNum && tr?.on_sheet;
   const hasHost = tr?.on_sheet;
+  const hasExitPin = tr?.extra_pins?.[pgNum] != null;
 
   if (isHost) {
     el.innerHTML = `<span class="pa-role-host">✓ host</span>`;
-  } else if (!hasHost) {
-    el.innerHTML = `<span class="pa-role-offsheet">off-sheet TR</span>
-      <div style="font-size:10px; color:#666; margin-top:2px;">host page not in dataset</div>`;
+  } else if (trName !== '—' && !hasHost) {
+    el.innerHTML = `<span class="pa-role-offsheet">⚠ ${trName} — not in this dataset</span>
+      <div style="font-size:10px; color:#666; margin-top:2px;">TR named on sheet, but not drawn/hosted on any loaded page — place pin manually</div>`;
+  } else if (trName !== '—' && hasHost && !hasExitPin) {
+    el.innerHTML = `<span style="background:#3a0000; border:1px solid #c02020; color:#ff5050; padding:2px 8px; border-radius:3px; font-size:12px; font-weight:bold;">★ ${trName} — exit pin needed</span>`;
+  } else if (trName !== '—') {
+    el.innerHTML = `<span class="pa-role-served">✓ served — ${trName}</span>`;
   } else {
-    el.innerHTML = `<span class="pa-role-served">served</span>`;
+    el.innerHTML = `<span class="pa-role-offsheet" style="opacity:0.6;">— unassigned —</span>`;
   }
   el.innerHTML += pinBtnsHtml(pgNum);
 }
@@ -2343,8 +2384,13 @@ async function wireTrReference(pgNum, pageText) {
 
   // If this page's OWN TR already resolved to the same name (self-reference,
   // e.g. T1.3.H's note pointing at H335-1 which is drawn on T1.3.H itself),
-  // there's nothing to register — the page already serves itself.
+  // there's nothing to register — the page already serves itself. Checked
+  // two ways since this runs from two different call sites at two different
+  // points in the setup flow: pageAssignments is set by the later batch-run
+  // path, demarc_page_num comes from pass-scan's host detection and is
+  // available as early as runDemarcScan, before pageAssignments exists yet.
   if (pageAssignments[pgNum]?.trName === refName) return;
+  if (trMap[refName]?.demarc_page_num === pgNum) return;
 
   if (!trMap[refName]) {
     trMap[refName] = { name: refName, on_sheet: false, demarc_page_num: null, source: 'off_sheet' };
