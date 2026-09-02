@@ -6112,7 +6112,17 @@ async function restoreFromSupabase(pid) {
     // takeoff-summary already returns device_types — use j directly.
     const dtCount = j.device_types?.length ?? 0;
     if (dtCount > 0) {
-      setDeviceTypeBarReady(`${dtCount} device type${dtCount !== 1 ? 's' : ''} configured`);
+      // Library badge: either this project IS a library (is_library), or it's
+      // synced to one (library_project) — see projects.library_project_id.
+      // Neither set just means this project keeps its own device types
+      // independently, which is a normal state, not shown as a warning.
+      let libNote = '';
+      if (j.is_library) {
+        libNote = ` — 📚 ${j.library_name || 'this is a device library'}`;
+      } else if (j.library_project) {
+        libNote = ` — using library "${j.library_project.name}" (Project ${j.library_project.id})`;
+      }
+      setDeviceTypeBarReady(`${dtCount} device type${dtCount !== 1 ? 's' : ''} configured${libNote}`);
     }
 
     // PDF auto-load runs independently, outside this function's try/catch — see

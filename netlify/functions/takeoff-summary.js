@@ -79,10 +79,24 @@ export default async function handler(req) {
   // layer.
   const { data: projectRow } = await supabase
     .from("projects")
-    .select("catalog_id, default_length_multiplier, fallback_length_multiplier, accepted_final_run_at")
+    .select("catalog_id, default_length_multiplier, fallback_length_multiplier, accepted_final_run_at, is_library, library_name, library_project_id")
     .eq("id", project_id)
     .single();
   const catalog_id = projectRow?.catalog_id ?? null;
+  // Which library this project's device_types/assembly/labor are kept in sync
+  // with (see docs on projects.library_project_id) — null if this project IS
+  // a library (is_library) or maintains its own device set independently.
+  // Resolved to a name here so the client doesn't need a second round-trip
+  // just to label the badge.
+  let library_project = null;
+  if (projectRow?.library_project_id) {
+    const { data: libRow } = await supabase
+      .from("projects")
+      .select("id, name, library_name")
+      .eq("id", projectRow.library_project_id)
+      .single();
+    if (libRow) library_project = { id: libRow.id, name: libRow.library_name || libRow.name };
+  }
   // Project-wide cable-length multipliers, set by the user after reviewing
   // route quality in the confidence map (or edited directly on the report).
   // default_length_multiplier applies to Tier 3 (wall-aware routed) device
@@ -278,7 +292,14 @@ export default async function handler(req) {
     labor_tasks:      laborTasksRes.data   ?? [],
     default_length_multiplier,
     fallback_length_multiplier,
-    accepted_final_run_at
+    accepted_final_run_at,
+    // Library badge — see projects.library_project_id. is_library=true means
+    // THIS project is a library others sync from; library_project set means
+    // this project's device_types/assembly/labor are kept in sync with that
+    // library. The two are mutually exclusive in normal use.
+    is_library:      projectRow?.is_library ?? false,
+    library_name:    projectRow?.library_name ?? null,
+    library_project
   });
 }
 

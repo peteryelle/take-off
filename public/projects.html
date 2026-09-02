@@ -294,11 +294,23 @@ function renderList(projects) {
     // since count-changing writes are refused server-side while locked.
     const locked   = !!p.accepted_final_run_at;
 
+    // library_project_id (see projects.library_project_id) points at another
+    // project marked is_library — resolve its name from the list already in
+    // memory rather than a second round-trip per card.
+    const libProject = p.library_project_id
+      ? allProjects.find(x => x.id === p.library_project_id)
+      : null;
+    const libBadge = p.is_library
+      ? ' <span style="background:#2a1e3a; border:1px solid #6a4a8a; color:#c79af0; padding:1px 7px; border-radius:3px; font-size:11px; font-weight:normal;">📚 Library</span>'
+      : (libProject
+          ? ` <span style="background:#1a2432; border:1px solid #3a5a7a; color:#8fb8e0; padding:1px 7px; border-radius:3px; font-size:11px; font-weight:normal;" title="Device types, assemblies, and labor sync from this library">📚 uses ${esc(libProject.library_name || libProject.name)}</span>`
+          : '');
+
     return `
     <div class="project-card ${isActive ? 'active' : ''}"
          onclick="selectProject(${p.id})" id="card-${p.id}">
       <div>
-        <div class="project-name">${esc(p.name ?? '—')}${p.is_library ? ' <span style="background:#2a1e3a; border:1px solid #6a4a8a; color:#c79af0; padding:1px 7px; border-radius:3px; font-size:11px; font-weight:normal;">📚 Library</span>' : ''}
+        <div class="project-name">${esc(p.name ?? '—')}${libBadge}
           <span style="${locked ? 'background:#1a2e1a; border:1px solid #3a6a3a; color:#8fd08f;' : 'background:#2a2a1a; border:1px solid #6a6a3a; color:#d0c78f;'} padding:1px 7px; border-radius:3px; font-size:11px; font-weight:normal; margin-left:4px;">
             ${locked ? '🔒 Locked' : '🔓 Open'}
           </span>
