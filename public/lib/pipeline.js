@@ -11,7 +11,7 @@
 // record) and surfaces unmatched glyphs as no_uin-flagged devices. The default []
 // preserves the label+schedule behavior for callers that don't run symbol detection.
 
-import { detectAll } from './detect.js';
+import { detectAll, disambiguateByAdjacentCount } from './detect.js';
 import { parseSchedule } from './schedule.js';
 import { parseMatrix } from './matrix-schedule.js';
 import { classifySheet } from './classify-archetype.js';
@@ -120,7 +120,11 @@ export function buildDeviceList(textItems = [], deviceTypes = [], scheduleCfg = 
   for (const dt of deviceTypes) {
     const cfg = dt.detection_config;
     if (!cfg) continue;
-    if (cfg.anchor) {
+    // disambiguate_from variants (Step 6 discovery) carry no anchor of their own —
+    // they're only ever reached by disambiguateByAdjacentCount reclassifying a base
+    // instance onto them — so they need registering here too, or reconcile has no
+    // catalog entry to resolve the reclassified type string against.
+    if (cfg.anchor || cfg.disambiguate_from) {
       const type = cfg.type || dt.name;
       typeMap[type] = dt;
       catalog[type] = { sources: Array.isArray(cfg.sources) && cfg.sources.length ? cfg.sources : ['label'] };
@@ -137,7 +141,11 @@ export function buildDeviceList(textItems = [], deviceTypes = [], scheduleCfg = 
     if (tok) typeMap[tok] = dt;
   }
 
-  const labelInstances = detectAll(textItems, deviceTypes, opts);
+  let labelInstances = detectAll(textItems, deviceTypes, opts);
+  // Split shared text anchors into their count-suffixed variants (e.g. a bare "W"
+  // WAP anchor vs. a "(2) W" 2-port variant) using the text layer alone — see
+  // detect.js for why this can't be a vision/symbol-based split for these types.
+  labelInstances = disambiguateByAdjacentCount(textItems, labelInstances, deviceTypes, opts);
 
   // ROUTE: classify the sheet, then seed reconcile from the matching reader.
   //   device_list    -> parseSchedule (row-per-device, UIN join)

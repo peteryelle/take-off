@@ -120,4 +120,97 @@ export function detectAll(textItems = [], deviceTypes = [], opts = {}) {
   return out;
 }
 
+// disambiguateByAdjacentCount — splits a shared text anchor into count-suffixed
+// variants (e.g. base "W" WAP anchor vs. a "(2) W" 2-port variant) using ONLY the
+// text layer already on hand. No image, no vision call, no network.
+//
+// Why this exists: detectLabels' exact-anchor matcher does `s === A`, so a
+// compound label like "(2) W" is invisible to it UNLESS the PDF's text extraction
+// splits the parenthesized count and the letter into separate text items sitting
+// side-by-side — which is exactly what happens on these sheets. The bare "W" half
+// of that split then matches the base anchor indistinguishably from a genuinely
+// bare "W". This function looks at what sits immediately to the anchor's left and
+// reclassifies accordingly.
+//
+// Calibrated against a real sheet (Gainesville EHRM T1.1.A, fixtures/
+// va-voip-wall-disambiguate-t11a.json): a "(2)"->"W" pair sits exactly 0.00429
+// normalized units apart (dx, dy=0) every time; the nearest unrelated neighbor to
+// any bare "W" is never closer than 0.0074. The default radius sits in that gap.
+//
+// Variant device_types are found via detection_config.disambiguate_from = <base
+// device_types.id> and must have no anchor of their own (Step 6 discovery leaves
+// them anchor-less on purpose — they're not independently detectable). The port
+// count is parsed straight from the variant's own name ("...2 PORT" -> 2), so no
+// extra schema field is needed.
+//
+// @param {Array} textItems    [{ str, cx_norm, cy_norm }]
+// @param {Array} instances    output of detectAll/detectLabels — [{ type, x, y, ... }]
+// @param {Array} deviceTypes  [{ id, name, detection_config }]
+// @param {Object} opts        { disambigRadius, disambigDy }
+// @returns {Array} instances, same shape, with .type swapped onto the matched
+//   variant where applicable. Carries .flaggedCandidates for a count token found
+//   adjacent to an anchor but with no matching variant configured (e.g. a "(3)"
+//   on a sheet where only the 2-port variant exists) — flagged rather than
+//   silently dropped or silently left misclassified.
+export function disambiguateByAdjacentCount(textItems = [], instances = [], deviceTypes = [], opts = {}) {
+  const radius = opts.disambigRadius ?? 0.006;
+  const dyTol  = opts.disambigDy ?? 0.0015;
+  const countRe = /^\((\d+)\)$/;
+
+  // base device_types.id -> [{ count, type }], derived from disambiguate_from +
+  // a "<N> PORT" match on the variant's own name.
+  const variantsByBase = new Map();
+  for (const dt of deviceTypes) {
+    const cfg = dt.detection_config;
+    const baseId = cfg?.disambiguate_from;
+    if (baseId == null) continue;
+    const m = /(\d+)\s*PORT/i.exec(dt.name);
+    if (!m) continue; // no derivable count -> nothing to key this variant on
+    if (!variantsByBase.has(baseId)) variantsByBase.set(baseId, []);
+    variantsByBase.get(baseId).push({ count: Number(m[1]), type: cfg.type || dt.name });
+  }
+  if (!variantsByBase.size) return instances; // nothing configured to disambiguate into
+
+  // type-string -> base device_types.id, so we know which instances are eligible.
+  const baseTypeToId = {};
+  for (const dt of deviceTypes) {
+    if (variantsByBase.has(dt.id)) {
+      const cfg = dt.detection_config;
+      baseTypeToId[cfg.type || dt.name] = dt.id;
+    }
+  }
+
+  const countTokens = textItems
+    .map((t) => ({ raw: String(t.str).trim(), x: t.cx_norm, y: t.cy_norm }))
+    .filter((t) => countRe.test(t.raw));
+
+  const flagged = [];
+  const out = instances.map((inst) => {
+    const baseId = baseTypeToId[inst.type];
+    if (baseId == null) return inst; // not a disambiguation-eligible anchor type
+
+    let best = null, bd = Infinity;
+    for (const tok of countTokens) {
+      const dx = inst.x - tok.x;             // count token sits to the LEFT of the anchor
+      const dy = Math.abs(inst.y - tok.y);
+      if (dx > 0 && dx <= radius && dy <= dyTol) {
+        const d = Math.hypot(dx, dy);
+        if (d < bd) { bd = d; best = tok; }
+      }
+    }
+    if (!best) return inst; // no adjacent count token -> stays the base type
+
+    const n = Number(countRe.exec(best.raw)[1]);
+    const variant = variantsByBase.get(baseId).find((v) => v.count === n);
+    if (!variant) {
+      flagged.push({ ...inst, flag: `adjacent_count_${n}_no_variant_configured` });
+      return inst; // leave as base rather than silently mis-splitting or dropping it
+    }
+    return { ...inst, type: variant.type };
+  });
+
+  if (flagged.length) out.flaggedCandidates = [...(instances.flaggedCandidates || []), ...flagged];
+  return out;
+}
+
 export default detectLabels;

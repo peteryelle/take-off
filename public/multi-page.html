@@ -3849,12 +3849,10 @@ async function runBatch(quiet = false) {
   const setPhase = p => { phase = p; };
 
   // ── Prefetch device types with llm_description for visual augment ─
+  // (disambiguate_from variants no longer need a client-side pass here — see
+  // pipeline.js's disambiguateByAdjacentCount, which splits them server-side
+  // from the text layer before device_instances are ever written.)
   let augmentTypes = [];
-  // ── Prefetch symbol-disambiguation pairs — a variant type (anchor: null,
-  // detection_config.disambiguate_from = <base_type_id>) whose instances need
-  // splitting off the base type's shared-anchor detections by visual match
-  // against each type's own reference crop. See pass-symbol-classify.js.
-  let disambiguatePairs = [];
   try {
     const dtR = await fetch(`${base()}/api/takeoff-summary?project_id=${projectId}`);
     const dtD = await dtR.json();
@@ -3863,15 +3861,6 @@ async function runBatch(quiet = false) {
       dt.llm_description && dt.llm_description.trim().length > 20
     );
     console.log('[augment] augmentTypes after filter:', augmentTypes.map(d => d.name));
-    const allTypes = dtD.device_types ?? [];
-    disambiguatePairs = allTypes
-      .filter(dt => dt.detection_config?.disambiguate_from)
-      .map(variant => ({
-        variant,
-        base: allTypes.find(t => t.id === variant.detection_config.disambiguate_from)
-      }))
-      .filter(p => p.base);
-    if (disambiguatePairs.length) console.log('[symbol-classify] pairs:', disambiguatePairs.map(p => `${p.base.name} / ${p.variant.name}`));
   } catch(e) { console.warn('[augment] prefetch failed:', e.message); }
   const log         = document.getElementById('batch-log');
 
@@ -4139,69 +4128,6 @@ async function runBatch(quiet = false) {
         log.innerHTML += `<div style="color:${r.ok ? '#7af07a' : '#f07a7a'}">${msg}</div>`;
         log.scrollTop = log.scrollHeight;
       }
-
-      // ── Symbol-classify follow-up — split any shared-anchor detections
-      // between a base type and its variant(s) by visual match against each
-      // type's own reference crop. Runs after pass-batch so it has real
-      // persisted instances (under the base type) to reclassify, not a fresh
-      // detection. One page render, reused across every pair on this page.
-      if (r.ok && disambiguatePairs.length) {
-        let clsPageImgB64 = null;
-        for (const { base: baseDt, variant: variantDt } of disambiguatePairs) {
-          setPhase(`pg${pageNum}: symbol classify (${variantDt.name})`);
-          try {
-            if (!clsPageImgB64) {
-              const clsVP = pdfPage.getViewport({ scale: 1.8 });
-              const clsCV = document.createElement('canvas');
-              clsCV.width = clsVP.width; clsCV.height = clsVP.height;
-              await pdfPage.render({ canvasContext: clsCV.getContext('2d'), viewport: clsVP }).promise;
-              clsPageImgB64 = clsCV.toDataURL('image/jpeg', 0.9).split(',')[1];
-            }
-            const clsR = await fetch(`${base()}/api/pass-symbol-classify`, {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                project_id: projectId, page_id: pageId,
-                base_type_id: baseDt.id, variant_type_id: variantDt.id,
-                page_image_base64: clsPageImgB64,
-                page_width_pts: W, page_height_pts: H
-              })
-            });
-            const clsJ = await clsR.json();
-            if (clsR.ok && clsJ.reclassified_ids?.length) {
-              const idSet = new Set(clsJ.reclassified_ids);
-              const devs = batchResults[pageNum]?.devices ?? [];
-              for (const d of devs) {
-                if (idSet.has(d.id)) {
-                  d.device_type_id = variantDt.id;
-                  d.name = variantDt.name;
-                  d.legend_id = variantDt.legend_id ?? d.legend_id;
-                }
-              }
-              // by_type summary line (used by renderByPage's per-page header) is
-              // built once at pass-batch response time and doesn't auto-recount —
-              // rebuild it from the now-patched devices list so it stays accurate.
-              const byType = {};
-              for (const d of devs) {
-                const k = d.legend_id ?? d.type ?? d.name;
-                byType[k] = byType[k] ?? { legend_id: d.legend_id ?? null, name: d.name, count: 0, tia: 0 };
-                byType[k].count++;
-                if (d.tia_flag) byType[k].tia++;
-              }
-              if (batchResults[pageNum]) batchResults[pageNum].by_type = Object.values(byType);
-            }
-            if (!quiet) {
-              const clsMsg = clsR.ok
-                ? `pg${pageNum}: symbol-classify — ${clsJ.reclassified} of ${clsJ.candidates} "${baseDt.name}" reclassified as "${variantDt.name}"`
-                : `pg${pageNum}: symbol-classify (${variantDt.name}) ERROR — ${clsJ.error}`;
-              log.innerHTML += `<div style="color:${clsR.ok ? '#7af07a' : '#f07a7a'};">${clsMsg}</div>`;
-              log.scrollTop = log.scrollHeight;
-            }
-          } catch (e) {
-            if (!quiet) log.innerHTML += `<div style="color:#f07a7a;">pg${pageNum}: symbol-classify (${variantDt.name}) — ${e.message}</div>`;
-          }
-        }
-      }
-
 
     } catch(e) {
       if (!quiet) log.innerHTML += `<div style="color:#f07a7a;">pg${pageNum}: ${e.message}</div>`;

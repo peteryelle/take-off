@@ -1,0 +1,40 @@
+{
+  "page": "T1.1.A",
+  "project": "Gainesville EHRM",
+  "note": "Extracted word-level text items (PyMuPDF) for every 'W' and '(2)' token on this sheet. 3 of the 25 W anchors are paired with an adjacent '(2)' count token 0.00429 normalized units to their left (dy=0); the rest are bare. Nearest unrelated neighbor to any bare W is 0.0074 away — comfortably outside a 0.006 radius.",
+  "expected": {
+    "total_w_anchors": 25,
+    "reclassified_to_2_port": 3,
+    "unchanged_base": 22
+  },
+  "text_items": [
+    { "str": "W",   "cx_norm": 0.400773, "cy_norm": 0.594960 },
+    { "str": "W",   "cx_norm": 0.367142, "cy_norm": 0.649488 },
+    { "str": "W",   "cx_norm": 0.377400, "cy_norm": 0.626738 },
+    { "str": "(2)", "cx_norm": 0.106588, "cy_norm": 0.488542 },
+    { "str": "W",   "cx_norm": 0.110876, "cy_norm": 0.488542 },
+    { "str": "W",   "cx_norm": 0.148074, "cy_norm": 0.401599 },
+    { "str": "W",   "cx_norm": 0.176884, "cy_norm": 0.287626 },
+    { "str": "W",   "cx_norm": 0.249662, "cy_norm": 0.260932 },
+    { "str": "W",   "cx_norm": 0.512897, "cy_norm": 0.436488 },
+    { "str": "W",   "cx_norm": 0.420119, "cy_norm": 0.393210 },
+    { "str": "W",   "cx_norm": 0.410139, "cy_norm": 0.354960 },
+    { "str": "W",   "cx_norm": 0.384404, "cy_norm": 0.314571 },
+    { "str": "W",   "cx_norm": 0.506468, "cy_norm": 0.337904 },
+    { "str": "W",   "cx_norm": 0.510952, "cy_norm": 0.295154 },
+    { "str": "W",   "cx_norm": 0.488690, "cy_norm": 0.295154 },
+    { "str": "W",   "cx_norm": 0.460734, "cy_norm": 0.297488 },
+    { "str": "W",   "cx_norm": 0.507380, "cy_norm": 0.126515 },
+    { "str": "W",   "cx_norm": 0.429900, "cy_norm": 0.141543 },
+    { "str": "W",   "cx_norm": 0.403253, "cy_norm": 0.120348 },
+    { "str": "W",   "cx_norm": 0.366170, "cy_norm": 0.145487 },
+    { "str": "(2)", "cx_norm": 0.345675, "cy_norm": 0.159569 },
+    { "str": "W",   "cx_norm": 0.349964, "cy_norm": 0.159569 },
+    { "str": "W",   "cx_norm": 0.348194, "cy_norm": 0.120348 },
+    { "str": "W",   "cx_norm": 0.317221, "cy_norm": 0.137987 },
+    { "str": "W",   "cx_norm": 0.344602, "cy_norm": 0.212515 },
+    { "str": "W",   "cx_norm": 0.381825, "cy_norm": 0.239432 },
+    { "str": "(2)", "cx_norm": 0.396727, "cy_norm": 0.239430 },
+    { "str": "W",   "cx_norm": 0.401016, "cy_norm": 0.239430 }
+  ]
+}
