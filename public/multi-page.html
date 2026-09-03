@@ -918,15 +918,42 @@ function openCopyDevices() {
   bar.style.display = bar.style.display === 'none' ? 'block' : 'none';
 }
 
-// Show the device-type bar in "ready" state with a short message
-function setDeviceTypeBarReady(msg) {
+// Show the device-type bar in "ready" state with a short message, plus
+// optional extra HTML (e.g. a sync-from-library button) appended after it.
+function setDeviceTypeBarReady(msg, extraHtml = '') {
   const bar = document.getElementById('device-type-bar');
   if (!bar) return;
   bar.style.display      = 'block';
   bar.style.background   = '#001a00';
   bar.style.borderColor  = '#007a00';
   bar.style.opacity      = '1';
-  bar.innerHTML = `<span style="color:#7af07a; font-size:12px;">✓ ${msg}</span>`;
+  bar.innerHTML = `<span style="color:#7af07a; font-size:12px;">✓ ${msg}</span>${extraHtml}`;
+}
+
+async function syncFromLibrary() {
+  const btn = document.getElementById('sync-library-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Syncing…'; }
+  try {
+    const r = await fetch(`${base()}/api/projects`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'sync_from_library', project_id: projectId })
+    });
+    const j = await r.json();
+    if (r.ok) {
+      let msg = `✓ Synced ${j.updated} device type${j.updated !== 1 ? 's' : ''} from library`;
+      if (j.skipped?.length) {
+        msg += ` — ${j.skipped.length} library type${j.skipped.length !== 1 ? 's' : ''} not in this project (${j.skipped.map(s => s.name).join(', ')})`;
+      }
+      const bar = document.getElementById('device-type-bar');
+      if (bar) bar.innerHTML = `<span style="color:${j.skipped?.length ? '#f0c040' : '#7af07a'}; font-size:12px;">${msg}</span>`;
+    } else {
+      alert('Sync failed: ' + (j.error ?? r.status));
+      if (btn) { btn.disabled = false; btn.textContent = '🔄 Sync from library'; }
+    }
+  } catch (e) {
+    alert('Sync failed: ' + e.message);
+    if (btn) { btn.disabled = false; btn.textContent = '🔄 Sync from library'; }
+  }
 }
 
 async function copyDeviceTypes() {
@@ -6117,12 +6144,17 @@ async function restoreFromSupabase(pid) {
       // Neither set just means this project keeps its own device types
       // independently, which is a normal state, not shown as a warning.
       let libNote = '';
+      let syncBtn = '';
       if (j.is_library) {
         libNote = ` — 📚 ${j.library_name || 'this is a device library'}`;
       } else if (j.library_project) {
         libNote = ` — using library "${j.library_project.name}" (Project ${j.library_project.id})`;
+        // Sync always overwrites assembly/labor on matching device types with
+        // the library's current version (Peter's call — no "fill blanks only"
+        // mode). Only offered when a library is actually assigned.
+        syncBtn = `&nbsp;<button id="sync-library-btn" class="amber" onclick="syncFromLibrary()" style="padding:2px 10px; font-size:10px;">🔄 Sync from library</button>`;
       }
-      setDeviceTypeBarReady(`${dtCount} device type${dtCount !== 1 ? 's' : ''} configured${libNote}`);
+      setDeviceTypeBarReady(`${dtCount} device type${dtCount !== 1 ? 's' : ''} configured${libNote}`, syncBtn);
     }
 
     // PDF auto-load runs independently, outside this function's try/catch — see

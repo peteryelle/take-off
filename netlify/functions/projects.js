@@ -185,6 +185,69 @@ export default async function handler(req) {
       return ok({ deleted: true, id, instances_deleted: instanceCount ?? 0 });
     }
 
+    // ── Action: sync assembly/labor from this project's library ──
+    // Unlike copy_device_types (which only INSERTs types missing by legend_id,
+    // for seeding a brand-new project), this UPDATEs assembly/labor on device
+    // types that already exist here — always overwriting with the library's
+    // current version, by design (Peter: "always overwrite"). Never touches
+    // detection_config, name, category, text_anchors, etc. — those are
+    // per-project/per-discovery and legitimately differ set to set.
+    if (action === "sync_from_library") {
+      const { project_id } = body;
+      if (!project_id) return err("project_id required");
+      if (!(await assertProjectInOrg(supabase, project_id, orgId)))
+        return err("Project not found in your organization", 404);
+
+      const { data: projectRow, error: projErr } = await supabase
+        .from("projects")
+        .select("id, name, library_project_id")
+        .eq("id", project_id)
+        .single();
+      if (projErr) return err(projErr.message, 500);
+      if (!projectRow?.library_project_id)
+        return err("This project has no library assigned (library_project_id is not set)", 400);
+
+      const libraryId = projectRow.library_project_id;
+      if (!(await assertProjectInOrg(supabase, libraryId, orgId)))
+        return err("Library project not found in your organization", 404);
+
+      const { data: libraryDTs, error: libErr } = await supabase
+        .from("device_types")
+        .select("legend_id, name, assembly, labor")
+        .eq("project_id", libraryId);
+      if (libErr) return err(libErr.message, 500);
+      if (!libraryDTs?.length) return ok({ updated: 0, skipped: [], message: "Library has no device types" });
+
+      const { data: targetDTs, error: tgtErr } = await supabase
+        .from("device_types")
+        .select("id, legend_id, name")
+        .eq("project_id", project_id);
+      if (tgtErr) return err(tgtErr.message, 500);
+
+      const targetByLegend = new Map((targetDTs ?? []).map(dt => [dt.legend_id, dt]));
+      const updated = [];
+      const skipped = [];
+
+      for (const libDt of libraryDTs) {
+        const match = targetByLegend.get(libDt.legend_id);
+        if (!match) {
+          // Library has a device type this project has never discovered — not
+          // this action's job to create it (that's copy_device_types /
+          // discovery), just flag it so it's not silently missed.
+          skipped.push({ legend_id: libDt.legend_id, name: libDt.name, reason: "no matching device type in this project" });
+          continue;
+        }
+        const { error: updErr } = await supabase
+          .from("device_types")
+          .update({ assembly: libDt.assembly, labor: libDt.labor, updated_at: new Date().toISOString() })
+          .eq("id", match.id);
+        if (updErr) return err(updErr.message, 500);
+        updated.push({ id: match.id, legend_id: libDt.legend_id, name: match.name });
+      }
+
+      return ok({ updated: updated.length, updated_types: updated, skipped, library_project_id: libraryId });
+    }
+
     // ── Action: copy device types between projects ──────────────
     if (action === "copy_device_types") {
       const { source_project_id, target_project_id } = body;
