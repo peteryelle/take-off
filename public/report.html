@@ -157,6 +157,7 @@ tr:hover td { background: #131313; }
     <button onclick="exportCountsCsv()">⤓ Counts CSV</button>
     <button onclick="exportBomCsv()">⤓ BOM CSV</button>
     <button onclick="exportLaborCsv()">⤓ Labor CSV</button>
+    <button onclick="exportDistancesCsv()">⤓ Distances CSV</button>
   </span>
   <div class="status" id="load-status">—</div>
 </div>
@@ -388,6 +389,8 @@ window.loadReport = async function loadReport() {
       return {
         name: dt?.name ?? `type ${i.device_type_id}`,
         sheet: pageById.get(i.page_id)?.sheet_title ?? `page ${i.page_id ?? '—'}`,
+        x: i.x_norm ?? null,
+        y: i.y_norm ?? null,
         routed: !!i.routed_via_tier3,
         rawFt: i.total_ft,
         adjFt: i.total_ft * mult,
@@ -402,12 +405,14 @@ window.loadReport = async function loadReport() {
       worth a spot-check against the drawing before accepting the run.
     </div>`;
   if (cableRunRows.length) {
-    html += '<div style="max-height:420px; overflow:auto;"><table><thead><tr><th>Device Type</th><th>Sheet</th><th>Routing</th><th style="text-align:right;">Raw ft</th><th style="text-align:right;">Adjusted ft</th></tr></thead><tbody>';
+    html += '<div style="max-height:420px; overflow:auto;"><table><thead><tr><th>Device Type</th><th>Sheet</th><th style="text-align:right;">X</th><th style="text-align:right;">Y</th><th>Routing</th><th style="text-align:right;">Raw ft</th><th style="text-align:right;">Adjusted ft</th></tr></thead><tbody>';
     for (const r of cableRunRows) {
       const badge = r.routed
         ? '<span class="badge badge-info">🔵 routed</span>'
         : '<span class="badge badge-warn">⚠️ straight-line</span>';
-      html += `<tr><td>${escHtml(r.name)}</td><td>${escHtml(r.sheet)}</td><td>${badge}</td><td class="num-cell">${Math.round(r.rawFt).toLocaleString('en-US')}</td><td class="num-cell">${Math.round(r.adjFt).toLocaleString('en-US')}</td></tr>`;
+      const xCell = r.x != null ? r.x.toFixed(3) : '—';
+      const yCell = r.y != null ? r.y.toFixed(3) : '—';
+      html += `<tr><td>${escHtml(r.name)}</td><td>${escHtml(r.sheet)}</td><td class="num-cell" style="font-family:monospace; color:#999;">${xCell}</td><td class="num-cell" style="font-family:monospace; color:#999;">${yCell}</td><td>${badge}</td><td class="num-cell">${Math.round(r.rawFt).toLocaleString('en-US')}</td><td class="num-cell">${Math.round(r.adjFt).toLocaleString('en-US')}</td></tr>`;
     }
     html += '</tbody></table></div>';
   } else {
@@ -426,7 +431,7 @@ window.loadReport = async function loadReport() {
   }
   const countRows = [...countsByType.values()].sort((a, b) => b.count - a.count);
 
-  lastReport = { project_id: pid, priced, labor, countRows };
+  lastReport = { project_id: pid, priced, labor, countRows, cableRunRows };
 
   html += '<div class="section"><div class="section-title">Device Counts</div>';
   if (countRows.length) {
@@ -665,6 +670,29 @@ window.exportLaborCsv = function exportLaborCsv() {
   for (const t of labor.tasks) csv += csvRow([t.task_name, t.hours]);
   csv += csvRow(['Total', labor.total_hours]);
   downloadCsv(csv, `takeoff-labor-project-${project_id}.csv`);
+};
+
+// One row per counted device instance — x/y is the same x_norm/y_norm field
+// used everywhere else in the app (confidence map stars, batch results
+// table): normalized 0–1 against the page's identity frame, not real-world
+// feet. Route type + raw/adjusted footage mirror the on-screen Cable Runs
+// table exactly (same cableRunRows array, same multiplier already applied).
+window.exportDistancesCsv = function exportDistancesCsv() {
+  if (!lastReport) { setStatus('Load a report before exporting', 'err'); return; }
+  const { project_id, cableRunRows } = lastReport;
+  let csv = csvRow(['Device Type', 'Sheet', 'X (norm)', 'Y (norm)', 'Route Type', 'Raw ft', 'Adjusted ft']);
+  for (const r of cableRunRows) {
+    csv += csvRow([
+      r.name,
+      r.sheet,
+      r.x != null ? r.x.toFixed(3) : '',
+      r.y != null ? r.y.toFixed(3) : '',
+      r.routed ? 'Routed (Tier 3, wall-aware)' : 'Straight-line (Tier 1, fallback)',
+      Math.round(r.rawFt),
+      Math.round(r.adjFt),
+    ]);
+  }
+  downloadCsv(csv, `takeoff-distances-project-${project_id}.csv`);
 };
 
 // ── Auto-load if project_id in URL / sessionStorage ─────────────────
