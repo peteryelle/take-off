@@ -11,7 +11,7 @@
 // ─────────────────────────────────────────────────────────────────
 
 import { getSupabase, ok, err, CORS } from "./utils/clients.js";
-import { requireOrg, assertProjectInOrg, assertPageInOrg, assertProjectUnlocked } from "./utils/auth.js";
+import { requireOrg, assertProjectInOrg, assertPageInOrg, assertProjectUnlocked, resolveDeviceTypesProjectId } from "./utils/auth.js";
 import { buildDeviceList } from "../../public/lib/pipeline.js";
 import { parseSchedule } from "../../public/lib/schedule.js";
 import { buildGreedyPath } from "../../public/lib/waypoint-path.js";
@@ -79,11 +79,12 @@ export default async function handler(req) {
   }
 
   try {
+    const dtProjectId = await resolveDeviceTypesProjectId(supabase, project_id);
     const [{ data: page }, { data: deviceTypes }] = await Promise.all([
       supabase.from("pages").select("*").eq("id", page_id).single(),
       supabase.from("device_types")
         .select("id, legend_id, name, detection_config, tia_limit_ft")
-        .eq("project_id", project_id)
+        .eq("project_id", dtProjectId)
         .not("detection_config", "is", null)
     ]);
 

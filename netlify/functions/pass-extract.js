@@ -11,7 +11,7 @@
 // ─────────────────────────────────────────────────────────────────
 
 import { getSupabase, ok, err, CORS } from "./utils/clients.js";
-import { requireOrg, assertProjectInOrg, assertPageInOrg, assertProjectUnlocked } from "./utils/auth.js";
+import { requireOrg, assertProjectInOrg, assertPageInOrg, assertProjectUnlocked, resolveDeviceTypesProjectId } from "./utils/auth.js";
 import { buildDeviceList } from "../../public/lib/pipeline.js";
 
 const TIA_MAX_PERMANENT_LINK_FT = 295;
@@ -54,12 +54,13 @@ export default async function handler(req) {
   }
   if (!text_items?.length) return err("text_items required");
 
+  const dtProjectId = await resolveDeviceTypesProjectId(supabase, project_id);
   const [{ data: page, error: pageErr }, { data: deviceTypes, error: devErr }] =
     await Promise.all([
       supabase.from("pages").select("*").eq("id", page_id).single(),
       supabase.from("device_types")
         .select("id, legend_id, name, detection_config")
-        .eq("project_id", project_id)
+        .eq("project_id", dtProjectId)
         .not("detection_config", "is", null)
     ]);
 

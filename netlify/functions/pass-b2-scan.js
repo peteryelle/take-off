@@ -6,7 +6,7 @@
 // ─────────────────────────────────────────────────────────────────
 
 import { getSupabase, getAnthropic, SYSTEM_PROMPT, ok, err, CORS } from "./utils/clients.js";
-import { requireOrg, assertProjectInOrg, assertPageInOrg } from "./utils/auth.js";
+import { requireOrg, assertProjectInOrg, assertPageInOrg, resolveDeviceTypesProjectId } from "./utils/auth.js";
 import { makeCroppedStrips } from "./utils/strips.js";
 
 const N_STRIPS = 6;
@@ -31,11 +31,12 @@ export default async function handler(req) {
   const anthropic = getAnthropic();
 
   // ── Load page (for drawing bounds) + all device types ────────
+  const dtProjectId = await resolveDeviceTypesProjectId(supabase, project_id);
   const [{ data: page, error: pageErr }, { data: devices, error: devErr }] = await Promise.all([
     supabase.from("pages").select("*").eq("id", page_id).single(),
     supabase.from("device_types")
       .select("id, legend_id, name, description, discipline, category")
-      .eq("project_id", project_id)
+      .eq("project_id", dtProjectId)
       .order("legend_id")
   ]);
 

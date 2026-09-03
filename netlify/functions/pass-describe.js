@@ -11,7 +11,7 @@
 
 import { getSupabase, getAnthropic, ok, err, CORS } from "./utils/clients.js";
 
-import { requireOrg, assertProjectInOrg, assertPageInOrg } from "./utils/auth.js";
+import { requireOrg, assertProjectInOrg, assertPageInOrg, resolveDeviceTypesProjectId } from "./utils/auth.js";
 // ── Deterministic text_anchors extraction ────────────────────────
 // Rules-based — Claude NEVER controls text_anchors.
 // Claude writes the visual description; these rules extract the anchors.
@@ -117,6 +117,11 @@ export default async function handler(req) {
   if (!(await assertProjectInOrg(supabase, project_id, orgId))) return err("Project not found in your organization", 404);
   const anthropic = getAnthropic();
 
+  // Write-through: a synced project's device_types rows live under the
+  // library's project_id — resolve so this update lands on the real row
+  // instead of silently matching zero rows.
+  const dtProjectId = await resolveDeviceTypesProjectId(supabase, project_id);
+
   // ── Mode: PARSE existing llm_description ─────────────────────────
   // Deterministic — no Claude call. Rules extract text_anchors from description.
   if (llm_description) {
@@ -126,7 +131,7 @@ export default async function handler(req) {
       .from("device_types")
       .update({ llm_description, text_anchors, updated_at: new Date() })
       .eq("id", device_type_id)
-      .eq("project_id", project_id);
+      .eq("project_id", dtProjectId);
 
     if (upErr) return err(`DB error: ${upErr.message}`, 500);
 
@@ -174,7 +179,7 @@ export default async function handler(req) {
       .from("device_types")
       .update({ llm_description: result.llm_description, text_anchors, updated_at: new Date() })
       .eq("id", device_type_id)
-      .eq("project_id", project_id);
+      .eq("project_id", dtProjectId);
 
     if (upErr) return err(`DB error: ${upErr.message}`, 500);
 

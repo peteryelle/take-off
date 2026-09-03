@@ -302,6 +302,13 @@ button.kit:hover { background: #163138; }
   <div class="status" id="toolbar-status"></div>
 </div>
 
+<!-- ── Shared-library edit banner ── shown when the loaded project is synced
+     to a device-type library (projects.library_project_id). Editing here is
+     write-through (see linkProjectToLibrary/resolveDeviceTypesProjectId) —
+     every change below lands on the library's rows, visible to every other
+     project synced to it. Populated by loadDeviceTypes(). -->
+<div id="library-edit-banner" style="display:none; margin-bottom:10px; padding:8px 12px; background:#2a1a00; border:1px solid #7a5000; border-radius:3px; font-size:12px; color:#e0a860;"></div>
+
 <!-- ── Device grid ── -->
 <div id="device-grid">
   <div class="device-row header">
@@ -518,12 +525,36 @@ async function loadDeviceTypes() {
     laborTasks   = j.labor_tasks    ?? [];
     catalogId    = j.catalog_id     ?? null;
     renderGrid(deviceTypes);
+    renderLibraryBanner(j);
     const catNote = catalogId
       ? ` · ${catalogParts.length} catalog part(s) · ${laborTasks.length} labor task(s)`
       : ' · no parts catalog assigned to this project';
     setStatus('load-status', `✓ ${deviceTypes.length} device types${catNote}`, 'ok');
   } catch(e) {
     setStatus('load-status', 'Error: ' + e.message, 'err');
+  }
+}
+
+// Shown when this project is synced to a device-type library — every edit
+// on this page is write-through (see resolveDeviceTypesProjectId in
+// utils/auth.js), so it lands on the library's shared rows, not a
+// project-local copy. is_library=true (this project IS the library) gets a
+// calmer note since editing your own library is expected, not a surprise.
+function renderLibraryBanner(j) {
+  const banner = document.getElementById('library-edit-banner');
+  if (!banner) return;
+  if (j.library_project) {
+    banner.style.display = 'block';
+    banner.innerHTML = `⚠ Editing shared library: <b>${j.library_project.name}</b> (Project ${j.library_project.id}) — ` +
+      `changes here write directly to the library and affect every other project synced to it.`;
+  } else if (j.is_library) {
+    banner.style.display = 'block';
+    banner.style.background = '#001a2a';
+    banner.style.borderColor = '#2a5a7a';
+    banner.style.color = '#7ac0f0';
+    banner.innerHTML = `📚 This project is a device-type library (${j.library_name || 'unnamed'}) — other projects can sync to it.`;
+  } else {
+    banner.style.display = 'none';
   }
 }
 

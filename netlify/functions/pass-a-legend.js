@@ -6,7 +6,7 @@
 
 import { getSupabase, getAnthropic, SYSTEM_PROMPT, ok, err, CORS } from "./utils/clients.js";
 
-import { requireOrg, assertProjectInOrg, assertPageInOrg } from "./utils/auth.js";
+import { requireOrg, assertProjectInOrg, assertPageInOrg, resolveDeviceTypesProjectId } from "./utils/auth.js";
 export default async function handler(req) {
   if (req.method === "OPTIONS") return new Response("", { headers: CORS });
   if (req.method !== "POST")    return err("POST required", 405);
@@ -92,8 +92,11 @@ If no devices found: { "legend_found": false, "devices": [], "confidence": "low"
     return err("No devices found in image", 422);
 
   // ── Upsert to Supabase ────────────────────────────────────────
+  // Write-through: a synced project's legend extraction writes to the
+  // library's device_types rows, same as every other device_types mutation.
+  const dtProjectId = await resolveDeviceTypesProjectId(supabase, project_id);
   const rows = result.devices.map(d => ({
-    project_id,
+    project_id: dtProjectId,
     legend_id:   d.legend_id,
     name:        d.name,
     description: d.description,

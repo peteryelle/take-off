@@ -18,7 +18,7 @@
 import Anthropic        from "@anthropic-ai/sdk";
 import { createClient } from "@supabase/supabase-js";
 import { discoverCatalog } from "../../public/lib/discover-config.js";
-import { requireOrg, assertProjectInOrg } from "./utils/auth.js";
+import { requireOrg, assertProjectInOrg, resolveDeviceTypesProjectId } from "./utils/auth.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const supabase  = createClient(
@@ -437,10 +437,14 @@ async function actionApprove(body) {
   const text_anchors = normalizeAnchors(cluster.nearby_text);
   const legend_id    = `DISC_${session_id}_${cluster.cluster_id}`;
 
+  // Write-through: a synced project's discovery approvals write to the
+  // library's device_types rows, same as every other device_types mutation.
+  const dtProjectId = await resolveDeviceTypesProjectId(supabase, project_id);
+
   const { data: dt, error: dtErr } = await supabase
     .from("device_types")
     .upsert({
-      project_id,
+      project_id: dtProjectId,
       legend_id,
       name:                 confirmedName,
       human_description:    cluster.legend_description || "",
@@ -840,6 +844,9 @@ Return only the structured description — no preamble, no explanation.`;
 
   const legend_id = `SYM_${name.replace(/[^A-Z0-9]/gi, "_").toUpperCase().slice(0, 30)}_${Date.now()}`;
 
+  // Write-through: a synced project's symbol-device saves write to the
+  // library's device_types rows, same as every other device_types mutation.
+  const dtProjectId = await resolveDeviceTypesProjectId(supabase, project_id);
   const detection_config = {
     type:                   name,        // explicit, decoupled from the mutable display name
     anchor:                 null,        // no text — nothing for the label track to match, kept for the
@@ -861,7 +868,7 @@ Return only the structured description — no preamble, no explanation.`;
   const { data: dt, error: dtErr } = await supabase
     .from("device_types")
     .upsert({
-      project_id,
+      project_id: dtProjectId,
       legend_id,
       name,
       human_description:    description || "",
@@ -975,10 +982,15 @@ Return only the structured description — no preamble, no explanation.`;
   const legend_id = legend_entry.id ||
     `LEG_${legend_entry.name.replace(/[^A-Z0-9]/gi, "_").toUpperCase().slice(0, 30)}`;
 
+  // Write-through: a synced project's legend-derived device saves write to
+  // the library's device_types rows, same as every other device_types
+  // mutation.
+  const dtProjectId = await resolveDeviceTypesProjectId(supabase, project_id);
+
   const { data: dt, error: dtErr } = await supabase
     .from("device_types")
     .upsert({
-      project_id,
+      project_id: dtProjectId,
       legend_id,
       name:                 legend_entry.name,
       human_description:    legend_entry.legend_description || legend_entry.short_description || "",

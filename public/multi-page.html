@@ -187,6 +187,40 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
       <div class="status" id="copy-dt-status"></div>
     </div>
   </div>
+
+  <!-- Device-type library — see projects.library_project_id. Synced projects'
+       device_types live under the library's project_id (write-through); this
+       panel is the only place to link/unlink. Populated from the takeoff-summary
+       restore (populateLibraryPanel) and the list_libraries action. -->
+  <div id="library-panel" style="margin-top:10px; padding:8px 12px; background:#111; border:1px solid #333; border-radius:3px; font-size:12px; display:none;">
+    <div id="library-status" style="color:#aaa; margin-bottom:6px;"></div>
+    <div id="library-controls" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <select id="library-select" style="padding:3px 6px;"><option value="">Loading libraries…</option></select>
+      <button onclick="linkLibrary()" style="padding:3px 10px; font-size:11px;">Link</button>
+      <button onclick="unlinkLibrary()" id="library-unlink-btn" style="padding:3px 10px; font-size:11px; display:none;">Unlink</button>
+      <span id="library-action-status" style="color:#888;"></span>
+    </div>
+  </div>
+
+  <!-- Distance multipliers — same project-wide values editable in the Confidence
+       Map and Report views (projects.default_length_multiplier /
+       fallback_length_multiplier). Surfaced here too so they're visible without
+       opening a page's confidence map first. saveProjectMultipliers() keeps this
+       panel and the confidence-map inputs in sync via the shared globals. -->
+  <div id="multiplier-panel" style="margin-top:10px; padding:8px 12px; background:#111; border:1px solid #333; border-radius:3px; font-size:12px; display:none;">
+    <div style="display:flex; flex-wrap:wrap; gap:16px; align-items:center;">
+      <span style="display:flex; gap:6px; align-items:center;">
+        <span style="color:#aaa;">🔵 Routed multiplier:</span>
+        <input id="proj-mult-routed-input" type="number" step="0.01" min="0.01" style="width:70px; padding:3px 6px;">
+      </span>
+      <span style="display:flex; gap:6px; align-items:center;">
+        <span style="color:#aaa;">⚠️ Fallback multiplier:</span>
+        <input id="proj-mult-fallback-input" type="number" step="0.01" min="0.01" style="width:70px; padding:3px 6px;">
+      </span>
+      <button onclick="saveProjectMultipliers()" style="padding:3px 10px;">Save</button>
+      <span id="proj-mult-status" style="color:#888;"></span>
+    </div>
+  </div>
 </div>
 
 <!-- ── STEP 2: LOAD PDF + SELECT PAGES ──────────────────────────── -->
@@ -918,41 +952,140 @@ function openCopyDevices() {
   bar.style.display = bar.style.display === 'none' ? 'block' : 'none';
 }
 
-// Show the device-type bar in "ready" state with a short message, plus
-// optional extra HTML (e.g. a sync-from-library button) appended after it.
-function setDeviceTypeBarReady(msg, extraHtml = '') {
+// Show the device-type bar in "ready" state with a short message
+function setDeviceTypeBarReady(msg) {
   const bar = document.getElementById('device-type-bar');
   if (!bar) return;
   bar.style.display      = 'block';
   bar.style.background   = '#001a00';
   bar.style.borderColor  = '#007a00';
   bar.style.opacity      = '1';
-  bar.innerHTML = `<span style="color:#7af07a; font-size:12px;">✓ ${msg}</span>${extraHtml}`;
+  bar.innerHTML = `<span style="color:#7af07a; font-size:12px;">✓ ${msg}</span>`;
 }
 
-async function syncFromLibrary() {
-  const btn = document.getElementById('sync-library-btn');
-  if (btn) { btn.disabled = true; btn.textContent = 'Syncing…'; }
+// ── Device-type library panel ───────────────────────────────────────
+// Called from the restore flow (restoreFromSupabase) with the takeoff-summary
+// response — sets the status line and shows Link/Unlink appropriately, then
+// loads the dropdown of available libraries. See projects.library_project_id
+// and utils/auth.js's linkProjectToLibrary for the backend behavior.
+let currentLibraryProjectId = null; // null = not synced to a library
+
+function populateLibraryPanel(j) {
+  const panel  = document.getElementById('library-panel');
+  const status = document.getElementById('library-status');
+  const unlinkBtn = document.getElementById('library-unlink-btn');
+  if (!panel) return;
+  panel.style.display = 'block';
+  currentLibraryProjectId = j.library_project?.id ?? null;
+
+  if (j.is_library) {
+    status.innerHTML = `📚 This project IS a device-type library` +
+      (j.library_name ? ` ("${j.library_name}")` : '') +
+      ` — other projects can sync to it.`;
+    unlinkBtn.style.display = 'none';
+  } else if (j.library_project) {
+    status.innerHTML = `🔗 Synced to library "<b>${j.library_project.name}</b>" (Project ${j.library_project.id}) — ` +
+      `device types are shared and read-only from elsewhere; edits here write straight to the library.`;
+    unlinkBtn.style.display = 'inline-block';
+  } else {
+    status.innerHTML = `Not synced to a device-type library — this project keeps its own device types independently.`;
+    unlinkBtn.style.display = 'none';
+  }
+
+  loadLibraryOptions();
+}
+
+async function loadLibraryOptions() {
+  const select = document.getElementById('library-select');
+  if (!select || !projectId) return;
+  select.innerHTML = '<option value="">Loading libraries…</option>';
   try {
     const r = await fetch(`${base()}/api/projects`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'sync_from_library', project_id: projectId })
+      body: JSON.stringify({ action: 'list_libraries' })
     });
-    const j = await r.json();
-    if (r.ok) {
-      let msg = `✓ Synced ${j.updated} device type${j.updated !== 1 ? 's' : ''} from library`;
-      if (j.skipped?.length) {
-        msg += ` — ${j.skipped.length} library type${j.skipped.length !== 1 ? 's' : ''} not in this project (${j.skipped.map(s => s.name).join(', ')})`;
-      }
-      const bar = document.getElementById('device-type-bar');
-      if (bar) bar.innerHTML = `<span style="color:${j.skipped?.length ? '#f0c040' : '#7af07a'}; font-size:12px;">${msg}</span>`;
-    } else {
-      alert('Sync failed: ' + (j.error ?? r.status));
-      if (btn) { btn.disabled = false; btn.textContent = '🔄 Sync from library'; }
+    const list = await r.json();
+    if (!r.ok) throw new Error(list.error || r.status);
+
+    const options = (list ?? []).filter((lib) => lib.id !== projectId);
+    if (!options.length) {
+      select.innerHTML = '<option value="">No libraries available in this org</option>';
+      return;
     }
+    select.innerHTML = options.map((lib) =>
+      `<option value="${lib.id}" ${lib.id === currentLibraryProjectId ? 'selected' : ''}>` +
+      `${lib.library_name || lib.name} (Project ${lib.id})</option>`
+    ).join('');
+    if (!currentLibraryProjectId) select.insertAdjacentHTML('afterbegin', '<option value="">— choose a library —</option>');
   } catch (e) {
-    alert('Sync failed: ' + e.message);
-    if (btn) { btn.disabled = false; btn.textContent = '🔄 Sync from library'; }
+    select.innerHTML = `<option value="">Error loading libraries</option>`;
+  }
+}
+
+// force=true re-sends the link after the user has been shown the unmatched
+// list and chosen to proceed anyway — those types are left unmapped on the
+// project's own row (see linkProjectToLibrary's device_type_mismatch path).
+async function linkLibrary(force = false) {
+  const select = document.getElementById('library-select');
+  const statusEl = document.getElementById('library-action-status');
+  const libraryId = parseInt(select?.value);
+  if (!libraryId) { statusEl.style.color = '#f07a7a'; statusEl.textContent = 'choose a library first'; return; }
+  if (!projectId) { statusEl.style.color = '#f07a7a'; statusEl.textContent = 'no project loaded'; return; }
+
+  statusEl.style.color = '#888';
+  statusEl.textContent = force ? 'linking (forced)…' : 'linking…';
+  try {
+    const r = await fetch(`${base()}/api/projects`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'update_project', project_id: projectId, library_project_id: libraryId, force })
+    });
+    const j = await r.json().catch(() => ({}));
+
+    if (r.status === 409 && j.error === 'device_type_mismatch') {
+      const names = (j.unmatched ?? []).map((u) => `"${u.name}" (${u.legend_id})`).join('\n');
+      const proceed = confirm(
+        `${j.unmatched.length} device type(s) have no match in the library by legend_id and would be left unmapped:\n\n${names}\n\n` +
+        `Link anyway? Matched types still remap normally; these stay on this project only.`
+      );
+      if (proceed) return linkLibrary(true);
+      statusEl.style.color = '#f0c040';
+      statusEl.textContent = `blocked — ${j.unmatched.length} unmatched type(s)`;
+      return;
+    }
+    if (!r.ok) throw new Error(j.error || r.status);
+
+    statusEl.style.color = '#7af07a';
+    statusEl.textContent = `linked — ${j.matched} matched, ${j.instances_remapped} instance(s) remapped` +
+      (j.unmatched?.length ? `, ${j.unmatched.length} left unmapped` : '');
+    // Full refresh so device-types.html-facing state (device_type_bar count,
+    // etc.) reflects the library's set, not this project's now-deleted rows.
+    restoreFromSupabase(projectId);
+  } catch (e) {
+    statusEl.style.color = '#f07a7a';
+    statusEl.textContent = `link failed: ${e.message}`;
+  }
+}
+
+async function unlinkLibrary() {
+  const statusEl = document.getElementById('library-action-status');
+  if (!projectId) return;
+  if (!confirm('Unlink from this library? Your project will get its own copy of the library\'s current device types (a fork) — future edits to the library will no longer reach this project.')) return;
+
+  statusEl.style.color = '#888';
+  statusEl.textContent = 'unlinking…';
+  try {
+    const r = await fetch(`${base()}/api/projects`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'update_project', project_id: projectId, library_project_id: null })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || r.status);
+    statusEl.style.color = '#7af07a';
+    statusEl.textContent = `unlinked — forked ${j.forked} device type(s)`;
+    restoreFromSupabase(projectId);
+  } catch (e) {
+    statusEl.style.color = '#f07a7a';
+    statusEl.textContent = `unlink failed: ${e.message}`;
   }
 }
 
@@ -5575,10 +5708,64 @@ async function saveLengthMultiplier() {
     projectFallbackMultiplier = fallbackVal;
     statusEl.style.color = '#7af07a';
     statusEl.textContent = `saved (routed ${routedVal}× · fallback ${fallbackVal}×)`;
+    syncMultiplierInputs();
   } catch (e) {
     statusEl.style.color = '#f07a7a';
     statusEl.textContent = `save failed: ${e.message}`;
   }
+}
+
+// Same project-wide values, different UI (Step 1 panel vs Confidence Map
+// modal) — this is the Step 1 panel's save button. Shares the same
+// update_project call and globals as saveLengthMultiplier() above so
+// whichever one you edit last wins, and both displays reflect it.
+async function saveProjectMultipliers() {
+  const routedVal   = Number(document.getElementById('proj-mult-routed-input').value);
+  const fallbackVal = Number(document.getElementById('proj-mult-fallback-input').value);
+  const statusEl = document.getElementById('proj-mult-status');
+  if (!Number.isFinite(routedVal) || routedVal <= 0 || !Number.isFinite(fallbackVal) || fallbackVal <= 0) {
+    statusEl.style.color = '#f07a7a';
+    statusEl.textContent = 'both multipliers must be positive numbers';
+    return;
+  }
+  if (!projectId) { statusEl.style.color = '#f07a7a'; statusEl.textContent = 'no project loaded'; return; }
+  statusEl.style.color = '#888';
+  statusEl.textContent = 'saving…';
+  try {
+    const r = await fetch(`${base()}/api/projects`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'update_project', project_id: projectId,
+        default_length_multiplier: routedVal, fallback_length_multiplier: fallbackVal
+      })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || r.status);
+    projectDefaultMultiplier = routedVal;
+    projectFallbackMultiplier = fallbackVal;
+    statusEl.style.color = '#7af07a';
+    statusEl.textContent = `saved (routed ${routedVal}× · fallback ${fallbackVal}×)`;
+    syncMultiplierInputs();
+  } catch (e) {
+    statusEl.style.color = '#f07a7a';
+    statusEl.textContent = `save failed: ${e.message}`;
+  }
+}
+
+// Pushes the shared projectDefaultMultiplier/projectFallbackMultiplier
+// globals into whichever of the two multiplier UIs exist on the page right
+// now, so editing one and reopening the other never shows a stale value.
+function syncMultiplierInputs() {
+  const routed   = document.getElementById('conf-mult-routed-input');
+  const fallback = document.getElementById('conf-mult-fallback-input');
+  const pRouted  = document.getElementById('proj-mult-routed-input');
+  const pFallback = document.getElementById('proj-mult-fallback-input');
+  if (routed)    routed.value    = projectDefaultMultiplier;
+  if (fallback)  fallback.value  = projectFallbackMultiplier;
+  if (pRouted)   pRouted.value   = projectDefaultMultiplier;
+  if (pFallback) pFallback.value = projectFallbackMultiplier;
+  const panel = document.getElementById('multiplier-panel');
+  if (panel) panel.style.display = 'block';
 }
 
 function closeConfidenceModal() {
@@ -5917,6 +6104,8 @@ async function restoreFromSupabase(pid) {
     const demarcs     = j.demarcs      ?? [];
     projectDefaultMultiplier = j.default_length_multiplier ?? 1.0;
     projectFallbackMultiplier = j.fallback_length_multiplier ?? 1.0;
+    syncMultiplierInputs();
+    populateLibraryPanel(j);
     const pageRegions = j.page_regions ?? [];   // schematics (page → 1+ regions)
     const regionById  = new Map(pageRegions.map(rg => [rg.id, rg]));
     // Distance-scope boxes, keyed by page_id (devices are scoped against these).
@@ -6144,17 +6333,12 @@ async function restoreFromSupabase(pid) {
       // Neither set just means this project keeps its own device types
       // independently, which is a normal state, not shown as a warning.
       let libNote = '';
-      let syncBtn = '';
       if (j.is_library) {
         libNote = ` — 📚 ${j.library_name || 'this is a device library'}`;
       } else if (j.library_project) {
         libNote = ` — using library "${j.library_project.name}" (Project ${j.library_project.id})`;
-        // Sync always overwrites assembly/labor on matching device types with
-        // the library's current version (Peter's call — no "fill blanks only"
-        // mode). Only offered when a library is actually assigned.
-        syncBtn = `&nbsp;<button id="sync-library-btn" class="amber" onclick="syncFromLibrary()" style="padding:2px 10px; font-size:10px;">🔄 Sync from library</button>`;
       }
-      setDeviceTypeBarReady(`${dtCount} device type${dtCount !== 1 ? 's' : ''} configured${libNote}`, syncBtn);
+      setDeviceTypeBarReady(`${dtCount} device type${dtCount !== 1 ? 's' : ''} configured${libNote}`);
     }
 
     // PDF auto-load runs independently, outside this function's try/catch — see
