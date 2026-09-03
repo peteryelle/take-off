@@ -374,7 +374,7 @@ export default async function handler(req) {
     }
 
     if (action === "update_project") {
-      const { id, is_library, library_name, name, number, client, pdf_filename, pdf_page_count, pdf_storage_path, catalog_id, default_length_multiplier, fallback_length_multiplier, accepted_final_run_at } = body;
+      const { id, is_library, library_name, name, number, client, pdf_filename, pdf_page_count, pdf_storage_path, catalog_id, library_project_id, default_length_multiplier, fallback_length_multiplier, accepted_final_run_at } = body;
       const project_id = body.project_id ?? id;
       if (!project_id) return err("project_id required");
       if (!(await assertProjectInOrg(supabase, project_id, orgId)))
@@ -433,11 +433,33 @@ export default async function handler(req) {
         patch.accepted_final_run_at = accepted_final_run_at ? new Date() : null;
       }
 
+      // library_project_id must point at an actual library (is_library=true)
+      // in the caller's own org — same reasoning as the catalog_id check
+      // above: without this, a project could silently link to a non-library
+      // project, another tenant's project (RLS would then hide it, reading as
+      // "library has no device types"), or itself.
+      if (library_project_id !== undefined) {
+        if (library_project_id === null) {
+          patch.library_project_id = null;
+        } else {
+          if (library_project_id === project_id) return err("A project cannot link to itself as a library");
+          const { data: lib } = await supabase
+            .from("projects")
+            .select("id, is_library")
+            .eq("id", library_project_id)
+            .eq("org_id", orgId)
+            .maybeSingle();
+          if (!lib) return err("Library project not found in your organization", 404);
+          if (!lib.is_library) return err("That project is not marked as a library", 400);
+          patch.library_project_id = library_project_id;
+        }
+      }
+
       const { data, error } = await supabase
         .from("projects")
         .update(patch)
         .eq("id", project_id)
-        .select("id, name, is_library, library_name, catalog_id, default_length_multiplier, fallback_length_multiplier, accepted_final_run_at")
+        .select("id, name, is_library, library_name, catalog_id, library_project_id, default_length_multiplier, fallback_length_multiplier, accepted_final_run_at")
         .single();
 
       if (error) return err(error.message, 500);

@@ -233,6 +233,25 @@ async function loadCatalogs() {
   }
 }
 
+async function assignLibrary(projectId, libraryIdRaw) {
+  const library_project_id = libraryIdRaw === '' ? null : parseInt(libraryIdRaw);
+  try {
+    const r = await fetch(`${base()}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'update_project', project_id: projectId, library_project_id })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { alert('Error: ' + (j.error ?? r.status)); await loadProjects(); return; }
+    const p = allProjects.find(p => p.id === projectId);
+    if (p) p.library_project_id = library_project_id;
+    renderList(allProjects);   // library badge depends on this — repaint now, not just on next full reload
+  } catch(e) {
+    alert('Error: ' + e.message);
+    await loadProjects();
+  }
+}
+
 async function assignCatalog(projectId, catalogIdRaw) {
   const catalog_id = catalogIdRaw === '' ? null : parseInt(catalogIdRaw);
   try {
@@ -351,6 +370,15 @@ function renderList(projects) {
                 style="padding:4px 12px; font-size:11px; margin-top:4px; ${p.is_library ? 'color:#c79af0; border-color:#6a4a8a;' : 'color:#888;'}">
           ${p.is_library ? '📚 Is Library ✓' : '☆ Mark as Library'}
         </button>
+        ${!p.is_library ? `
+        <select onclick="event.stopPropagation();" onchange="assignLibrary(${p.id}, this.value); event.stopPropagation();"
+                title="Device library this project's device types/assembly/labor sync from"
+                style="background:#1a1a1a; border:1px solid #333; color:${p.library_project_id ? '#8fb8e0' : '#888'}; padding:4px 8px; border-radius:3px; font-family:monospace; font-size:11px; margin-top:4px; width:100%;">
+          <option value="" ${!p.library_project_id ? 'selected' : ''}>— no library —</option>
+          ${allProjects.filter(x => x.is_library).map(lib =>
+            `<option value="${lib.id}" ${lib.id === p.library_project_id ? 'selected' : ''}>📚 ${esc(lib.library_name || lib.name)}</option>`
+          ).join('')}
+        </select>` : ''}
         <select onclick="event.stopPropagation();" onchange="assignCatalog(${p.id}, this.value); event.stopPropagation();"
                 title="Parts catalog this project prices against"
                 style="background:#1a1a1a; border:1px solid #333; color:${p.catalog_id ? '#e0e0e0' : '#a55'}; padding:4px 8px; border-radius:3px; font-family:monospace; font-size:11px; margin-top:4px; width:100%;">
