@@ -86,3 +86,5 @@ export default async function handler(req) {
     return err(e.message, 500);
   }
 }
+
+export const config = { path: "/api/pass-tr-schedule" };
