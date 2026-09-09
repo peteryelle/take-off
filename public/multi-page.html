@@ -4095,11 +4095,22 @@ async function runBatch(quiet = false) {
       };
       pageContentBBox[pageNum] = contentBBox;   // same-session cache for immediate use
 
-      // Filter to anchors, normalize by content bounds
+      // Filter to anchors, normalize by content bounds.
+      // The length cap is tuned for short device-anchor labels (N2, CAM-EXT-1)
+      // and is WRONG for a tr_schedule page: tr-schedule.js's first step is
+      // finding the table's own title text, which is routinely 40-60+ chars
+      // ("TELECOMMUNICATION ROOM TERMINATION AND HARDWARE SCHEDULE" is 56).
+      // Without this exemption the title gets silently dropped here, before
+      // the request is ever sent -- pass-tr-schedule.js sees text_items with
+      // no title in it at all and correctly, silently returns zero rows. No
+      // error anywhere, because nothing is actually wrong from its point of
+      // view -- the data just never arrived. Confirmed against a real
+      // production capture (page has a tr_schedule config; diagnostic showed
+      // no title-length text among what was received).
       const textItems = [];
       for (const { s, cx, cy } of allRaw) {
         // send all device-like candidates; the server (detection_config) matches precisely
-        if (s.length > 24 || !/[A-Za-z0-9]/.test(s)) continue;
+        if ((s.length > 24 && !cache.tr_schedule) || !/[A-Za-z0-9]/.test(s)) continue;
         textItems.push({
           str:       s,
           cx_norm:   parseFloat(((cx - xMin) / cW).toFixed(4)),
