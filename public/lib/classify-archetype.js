@@ -1,7 +1,7 @@
 // classify-archetype.js — pure archetype router for the schedule layer.
 // No PDF, no DOM, no network, no LLM.
 //
-// Three AEs proved the "schedule" is not one structure. This module looks at a
+// Four AEs proved the "schedule" is not one structure. This module looks at a
 // sheet's tables + token statistics and decides WHICH reader should handle it,
 // so nothing downstream has to assume a job looks like QTS:
 //
@@ -11,6 +11,14 @@
 //   'quantity_matrix' -> count-by-type matrix (APG OUTLET QUANTITY SCHEDULE).
 //                        A type column + a quantity column + a grand-total row;
 //                        NO per-device rows. Routes to the matrix reader.
+//   'tr_summary'      -> row-per-TR (telecom room) table (VA T-500 TR
+//                        Termination and Hardware Schedule). A room/TR-number
+//                        key column + per-room numeric metrics (terminations,
+//                        patch panels) — NOT a device-id column (nothing to
+//                        place) and NOT a type+qty+grand-total matrix (every
+//                        row is the same "kind" of thing, a room, not a
+//                        count of instances of a type). Routes to
+//                        tr-schedule.js.
 //   'label_stamp'     -> no countable schedule table; identity lives in repeated
 //                        plan stamps (VA N2/DV/DD, APG SF1 outlets). Routes to
 //                        detect.js anchor counting.
@@ -28,6 +36,8 @@ const DEVICE_ID_HEADERS = [/^UIN$/, /^TAG$/, /^DEVICE\s*ID$/, /^EQUIPMENT\s*ID$/
 const QTY_HEADERS = [/\bQUANTITY\b/, /\bQTY\b/, /\bGRAND\s*TOTAL\b/, /\bTOTAL\b/];
 const TYPE_HEADERS = [/^TYPE$/, /OUTLET\s*TYPE/, /DEVICE\s*TYPE/, /^DESIGNATOR$/];
 const GRAND_TOTAL = /\bGRAND\s*TOTAL\b/;
+const ROOM_KEY_HEADERS = [/\bROOM\s*NUMBER\b/, /\bTELECOMMUNICATIONS\s*ROOM\b/, /^TR$/, /^TR\s*(NUMBER|NAME|ID)$/];
+const PER_ROOM_METRIC_HEADERS = [/\bTERMINATIONS\b/, /\bPATCH\s*PANELS?\b/];
 
 const anyMatch = (s, res) => res.some((re) => re.test(s));
 
@@ -46,6 +56,8 @@ export function classifyTable(table = {}) {
   const hasQty = headers.some((h) => anyMatch(h, QTY_HEADERS));
   const hasType = headers.some((h) => anyMatch(h, TYPE_HEADERS));
   const hasGrandTotal = !!table.hasGrandTotalRow || headers.some((h) => GRAND_TOTAL.test(h));
+  const hasRoomKey = headers.some((h) => anyMatch(h, ROOM_KEY_HEADERS));
+  const hasPerRoomMetric = headers.some((h) => anyMatch(h, PER_ROOM_METRIC_HEADERS));
 
   // device-list: an id column whose values are distinct per row (real UINs/tags),
   // not a short closed set of type codes.
@@ -53,7 +65,7 @@ export function classifyTable(table = {}) {
   const distinctId = new Set(idVals).size;
   const idLooksPerDevice = idVals.length > 0 && distinctId / idVals.length > 0.8;
 
-  let device_list = 0, quantity_matrix = 0;
+  let device_list = 0, quantity_matrix = 0, tr_summary = 0;
 
   if (hasDeviceId) { device_list += 2; reasons.push('has device-id column header'); }
   if (idLooksPerDevice) { device_list += 2; reasons.push(`id column is per-row distinct (${distinctId}/${idVals.length})`); }
@@ -67,7 +79,18 @@ export function classifyTable(table = {}) {
   // A device-id column is decisive against matrix unless a grand total clearly wins.
   if (hasDeviceId && !hasGrandTotal) quantity_matrix -= 1;
 
-  const scores = { device_list, quantity_matrix };
+  // A TR summary's key column (room/TR number) is ALSO per-row distinct — the
+  // same shape idLooksPerDevice rewards for device_list. What actually
+  // distinguishes it: no device-id header (nothing to place), no grand-total
+  // row (rooms aren't summed into one count the way a matrix is), and at
+  // least one per-room numeric metric header alongside the room key. This
+  // combination doesn't occur on a real device_list or quantity_matrix sheet.
+  if (hasRoomKey) { tr_summary += 2; reasons.push('has room/TR-number key column header'); }
+  if (hasPerRoomMetric) { tr_summary += 2; reasons.push('has per-room metric column (terminations/patch panels)'); }
+  if (hasDeviceId) { tr_summary -= 3; reasons.push('device-id column present — not a TR summary'); }
+  if (hasGrandTotal) tr_summary -= 1;
+
+  const scores = { device_list, quantity_matrix, tr_summary };
   const [winner, runnerUp] = Object.entries(scores).sort((a, b) => b[1] - a[1]);
   if (winner[1] <= 0 || winner[1] === (runnerUp ? runnerUp[1] : 0)) {
     return { archetype: 'unknown', score: winner[1], reasons, scores };
@@ -124,10 +147,11 @@ export function classifySheet(sheet = {}) {
 export const ROUTE = {
   device_list: 'device_list_reader',
   quantity_matrix: 'matrix_reader',
+  tr_summary: 'tr_schedule_reader',
   label_stamp: 'detect_anchor_count',
 };
 
-export const CLASSIFIER_VERSION = 'archetype-1';
+export const CLASSIFIER_VERSION = 'archetype-2';
 
 // Produce the persistable pages.route row from already-derived sheet signals.
 // Discovery calls this once per sheet and stores the result; buildDeviceList

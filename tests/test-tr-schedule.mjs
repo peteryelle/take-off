@@ -1,13 +1,29 @@
-// test-tr-schedule.mjs — Step 4 gate. Pure fixture for the T-500 TR
-// termination/hardware schedule. Run: node --test tests/test-tr-schedule.mjs
+// test-tr-schedule.mjs — Step 4 gate. Uses REAL text extracted from an
+// actual T-500 sheet (Gainesville EHRM), not a hand-built fixture — a
+// synthetic fixture twice encoded wrong assumptions (uniform 2-line header
+// wrapping; header text x-aligned with its data column) that only real data
+// caught. See fixtures/t500-schedule-textitems.json and tr-schedule.js's
+// file header for what those assumptions got wrong and how this reader
+// avoids depending on them: positional column assignment (left-to-right
+// order within each row) instead of nearest-header-x.
+//
+// Run: node --test tests/test-tr-schedule.mjs
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { parseTrSchedule } from '../public/lib/tr-schedule.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 let failures = 0;
 const assert = (cond, msg) => {
   if (cond) console.log('  PASS ', msg);
   else { console.log('  FAIL ', msg); failures++; }
 };
-const ti = (str, x, y) => ({ str, cx_norm: x, cy_norm: y });
+
+const realItems = JSON.parse(
+  readFileSync(join(__dirname, '..', 'fixtures', 't500-schedule-textitems.json'), 'utf8')
+);
 
 const cfg = {
   present: true,
@@ -21,71 +37,70 @@ const cfg = {
   },
 };
 
-// Column x-positions matching the real T-500 layout.
-const X = { bldg: 0.10, lvl: 0.15, tr: 0.22, term: 0.32, panels: 0.42 };
-
-// Real T-500 rows: deliberately mixed TR-name shapes (hyphenated, bare
-// alphanumeric, digit-leading) — the case the validity gate has to handle
-// without a TR-name regex.
-const ROWS = [
-  { bldg: '1', lvl: '5', tr: 'H519-1', term: '288', panels: '6' },
-  { bldg: '1', lvl: 'B', tr: 'B050C1', term: '102', panels: '3' },
-  { bldg: '1', lvl: 'B', tr: 'EB51A', term: '446', panels: '10' },
-  { bldg: '1', lvl: '5', tr: 'E5031', term: '224', panels: '5' },
-  { bldg: '12', lvl: '3', tr: '347-12', term: '188', panels: '4' },
-];
-
-function t500Items() {
-  const items = [ti('TELECOMMUNICATION ROOM TERMINATION AND HARDWARE SCHEDULE', X.bldg, 0.05)];
-
-  // Header wraps across TWO lines per real T-500 (confirmed on the
-  // Gainesville EHRM sheet) — this is the case schedule.js's single-row
-  // headerX cannot handle and headerXBand's wider band exists for.
-  items.push(
-    ti('BUILDING', X.bldg, 0.08), ti('NUMBER', X.bldg, 0.095),
-    ti('LEVEL', X.lvl, 0.08),
-    ti('TELECOMMUNICATIONS', X.tr, 0.08), ti('ROOM NUMBER', X.tr, 0.095),
-    ti('TOTAL CAT6A CABLE', X.term, 0.08), ti('TERMINATIONS PER TR', X.term, 0.095),
-    ti('MINIMUM NUMBER OF PATCH', X.panels, 0.08), ti('PANELS', X.panels, 0.095),
-  );
-
-  let y = 0.12;
-  for (const r of ROWS) {
-    items.push(
-      ti(r.bldg, X.bldg, y), ti(r.lvl, X.lvl, y), ti(r.tr, X.tr, y),
-      ti(r.term, X.term, y), ti(r.panels, X.panels, y),
-    );
-    y += 0.015;
-  }
-
-  // Footer notes block below the table — must NOT be parsed as data rows.
-  items.push(ti('NOTES:', X.bldg, y + 0.02));
-  items.push(ti('1. SEE ENLARGED DATA ROOM PLANS FOR TELECOMMUNICATIONS ROOM EQUIPMENT LOCATIONS.', X.bldg, y + 0.035));
-
-  return items;
-}
-
-console.log('T-500 TR TERMINATION AND HARDWARE SCHEDULE:');
+console.log('T-500 TR TERMINATION AND HARDWARE SCHEDULE (real sheet):');
 {
-  const rows = parseTrSchedule(t500Items(), cfg);
-  assert(rows.length === ROWS.length, `tr_schedule rows == ${ROWS.length} (got ${rows.length})`);
+  const rows = parseTrSchedule(realItems, cfg);
+
+  // Locked to the sheet's actual row count — verified by hand against the
+  // source table (44 TRs). A regression here means the header/data-offset
+  // or dense-line-pitch handling broke again.
+  assert(rows.length === 44, `44 real TR rows parsed (got ${rows.length})`);
+
   assert(rows.every((r) => r.tr_number), 'every row carries a tr_number');
-  assert(rows.some((r) => r.tr_number === 'B050C1'), 'bare alphanumeric TR name (no hyphen) parses');
-  assert(rows.some((r) => r.tr_number === '347-12'), 'digit-leading TR name parses');
   assert(rows.every((r) => Number.isInteger(r.total_terminations)), 'total_terminations is an integer on every row');
   assert(rows.every((r) => Number.isInteger(r.min_patch_panels)), 'min_patch_panels is an integer on every row');
+
+  // Mixed TR-name shapes really do all appear on this one sheet — the case
+  // the validity gate has to handle without a TR-name regex.
+  assert(rows.some((r) => r.tr_number === 'B050C1'), 'bare alphanumeric TR name (no hyphen) parses');
+  assert(rows.some((r) => r.tr_number === '347-12'), 'digit-leading TR name parses');
+  assert(rows.some((r) => r.tr_number === 'E5031'), 'bare alphanumeric TR name (letter+digits, no hyphen) parses');
+
+  // Spot-check against the source table, first row / last row / a middle row
+  // with the near-tie column boundary that the old nearest-header-x
+  // approach actually got wrong (terminations vs. patch_panels, ~0.0002
+  // normalized-x apart from the midpoint on this sheet).
+  const first = rows.find((r) => r.tr_number === '110-12');
+  assert(first && first.building === '12' && first.level === '1'
+    && first.total_terminations === 116 && first.min_patch_panels === 3,
+    "110-12 (first row) matches source: bldg 12, lvl 1, 116 terms, 3 panels");
+
+  const last = rows.find((r) => r.tr_number === 'J427-1');
+  assert(last && last.building === '01' && last.level === '4'
+    && last.total_terminations === 306 && last.min_patch_panels === 7,
+    "J427-1 (last row) matches source: bldg 01, lvl 4, 306 terms, 7 panels");
+
   const h519 = rows.find((r) => r.tr_number === 'H519-1');
-  assert(h519 && h519.total_terminations === 288 && h519.min_patch_panels === 6, 'H519-1 values match source (288 / 6)');
-  assert(rows.every((r) => !/NOTES|ENLARGED/.test(r.tr_number)), 'footer notes block excluded from rows');
+  assert(h519 && h519.total_terminations === 288 && h519.min_patch_panels === 6,
+    "H519-1 matches source: 288 terms, 6 panels");
+
+  // The sheet's other table (Camera Schedule) and the footer notes block
+  // must not leak into the results.
+  assert(!rows.some((r) => /CAMERA|NOTES|ENLARGED/i.test(r.tr_number)),
+    'Camera Schedule and footer notes excluded from rows');
+  assert(rows.every((r) => r.total_terminations < 1000 && r.min_patch_panels < 100),
+    'no row absorbed stray text into a numeric column (sanity bound)');
 }
 
 console.log('Edge cases:');
 {
   assert(parseTrSchedule([], { present: false }).length === 0, 'present:false -> []');
-  assert(parseTrSchedule(t500Items(), { ...cfg, locator: "table titled 'NONEXISTENT'" }).length === 0,
+  assert(parseTrSchedule(realItems, { ...cfg, locator: "table titled 'NONEXISTENT'" }).length === 0,
     'locator title not found -> [] (graceful, no throw)');
-  assert(parseTrSchedule(t500Items(), { present: true, columns: {} }).length === 0,
+  assert(parseTrSchedule(realItems, { present: true, columns: {} }).length === 0,
     'missing required column config -> [] (graceful, no throw)');
+
+  // tolerances belong on the config (per-AE, Discovery-calibrated), not
+  // hardcoded -- confirm the config path actually wins over both opts and
+  // the built-in defaults, so a future AE's calibrated numbers really apply.
+  const cfgWithTol = { ...cfg, tolerances: { rowTol: 0.010, colTol: 0.012, headerBandTol: 0.010 } };
+  const viaConfig = parseTrSchedule(realItems, cfgWithTol);
+  assert(viaConfig.length === 44, `config-supplied tolerances still parse all 44 rows (got ${viaConfig.length})`);
+
+  const cfgBadTol = { ...cfg, tolerances: { colTol: 0.0001 } }; // absurdly tight -> columns fail to join
+  const viaBadConfig = parseTrSchedule(realItems, cfgBadTol, { colTol: 0.012 });
+  assert(viaBadConfig.length === 0,
+    'config.tolerances overrides opts, even to a value that breaks parsing (priority order confirmed)');
 }
 
 console.log(failures === 0 ? '\nALL GATES PASS' : `\n${failures} ASSERTION(S) FAILED`);
