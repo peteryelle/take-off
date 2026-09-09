@@ -69,3 +69,18 @@ export async function assertPageInOrg(supabase, pageId, orgId) {
     .maybeSingle();
   return !error && !!data;
 }
+
+// Resolves a project's device-type catalog source: if the project links to a
+// library project (org 1's shared catalog), device types come from there
+// instead. Ported from main — takeoff-summary.js on this branch already
+// calls this; main's auth.js has it, development's didn't.
+export async function resolveDeviceTypesProjectId(supabase, projectId) {
+  if (!projectId) return projectId;
+  const { data, error } = await supabase
+    .from("projects")
+    .select("library_project_id")
+    .eq("id", projectId)
+    .maybeSingle();
+  if (error || !data) return projectId; // let the caller's own not-found check fire
+  return data.library_project_id ?? projectId;
+}
