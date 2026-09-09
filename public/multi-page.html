@@ -4109,6 +4109,38 @@ async function runBatch(quiet = false) {
         });
       }
 
+      // ── TR schedule pages (e.g. T-500) — route to pass-tr-schedule.js and
+      // skip everything below (wireTrReference, symbol detection, pass-batch).
+      // A tr_schedule config means this page has no UIN, no x/y, nothing to
+      // route or measure. pass-batch's scale gate has no page_role branch —
+      // it 422s on "scale not set" unconditionally, regardless of role — so
+      // this check runs BEFORE that call is ever made, not as a fallback
+      // after it fails. See pass-tr-schedule.js's own header for why it's a
+      // separate endpoint rather than an exemption bolted onto pass-batch.
+      if (cache.tr_schedule && cache.tr_schedule.present !== false) {
+        setPhase(`pg${pageNum}: reading TR schedule`);
+        const r = await fetch(`${base()}/api/pass-tr-schedule`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ project_id: projectId, page_id: pageId, text_items: textItems })
+        });
+        const j = await r.json();
+        if (!pageCache[pageNum]) pageCache[pageNum] = {};
+        pageCache[pageNum].status     = r.ok ? 'done' : 'error';
+        pageCache[pageNum].status_msg = r.ok ? null : (j.error ?? null);
+        updateThumbStatusBadge(pageNum);
+        const msg = r.ok
+          ? `pg${pageNum}: ${j.tr_count} TR row${j.tr_count !== 1 ? 's' : ''}`
+          : `pg${pageNum}: ERROR — ${j.error}`;
+        if (!quiet) {
+          log.innerHTML += `<div style="color:${r.ok ? '#7af07a' : '#f07a7a'}">${msg}</div>`;
+          log.scrollTop = log.scrollHeight;
+        }
+        done++;
+        bar.classList.remove('indeterminate');
+        bar.style.width = `${Math.round((done / sortedPages.length) * 100)}%`;
+        continue;
+      }
+
       // Cross-sheet TR reference (coded-note text, e.g. "...PATCH PANELS IN TR
       // H335-1") — registers the served-page relationship only, never writes a
       // pin. See wireTrReference's own header for why this is safe to run
@@ -6144,6 +6176,7 @@ async function restoreFromSupabase(pid) {
           suggest_reason: pg.suggest_reason ?? null,
           status:         pg.status ?? null,       // 'ready' | 'running' | 'done' | 'error'
           status_msg:     pg.status_msg ?? null,
+          tr_schedule:    pg.tr_schedule ?? null,   // presence -> route batch run to pass-tr-schedule, not pass-batch
           passBResult: {
             page_id:     pg.page_id,
             sheet_title: pg.sheet_title ?? pg.drawing_number ?? `Page ${pg.eval_page_num}`,

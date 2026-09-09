@@ -168,7 +168,7 @@ export default async function handler(req) {
           demarc_label, demarc_x, demarc_y, demarc_is_host,
           demarc_type, demarc_source,
           content_xmin_frac, content_ymin_frac, content_w_frac, content_h_frac,
-          status, status_msg
+          status, status_msg, tr_schedule
         )
       `)
       .eq("project_id", project_id)
@@ -248,6 +248,7 @@ export default async function handler(req) {
     // not the real thing pass-batch.js itself already tracks.
     status:            pp.pages?.status            ?? null,
     status_msg:        pp.pages?.status_msg         ?? null,
+    tr_schedule:       pp.pages?.tr_schedule        ?? null,
   }));
 
   // Annotate redundant-overall suggestions (advisory; the human confirms in the picker).
