@@ -733,6 +733,47 @@ let projectId    = null;
 let projectDefaultMultiplier = 1.0;   // Tier 3 (routed) multiplier
 let projectFallbackMultiplier = 1.0;  // Tier 1 (straight-line fallback) multiplier
 let pdfDoc       = null;
+
+// Stitch adjacent same-line pdf.js text runs back into one string. pdf.js's
+// getTextContent() returns the PDF's raw, unmerged text-showing operators
+// exactly as the authoring tool (Revit/AutoCAD) wrote them -- unlike
+// PyMuPDF's higher-level "dict" mode, which merges same-line runs
+// automatically. On T-500, both the table's own title (56 chars) and an
+// unrelated footer sentence come through as multiple separate runs at the
+// PDF-authoring level, not because of any client-side filtering. Used only
+// for tr_schedule pages (see its one call site) -- normal device-anchor
+// pages keep every run separate on purpose, since anchor detection expects
+// precise per-token positions, not merged prose.
+function stitchRuns(rawItems, opts = {}) {
+  const yTol = opts.yTol ?? 1.0;                    // PDF points, same-line tolerance
+  const gapSpaceFrac = opts.gapSpaceFrac ?? 0.15;    // × font size -> treat as a real space
+  const maxMergeFrac = opts.maxMergeFrac ?? 1.0;     // × font size -> beyond this, stop merging
+  // maxMergeFrac matters as much as gapSpaceFrac: without a ceiling, this
+  // merged real, separate table columns ("BUILDING NUMBER" + "LEVEL", an
+  // 11pt gap at font-size 10) into one string during testing. A genuine
+  // inter-word space within wrapped prose is a few points at most; a
+  // column-to-column gap in a drawn table is sized for cell content and
+  // is typically much wider than one font-height. One font-height as the
+  // cutoff kept the real word-boundary case (3pt gap, correctly merges)
+  // and rejected the real column case (11pt gap, correctly stays separate).
+  const sorted = [...rawItems].sort((a, b) => a.cy - b.cy || a.left - b.left);
+  const merged = [];
+  let cur = null;
+  for (const it of sorted) {
+    const gap = cur ? it.left - cur.right : null;
+    const fs = (cur?.fs) || 10;
+    if (cur && Math.abs(it.cy - cur.cy) <= yTol && gap <= fs * maxMergeFrac) {
+      cur.s = cur.s + (gap > fs * gapSpaceFrac ? ' ' : '') + it.s;
+      cur.right = Math.max(cur.right, it.right);
+    } else {
+      if (cur) merged.push(cur);
+      cur = { s: it.s, cy: it.cy, left: it.left, right: it.right, fs: it.fs };
+    }
+  }
+  if (cur) merged.push(cur);
+  return merged.map((r) => ({ s: r.s, cx: (r.left + r.right) / 2, cy: r.cy }));
+}
+
 let totalPages   = 0;
 let selectedPages = new Set();   // PDF page numbers
 let pageCache    = {};           // pageNum → { canvas, passBResult, pageId }
@@ -4069,7 +4110,7 @@ async function runBatch(quiet = false) {
         const tx = item.transform[4], ty = item.transform[5];
         const fs = Math.abs(item.transform[3]);
         const tw = item.width ?? 0, th = item.height ?? fs;
-        allRaw.push({ s, cx: tx + tw/2, cy: ty + th/2 });
+        allRaw.push({ s, cx: tx + tw/2, cy: ty + th/2, left: tx, right: tx + tw, fs });
       }
 
       // Content bounding box (handles pages with content outside MediaBox)
@@ -4130,9 +4171,21 @@ async function runBatch(quiet = false) {
       // separate endpoint rather than an exemption bolted onto pass-batch.
       if (cache.tr_schedule && cache.tr_schedule.present !== false) {
         setPhase(`pg${pageNum}: reading TR schedule`);
+        // Stitched, not the shared `textItems` above: pdf.js's raw per-run
+        // extraction genuinely splits this sheet's table title (and other
+        // long sentences) into multiple pieces at the PDF-authoring level —
+        // confirmed against a real production capture, not a filtering
+        // artifact. tr-schedule.js's title/header search expects those back
+        // together as one string. Normal device-anchor pages don't take this
+        // path and are unaffected.
+        const stitchedItems = stitchRuns(allRaw).map((it) => ({
+          str:       it.s,
+          cx_norm:   parseFloat(((it.cx - xMin) / cW).toFixed(4)),
+          cy_norm:   parseFloat((1 - (it.cy - yMin) / cH).toFixed(4)),
+        }));
         const r = await fetch(`${base()}/api/pass-tr-schedule`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ project_id: projectId, page_id: pageId, text_items: textItems })
+          body: JSON.stringify({ project_id: projectId, page_id: pageId, text_items: stitchedItems })
         });
         const j = await r.json();
         if (!pageCache[pageNum]) pageCache[pageNum] = {};
