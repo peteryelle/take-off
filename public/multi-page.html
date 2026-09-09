@@ -5,7 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Take-off</title>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="/config.js"></script>
   <script src="auth.js"></script>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -143,7 +142,8 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
 <div class="section">
   <div class="section-title">1 · Project</div>
 
-  <!-- hidden field still needed for pid() -->
+  <!-- hidden fields still needed for base() -->
+  <input type="hidden" id="netlify-url" value="https://winquest-take-off.netlify.app">
   <input type="hidden" id="project-id" value="">
 
   <!-- Project card -->
@@ -154,6 +154,8 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
         <div id="project-card-name" style="font-size:16px; color:#f0c040; font-weight:bold;"></div>
         <div id="project-card-meta" style="font-size:13px; color:#666; margin-top:4px;"></div>
         <div id="project-card-file" style="font-size:12px; color:#555; margin-top:4px;"></div>
+        <div id="project-card-lock" style="display:none; font-size:12px; color:#8fd08f; background:#1a2e1a;
+             border:1px solid #3a6a3a; border-radius:3px; padding:4px 8px; margin-top:6px;"></div>
       </div>
       <a href="projects.html" style="background:#1e2d3a; border:1px solid #3a6a8a; color:#7ac0f0;
          padding:6px 12px; border-radius:3px; font-size:13px; text-decoration:none;
@@ -183,6 +185,40 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
       <input type="text" id="copy-from-id" placeholder="e.g. 1" style="width:80px;">
       <button onclick="copyDeviceTypes()">Copy Device Types</button>
       <div class="status" id="copy-dt-status"></div>
+    </div>
+  </div>
+
+  <!-- Device-type library — see projects.library_project_id. Synced projects'
+       device_types live under the library's project_id (write-through); this
+       panel is the only place to link/unlink. Populated from the takeoff-summary
+       restore (populateLibraryPanel) and the list_libraries action. -->
+  <div id="library-panel" style="margin-top:10px; padding:8px 12px; background:#111; border:1px solid #333; border-radius:3px; font-size:12px; display:none;">
+    <div id="library-status" style="color:#aaa; margin-bottom:6px;"></div>
+    <div id="library-controls" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <select id="library-select" style="padding:3px 6px;"><option value="">Loading libraries…</option></select>
+      <button onclick="linkLibrary()" style="padding:3px 10px; font-size:11px;">Link</button>
+      <button onclick="unlinkLibrary()" id="library-unlink-btn" style="padding:3px 10px; font-size:11px; display:none;">Unlink</button>
+      <span id="library-action-status" style="color:#888;"></span>
+    </div>
+  </div>
+
+  <!-- Distance multipliers — same project-wide values editable in the Confidence
+       Map and Report views (projects.default_length_multiplier /
+       fallback_length_multiplier). Surfaced here too so they're visible without
+       opening a page's confidence map first. saveProjectMultipliers() keeps this
+       panel and the confidence-map inputs in sync via the shared globals. -->
+  <div id="multiplier-panel" style="margin-top:10px; padding:8px 12px; background:#111; border:1px solid #333; border-radius:3px; font-size:12px; display:none;">
+    <div style="display:flex; flex-wrap:wrap; gap:16px; align-items:center;">
+      <span style="display:flex; gap:6px; align-items:center;">
+        <span style="color:#aaa;">🔵 Routed multiplier:</span>
+        <input id="proj-mult-routed-input" type="number" step="0.01" min="0.01" style="width:70px; padding:3px 6px;">
+      </span>
+      <span style="display:flex; gap:6px; align-items:center;">
+        <span style="color:#aaa;">⚠️ Fallback multiplier:</span>
+        <input id="proj-mult-fallback-input" type="number" step="0.01" min="0.01" style="width:70px; padding:3px 6px;">
+      </span>
+      <button onclick="saveProjectMultipliers()" style="padding:3px 10px;">Save</button>
+      <span id="proj-mult-status" style="color:#888;"></span>
     </div>
   </div>
 </div>
@@ -219,11 +255,15 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
     <div style="padding-top:16px;">
       <button class="info" onclick="applyRange()">Apply Range</button>
       <button onclick="clearSelection()" style="margin-left:4px;" title="clears the page selection only — does not change roles">Clear selection</button>
+      <button class="info" onclick="previewAutoRoutingCoverage()" style="margin-left:12px;"
+        title="Scores every selected page's stroke geometry to see which pages could use Tier 3 wall-aware routing. Re-clickable any time — rerun after changing the selection to refresh badges (they don't update automatically).">
+        ▶ Preview Auto-Routing Coverage</button>
     </div>
   </div>
 
   <div class="thumb-grid" id="thumb-grid"></div>
   <div class="status" id="selection-status" style="margin-top:6px;">—</div>
+  <div class="status" id="tier-coverage-status" style="margin-top:2px; display:none;">—</div>
   <div id="bulk-role-bar" style="margin-top:8px; display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
     <span style="color:#aaa; font-size:12px;">Set selected pages →</span>
     <button class="info" onclick="bulkSetRole('plan')"     style="padding:3px 10px; font-size:12px;">plan</button>
@@ -236,9 +276,10 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
   </div>
 </div>
 
-<!-- ── STEP 3: DEMARC SCAN ───────────────────────────────────────── -->
+<!-- ── STEP 2B: DEMARC SCAN — TR/exclusion-zone/waypoint setup. Still part of
+     the "setup" phase (not a device/path scan) — see step 4 for that. ──── -->
 <div class="section">
-  <div class="section-title">3 · Demarc Scan</div>
+  <div class="section-title">2B · Demarc Scan &amp; TR Setup</div>
   <div style="font-size:13px; color:#aaa; margin-bottom:8px;">
     Runs Pass B on all selected pages to extract TR room references and build the demarc map.
   </div>
@@ -246,6 +287,14 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
   <div class="status" id="scan-status">—</div>
   <div class="progress-wrap" id="scan-progress-wrap" style="display:none;">
     <div class="progress-bar" id="scan-progress" style="width:0%"></div>
+  </div>
+
+  <!-- Collapsed-state summary, shown once the user collapses the TR setup below.
+       Kept in sync with tr-summary-text whenever renderTRMap runs. ── -->
+  <div id="tr-map-collapsed" style="display:none; margin-top:10px; padding:8px 12px; background:#0a0a0a;
+       border:1px solid #2a2a2a; border-radius:4px; font-size:13px; display:flex; align-items:center; gap:10px;">
+    <span id="tr-map-collapsed-text" style="color:#aaa; flex:1;">—</span>
+    <button class="info" onclick="toggleTRSetupCollapse()" style="font-size:11px; padding:3px 10px;">▼ Expand setup</button>
   </div>
 
   <!-- TR Map -->
@@ -256,6 +305,7 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
       <span id="tr-warnings-text" style="color:#f0c040;"></span>
       <button class="info" onclick="openAddSchematic()" style="font-size:11px; padding:3px 10px;"
         title="Draw a schematic boundary on a page and add its primary TR">+ Add schematic</button>
+      <button class="info" onclick="toggleTRSetupCollapse()" style="font-size:11px; padding:3px 10px;">▲ Collapse setup</button>
     </div>
     <!-- Page → TR Assignment Table -->
     <div id="pa-table-wrap" style="display:none; margin-bottom:16px;">
@@ -282,65 +332,50 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
     </div>
 
     <div id="tr-cards" style="display:flex; flex-direction:column; gap:12px; margin-top:4px;"></div>
-    <div style="margin-top:14px;">
-      <button class="amber" onclick="lockDemarcs()">✓ Confirm Demarc Config → Start Batch</button>
-    </div>
   </div>
 </div>
 
-<!-- ── STEP 3B: WALL CALIBRATION (new, additive — not renumbering existing
-     steps 4+) ──────────────────────────────────────────────────────── -->
+<!-- ── STEP 3: TEST AUTO ROUTE — optional preview, collapsed until the user
+     asks for it. Pure client-side, does NOT touch device_instances/total_ft/
+     BOM — nothing here is persisted or affects Batch Run's output. Wall
+     calibration itself runs silently, with no UI of its own — see
+     ensureWallCalibrationRun(), triggered here on first open, or from
+     lockDemarcs() before the batch starts if this was never opened. Its
+     outcome shows as a status line in step 4 below. ── -->
 <div class="section">
-  <div class="section-title">3B · Wall Calibration <span style="font-size:11px; color:#888; font-weight:normal;">(optional — enables auto path routing)</span></div>
-  <div style="font-size:13px; color:#aaa; margin-bottom:8px;">
-    Scores every selected page's stroke geometry to find the wall convention this drawing set uses,
-    aggregated across pages so one unusual sheet can't outvote the rest. Review the overlay before
-    confirming — walls in red, doors in yellow, drawn on the real page.
-  </div>
-  <button onclick="runWallCalibrationUI()">▶ Detect Wall Signature</button>
-  <button class="info" onclick="rejectWallCalibrationUI()" style="margin-left:6px;">✕ Reject / stay on waypoints</button>
-  <div class="status" id="wallcal-status">—</div>
-
-  <div id="wallcal-review" style="display:none; margin-top:12px;">
-    <div style="display:flex; gap:16px; padding:8px 12px; background:#0a0a0a; border:1px solid #2a2a2a; border-radius:4px; margin-bottom:10px; font-size:13px; align-items:center; flex-wrap:wrap;">
-      <span id="wallcal-summary" style="color:#aaa; flex:1;">—</span>
-      <button class="info" onclick="tryNextCandidateUI()" style="font-size:11px; padding:3px 10px;">try next candidate</button>
-      <button class="amber" onclick="confirmWallCalibrationUI()" style="font-size:11px; padding:3px 10px;">✓ Confirm — enable Tier 3</button>
+  <div class="section-title">3 · Test Auto Route <span style="font-size:11px; color:#888; font-weight:normal;">(optional preview — writes nothing)</span></div>
+  <button class="info" id="test-route-toggle" onclick="toggleTestRouteSection()">▶ Test auto-route (optional)</button>
+  <div id="test-route-section" style="display:none; margin-top:10px;">
+    <div style="font-size:13px; color:#aaa; margin-bottom:8px;">
+      Click a point for the TR, then a point for a device, to see the routed path computed live in the
+      browser — Tier 3 wall-aware if wall calibration comes back confirmed (checked automatically the
+      first time you open this), Tier 1 straight-line/waypoint otherwise. Nothing here is saved.
     </div>
-    <canvas id="wallcal-preview-canvas" style="max-width:100%; border:1px solid #2a2a2a; border-radius:4px;"></canvas>
+    <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+      <button onclick="setTestRouteMode('tr')">1. Click TR point</button>
+      <button onclick="setTestRouteMode('device')">2. Click device point</button>
+      <button class="amber" onclick="computeTestRoute()">▶ Compute Route</button>
+      <button class="info" onclick="clearTestRoute()">clear</button>
+      <span id="test-route-status" style="font-size:12px; color:#aaa;">—</span>
+    </div>
+    <canvas id="test-route-canvas" style="max-width:100%; border:1px solid #2a2a2a; border-radius:4px; cursor:crosshair;"></canvas>
   </div>
-
-  <div id="wallcal-persist-status" class="status" style="margin-top:8px;">—</div>
-</div>
-
-<!-- ── STEP 3C: TEST AUTO ROUTE (new — pure client-side, does NOT touch
-     device_instances/total_ft/BOM. Safe to click freely; nothing here is
-     persisted or affects pass-batch.js output.) ──────────────────────── -->
-<div class="section" id="test-route-section" style="display:none;">
-  <div class="section-title">3C · Test Auto Route <span style="font-size:11px; color:#888; font-weight:normal;">(client-side preview only — writes nothing)</span></div>
-  <div style="font-size:13px; color:#aaa; margin-bottom:8px;">
-    Click a point for the TR, then a point for a device, to see the wall-aware route computed live
-    in the browser. Uses the confirmed signature's geometry for the current preview page. Nothing
-    here is saved — this is purely to verify auto-routing looks right before it's wired into batch.
-  </div>
-  <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
-    <button onclick="setTestRouteMode('tr')">1. Click TR point</button>
-    <button onclick="setTestRouteMode('device')">2. Click device point</button>
-    <button class="amber" onclick="computeTestRoute()">▶ Compute Route</button>
-    <button class="info" onclick="clearTestRoute()">clear</button>
-    <span id="test-route-status" style="font-size:12px; color:#aaa;">—</span>
-  </div>
-  <canvas id="test-route-canvas" style="max-width:100%; border:1px solid #2a2a2a; border-radius:4px; cursor:crosshair;"></canvas>
 </div>
 
 <!-- ── STEP 4: BATCH RUN ─────────────────────────────────────────── -->
 <div class="section" id="batch-section" style="display:none;">
   <div class="section-title">4 · Batch Run</div>
-  <div class="progress-wrap">
-    <div class="progress-bar" id="batch-progress" style="width:0%"></div>
+  <div id="start-batch-wrap" style="margin-bottom:14px;">
+    <button class="amber" onclick="lockDemarcs()">✓ Confirm Demarc Config → Start Batch</button>
   </div>
-  <div class="status" id="batch-status">—</div>
-  <div id="batch-log" style="margin-top:8px; font-size:13px; color:#888; max-height:160px; overflow-y:auto; line-height:1.6;"></div>
+  <div id="batch-progress-wrap-outer" style="display:none;">
+    <div class="status" id="wallcal-auto-status" style="margin-bottom:8px;">—</div>
+    <div class="progress-wrap">
+      <div class="progress-bar" id="batch-progress" style="width:0%"></div>
+    </div>
+    <div class="status" id="batch-status">—</div>
+    <div id="batch-log" style="margin-top:8px; font-size:13px; color:#888; max-height:160px; overflow-y:auto; line-height:1.6;"></div>
+  </div>
 </div>
 
 <!-- ── STEP 5: RESULTS ───────────────────────────────────────────── -->
@@ -542,8 +577,27 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
 <div id="conf-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.88);
      z-index:300; flex-direction:column; align-items:center; justify-content:center;">
   <div style="color:#f0c040; font-size:15px; font-weight:bold; margin-bottom:4px;" id="conf-title">Confidence Map</div>
+  <div style="color:#888; font-size:12px; margin-bottom:4px;" id="conf-tier-summary"></div>
   <div style="color:#aaa; font-size:13px; margin-bottom:8px;">
     Each star is a counted device · color = confidence · click a star to exclude it · click its number to isolate its path · ✕ = excluded · click empty space to add a missed device · filter by type to triage one device type at a time · hover for detail · scroll to zoom · drag to pan
+  </div>
+  <!-- ── Cable-length multipliers — human judgment call on run quality, applied after
+       reviewing this project's routed paths above. Two values, not one: which applies
+       to a given device is decided by its own routed_via_tier3 flag (blue path above =
+       Tier 3/routed, red-yellow-green = Tier 1/fallback). Each is one value for the
+       whole project — does not vary by page. Also editable directly on the report. ── -->
+  <div style="display:flex; flex-wrap:wrap; gap:16px; align-items:center; justify-content:center;
+       margin-bottom:8px; padding:8px 12px; background:#1a1a1a; border:1px solid #333; border-radius:6px;">
+    <span style="display:flex; gap:6px; align-items:center;">
+      <span style="color:#aaa; font-size:12px;">🔵 Routed multiplier:</span>
+      <input id="conf-mult-routed-input" type="number" step="0.01" min="0.01" style="width:70px; padding:3px 6px;">
+    </span>
+    <span style="display:flex; gap:6px; align-items:center;">
+      <span style="color:#aaa; font-size:12px;">⚠️ Fallback multiplier:</span>
+      <input id="conf-mult-fallback-input" type="number" step="0.01" min="0.01" style="width:70px; padding:3px 6px;">
+    </span>
+    <button onclick="saveLengthMultiplier()" style="padding:4px 12px; font-size:12px;">Save</button>
+    <span id="conf-mult-status" style="color:#888; font-size:11px;"></span>
   </div>
   <div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:8px; align-items:center; justify-content:center;">
     <button onclick="confZoomBtn(1.5)" style="padding:3px 12px;">＋</button>
@@ -555,6 +609,8 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
     <span style="color:#f07a7a; font-size:11px;">● low</span>
     <button id="conf-paths-toggle" onclick="toggleConfPaths()" class="info"
       style="padding:3px 10px; font-size:11px; margin-left:12px;">🔀 show path confidence</button>
+    <button id="conf-recalc-btn" onclick="recalcPendingManualAdds()" style="padding:3px 10px; font-size:11px; margin-left:12px;
+      background:#3a2a1a; border-color:#7a5a2a; color:#e0a860; display:none;">⟳ Recalculate (0 pending)</button>
     <select id="conf-type-filter" onchange="setConfTypeFilter(this.value)"
       style="padding:3px 8px; font-size:11px; margin-left:12px; max-width:220px;"></select>
   </div>
@@ -600,7 +656,8 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
   </div>
   <div style="color:#40c0f0; font-size:11px; margin-top:2px;">● waypoint · hover a device star to highlight its routed path</div>
   <div id="conf-path-legend" style="font-size:11px; margin-top:2px; display:none;">
-    <span style="color:#888;">path confidence (waypoint coverage):</span>
+    <span style="color:#4da3ff;"> ── Tier 3 (wall-aware, persisted route)</span>
+    <span style="color:#888;"> · Tier 1 path confidence (waypoint coverage):</span>
     <span style="color:#40f0a0;"> ── high (2+ waypoints)</span>
     <span style="color:#f0c040;"> ── medium (1 waypoint)</span>
     <span style="color:#f07a7a;"> ── low (straight line only)</span>
@@ -648,19 +705,20 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
   import { runnerWorkForRole, unassignedPages } from './lib/plan-set.js';
   import { aggregateBom } from './lib/bom.js';
   import { buildGreedyPath } from './lib/waypoint-path.js';
-  import { scorePage, classifyGeometry } from './lib/wall-calibration.js';
+  import { scorePage, aggregateScores, classifyGeometry } from './lib/wall-calibration.js';
   import { runWallCalibration, renderCalibrationPreview, confirmWallCalibration,
            rejectWallCalibration, tryNextCandidate, persistAllPageGeometry } from './lib/wall-calibration-client.js';
   import { buildPageRouter } from './lib/wall-aware-path.js';
+  import { extractTrReference } from './lib/tr-reference.js';
   window.TakeoffVec = { contentFrame, extractFilledSubpaths, extractCameraBlobs, debugNearbyStrokes,
                         classifySheetClass, deriveSheetClassSignals,
                         planSymbolDetection, locateVector, blobsToInstances,
                         runnerWorkForRole, unassignedPages,
                         aggregateBom, buildGreedyPath,
-                        extractStrokeSubpaths, scorePage, classifyGeometry,
+                        extractStrokeSubpaths, scorePage, aggregateScores, classifyGeometry,
                         runWallCalibration, renderCalibrationPreview, confirmWallCalibration,
                         rejectWallCalibration, tryNextCandidate, persistAllPageGeometry,
-                        buildPageRouter };
+                        buildPageRouter, extractTrReference };
 </script>
 <script>
 pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -668,6 +726,12 @@ pdfjsLib.GlobalWorkerOptions.workerSrc =
 
 // ── State ────────────────────────────────────────────────────────
 let projectId    = null;
+// Project-wide cable-length multiplier (projects.default_length_multiplier).
+// Single value for the whole project — does not vary by page. Set here in
+// the confidence map after reviewing route quality, or edited directly on
+// the report. See saveLengthMultiplier() / initLengthMultiplierControls().
+let projectDefaultMultiplier = 1.0;   // Tier 3 (routed) multiplier
+let projectFallbackMultiplier = 1.0;  // Tier 1 (straight-line fallback) multiplier
 let pdfDoc       = null;
 let totalPages   = 0;
 let selectedPages = new Set();   // PDF page numbers
@@ -680,7 +744,7 @@ let batchResults = {};           // pageNum → result
 let batchPayloads = {};          // pageNum → the pass-batch body sent (for leader re-runs)
 let scopeRegions = {};           // page_id → [ {x0,y0,x1,y1} ] — mark-area distance scope
 
-function base() { return window.location.origin; }
+function base() { return document.getElementById('netlify-url').value.replace(/\/$/, ''); }
 function pid()  { return parseInt(document.getElementById('project-id').value.trim()); }
 function setStatus(id, msg, cls='') {
   const el = document.getElementById(id);
@@ -696,6 +760,9 @@ function setStatus(id, msg, cls='') {
   if (urlPid) localStorage.setItem('mp_project_id', urlPid);
 
   const stored = urlPid ?? localStorage.getItem('mp_project_id');
+  const nurl   = localStorage.getItem('mp_netlify_url');
+
+  if (nurl) document.getElementById('netlify-url').value = nurl;
 
   if (stored) {
     document.getElementById('project-id').value = stored;
@@ -850,88 +917,34 @@ async function suggestAllExitPins(trName) {
   renderTRMap(Object.values(trMap));
 }
 
+// Opens the real pin-canvas modal with the suggested position pre-plotted on
+// the actual rendered plan (see openPinModal's suggestedXY param) instead of
+// writing straight from a confirm() dialog full of raw numbers. Nothing is
+// saved here — confirmPin() (triggered by the user's own "✓ Confirm Pin"
+// click in the modal) does the actual write, exactly like any manually-placed
+// pin. That also means every pin confirmed this way is correctly source
+// 'user_pin', not 'suggested' — a human looked at it on the real drawing and
+// accepted or moved it, which is a stronger claim than "unreviewed guess."
 async function suggestExitPin(trName, pageNum) {
   const tr = trMap[trName];
   if (!tr) return;
 
-  // Get serving demarc coordinates
   const servingX = tr.pin_x ?? tr.demarc_x;
   const servingY = tr.pin_y ?? tr.demarc_y;
-
   if (servingX == null || servingY == null) {
     alert(`No serving demarc pin set for ${trName} yet.\nSet the serving demarc pin first, then suggest exit pins.`);
     return;
   }
 
-  const pageId   = pageCache[pageNum]?.pageId ?? null;
-  const pinKey   = `${trName}_pg${pageNum}`;
-  const jumperEl = document.getElementById(`jumper-${pinKey}`);
-  const stubFt   = parseFloat(jumperEl?.value ?? 0) || 0;
+  await openPinModal(trName, pageNum, { x: servingX, y: servingY });
 
-  // Confirm with user — show what we're about to do
-  const confirmed = confirm(
-    `Set exit pin for pg${pageNum} (${tr.name})\n\n` +
-    `Position: (${servingX.toFixed(3)}, ${servingY.toFixed(3)})\n` +
-    `→ Same as serving demarc on pg${tr.demarc_page_num}\n\n` +
-    `This assumes the riser shaft is at the same plan position on both floors.\n` +
-    `You can adjust the pin manually afterwards if needed.\n\n` +
-    `Backbone distance (ft): ${stubFt || '⚠ not set — enter in the field first'}`
-  );
-  if (!confirmed) return;
-
-  try {
-    const pinName = `${trName}_exit_pg${pageNum}`;
-    const r = await fetch(`${base()}/api/pass-demarc`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        project_id: projectId,
-        page_id:    pageId,
-        name:       pinName,
-        source:     'suggested',
-        x_norm:     servingX,
-        y_norm:     servingY,
-        stub_ft:    stubFt,
-        note:       `Suggested from ${trName} serving demarc position`
-      })
-    });
-    const j = await r.json();
-    if (!r.ok) { alert('Save error: ' + j.error); return; }
-
-    // Store in trMap
-    if (!tr.extra_pins) tr.extra_pins = {};
-    tr.extra_pins[pageNum] = {
-      x_norm:   servingX,
-      y_norm:   servingY,
-      stub_ft:  stubFt,
-      demarc_id: j.id,
-      source:   'suggested'
-    };
-
-    // Collapse only the pin buttons for this floor row (no full re-render)
-    const pinBtns2  = document.getElementById(`floor-body-${pinKey}`);
-    const pinStNum2 = document.getElementById(`pin-stepnum-${pinKey}`);
-    const badge2    = document.getElementById(`floor-badge-${pinKey}`);
-    if (pinBtns2 && !document.getElementById(`floor-auto-${pinKey}`)) {
-      pinBtns2.style.display = 'none';
-      const autoLine2 = document.createElement('div');
-      autoLine2.className = 'floor-auto-line';
-      autoLine2.id = `floor-auto-${pinKey}`;
-      autoLine2.style.cssText = 'padding:3px 0; background:none; font-size:12px; color:#7af07a;';
-      autoLine2.innerHTML = `⚡ Auto-placed
-        <a href="#" onclick="expandFloorRow('${pinKey}'); return false;"
-           style="color:#aaa; font-size:11px; margin-left:8px;">override</a>`;
-      pinBtns2.parentElement.insertBefore(autoLine2, pinBtns2);
-    }
-    if (pinStNum2) pinStNum2.classList.remove('pending');
-    if (badge2) { badge2.className = 'badge on'; badge2.style.fontSize='10px'; badge2.textContent = '✓ pin set'; }
-
-    const log = document.getElementById('batch-log');
-    if (log) {
-      log.innerHTML += `<div style="color:#7ac0f0;">⚡ Exit pin for ${trName} pg${pageNum} suggested from serving demarc (${servingX.toFixed(3)}, ${servingY.toFixed(3)})</div>`;
-    }
-
-  } catch(e) { alert('Error: ' + e.message); }
+  // Carry over a jumper distance the user already typed into the floor row
+  // before clicking Suggest — openPinModal's own pre-fill only knows about
+  // an already-SAVED pin's stub_ft, which doesn't exist yet for a fresh
+  // suggestion, so it would otherwise reset this to 0.
+  const jumperEl = document.getElementById(`jumper-${trName}_pg${pageNum}`);
+  const typedFt  = parseFloat(jumperEl?.value ?? '') || 0;
+  if (typedFt > 0) document.getElementById('pin-jumper-ft').value = typedFt;
 }
 
 function openCopyDevices() {
@@ -948,6 +961,132 @@ function setDeviceTypeBarReady(msg) {
   bar.style.borderColor  = '#007a00';
   bar.style.opacity      = '1';
   bar.innerHTML = `<span style="color:#7af07a; font-size:12px;">✓ ${msg}</span>`;
+}
+
+// ── Device-type library panel ───────────────────────────────────────
+// Called from the restore flow (restoreFromSupabase) with the takeoff-summary
+// response — sets the status line and shows Link/Unlink appropriately, then
+// loads the dropdown of available libraries. See projects.library_project_id
+// and utils/auth.js's linkProjectToLibrary for the backend behavior.
+let currentLibraryProjectId = null; // null = not synced to a library
+
+function populateLibraryPanel(j) {
+  const panel  = document.getElementById('library-panel');
+  const status = document.getElementById('library-status');
+  const unlinkBtn = document.getElementById('library-unlink-btn');
+  if (!panel) return;
+  panel.style.display = 'block';
+  currentLibraryProjectId = j.library_project?.id ?? null;
+
+  if (j.is_library) {
+    status.innerHTML = `📚 This project IS a device-type library` +
+      (j.library_name ? ` ("${j.library_name}")` : '') +
+      ` — other projects can sync to it.`;
+    unlinkBtn.style.display = 'none';
+  } else if (j.library_project) {
+    status.innerHTML = `🔗 Synced to library "<b>${j.library_project.name}</b>" (Project ${j.library_project.id}) — ` +
+      `device types are shared and read-only from elsewhere; edits here write straight to the library.`;
+    unlinkBtn.style.display = 'inline-block';
+  } else {
+    status.innerHTML = `Not synced to a device-type library — this project keeps its own device types independently.`;
+    unlinkBtn.style.display = 'none';
+  }
+
+  loadLibraryOptions();
+}
+
+async function loadLibraryOptions() {
+  const select = document.getElementById('library-select');
+  if (!select || !projectId) return;
+  select.innerHTML = '<option value="">Loading libraries…</option>';
+  try {
+    const r = await fetch(`${base()}/api/projects`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'list_libraries' })
+    });
+    const list = await r.json();
+    if (!r.ok) throw new Error(list.error || r.status);
+
+    const options = (list ?? []).filter((lib) => lib.id !== projectId);
+    if (!options.length) {
+      select.innerHTML = '<option value="">No libraries available in this org</option>';
+      return;
+    }
+    select.innerHTML = options.map((lib) =>
+      `<option value="${lib.id}" ${lib.id === currentLibraryProjectId ? 'selected' : ''}>` +
+      `${lib.library_name || lib.name} (Project ${lib.id})</option>`
+    ).join('');
+    if (!currentLibraryProjectId) select.insertAdjacentHTML('afterbegin', '<option value="">— choose a library —</option>');
+  } catch (e) {
+    select.innerHTML = `<option value="">Error loading libraries</option>`;
+  }
+}
+
+// force=true re-sends the link after the user has been shown the unmatched
+// list and chosen to proceed anyway — those types are left unmapped on the
+// project's own row (see linkProjectToLibrary's device_type_mismatch path).
+async function linkLibrary(force = false) {
+  const select = document.getElementById('library-select');
+  const statusEl = document.getElementById('library-action-status');
+  const libraryId = parseInt(select?.value);
+  if (!libraryId) { statusEl.style.color = '#f07a7a'; statusEl.textContent = 'choose a library first'; return; }
+  if (!projectId) { statusEl.style.color = '#f07a7a'; statusEl.textContent = 'no project loaded'; return; }
+
+  statusEl.style.color = '#888';
+  statusEl.textContent = force ? 'linking (forced)…' : 'linking…';
+  try {
+    const r = await fetch(`${base()}/api/projects`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'update_project', project_id: projectId, library_project_id: libraryId, force })
+    });
+    const j = await r.json().catch(() => ({}));
+
+    if (r.status === 409 && j.error === 'device_type_mismatch') {
+      const names = (j.unmatched ?? []).map((u) => `"${u.name}" (${u.legend_id})`).join('\n');
+      const proceed = confirm(
+        `${j.unmatched.length} device type(s) have no match in the library by legend_id and would be left unmapped:\n\n${names}\n\n` +
+        `Link anyway? Matched types still remap normally; these stay on this project only.`
+      );
+      if (proceed) return linkLibrary(true);
+      statusEl.style.color = '#f0c040';
+      statusEl.textContent = `blocked — ${j.unmatched.length} unmatched type(s)`;
+      return;
+    }
+    if (!r.ok) throw new Error(j.error || r.status);
+
+    statusEl.style.color = '#7af07a';
+    statusEl.textContent = `linked — ${j.matched} matched, ${j.instances_remapped} instance(s) remapped` +
+      (j.unmatched?.length ? `, ${j.unmatched.length} left unmapped` : '');
+    // Full refresh so device-types.html-facing state (device_type_bar count,
+    // etc.) reflects the library's set, not this project's now-deleted rows.
+    restoreFromSupabase(projectId);
+  } catch (e) {
+    statusEl.style.color = '#f07a7a';
+    statusEl.textContent = `link failed: ${e.message}`;
+  }
+}
+
+async function unlinkLibrary() {
+  const statusEl = document.getElementById('library-action-status');
+  if (!projectId) return;
+  if (!confirm('Unlink from this library? Your project will get its own copy of the library\'s current device types (a fork) — future edits to the library will no longer reach this project.')) return;
+
+  statusEl.style.color = '#888';
+  statusEl.textContent = 'unlinking…';
+  try {
+    const r = await fetch(`${base()}/api/projects`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'update_project', project_id: projectId, library_project_id: null })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || r.status);
+    statusEl.style.color = '#7af07a';
+    statusEl.textContent = `unlinked — forked ${j.forked} device type(s)`;
+    restoreFromSupabase(projectId);
+  } catch (e) {
+    statusEl.style.color = '#f07a7a';
+    statusEl.textContent = `unlink failed: ${e.message}`;
+  }
 }
 
 async function copyDeviceTypes() {
@@ -990,6 +1129,7 @@ async function confirmProject() {
     if (id) {
       projectId = parseInt(id);
       sessionStorage.setItem('to_project_id',  id);
+      localStorage.setItem('mp_netlify_url', base());
       setStatus('project-status', `✓ Project ${id} confirmed`, 'ok');
       document.getElementById('device-type-bar').style.display = 'block';
     } else {
@@ -1179,6 +1319,19 @@ async function renderThumbnails() {
     sel.onchange = (e) => { e.stopPropagation(); setPageRole(n, sel.value); };
     col.appendChild(sel);
 
+    // Tier-3-coverage badge — set by previewAutoRoutingCoverage(), reads
+    // tierPreview[n] (in-memory, not persisted — this is a preview, not a
+    // decision). Deliberately does NOT auto-invalidate when the page
+    // selection changes: it sits as-is until the user explicitly reruns the
+    // preview button. Same applyStatusBadge/updateThumbStatusBadge split as
+    // the status badge above — fresh element reference here at render time,
+    // a separate query-based updater for after the preview finishes async.
+    const tierBadge = document.createElement('div');
+    tierBadge.className = 'pg-tier-badge';
+    tierBadge.dataset.page = n;
+    col.appendChild(tierBadge);
+    applyTierBadge(tierBadge, n);
+
     // Redundant-overall suggestion — the takeoff-summary view flags whole-floor
     // OVERALL sheets that have drawing-number segment-siblings (e.g. SE02-01 →
     // SE02-01A/B/…). Counting them double-counts cameras already tallied on the
@@ -1241,6 +1394,98 @@ function updateThumbStatusBadge(n) {
   applyStatusBadge(el, n);
 }
 
+// ── Tier-3 coverage preview (Step 2) ────────────────────────────────────
+// In-memory only, keyed by PDF page number — NOT persisted, NOT the same
+// thing as wall_calibrations/page_wall_geometry (those only exist after step 3
+// auto-confirms). This is purely "could this page support Tier 3," computed the
+// same way wall-calibration.js scores/aggregates for real, so the badge
+// shown here is an honest preview of what step 3 would find, not a guess.
+let tierPreview = {};   // pageNum -> { eligible: bool, wallCount: number } | undefined (not yet previewed)
+
+function applyTierBadge(el, n) {
+  const t = tierPreview[n];
+  if (!t) { el.style.display = 'none'; el.textContent = ''; el.title = ''; return; }
+  const s = t.eligible
+    ? { text: 'T3 ✓',      bg: '#0f2a14', border: '#2a7a4a', color: '#7af07a' }
+    : { text: 'T1 only',   bg: '#2a2410', border: '#7a6a2a', color: '#f0c060' };
+  el.style.cssText = `display:block; font-size:9px; text-align:center; padding:2px 4px; margin-top:2px; border-radius:3px; background:${s.bg}; border:1px solid ${s.border}; color:${s.color};`;
+  el.textContent = s.text;
+  el.title = t.eligible
+    ? `${t.wallCount} walls found using this project's aggregate wall signature`
+    : `No usable wall geometry found for this page — will use Tier 1 (waypoint) routing`;
+}
+
+function updateThumbTierBadge(n) {
+  const el = document.querySelector(`.pg-tier-badge[data-page="${n}"]`);
+  if (!el) return;
+  applyTierBadge(el, n);
+}
+
+// Scores every selected page's stroke geometry (same scorePage/aggregateScores
+// wall-calibration.js uses for real at step 3's auto-confirm time), finds the
+// aggregate winning wall signature across just this selection, then checks each
+// page individually against that signature to decide Tier 3 eligibility. Pure
+// preview — writes nothing to the database, doesn't touch wall_calibrations.
+// Re-running overwrites tierPreview wholesale; badges for pages no longer
+// selected simply stop being touched (stale by design — see the button's
+// own tooltip and the earlier design discussion: no auto-invalidation).
+async function previewAutoRoutingCoverage() {
+  if (!pdfDoc) { alert('Load a PDF first'); return; }
+  if (!selectedPages.size) { alert('Select pages first'); return; }
+  const V = window.TakeoffVec;
+  if (!V?.scorePage || !V?.aggregateScores || !V?.classifyGeometry || !V?.extractStrokeSubpaths) {
+    setStatus('tier-coverage-status', 'Wall-calibration module not loaded — cannot preview.', 'err');
+    document.getElementById('tier-coverage-status').style.display = 'block';
+    return;
+  }
+
+  const sortedPages = [...selectedPages].sort((a, b) => a - b);
+  document.getElementById('tier-coverage-status').style.display = 'block';
+  setStatus('tier-coverage-status', `Scoring ${sortedPages.length} page${sortedPages.length !== 1 ? 's' : ''} for auto-routing coverage…`, 'running');
+
+  try {
+    const perPage = [];
+    const pdfPages = {};
+    for (const n of sortedPages) {
+      const pdfPage = await pdfDoc.getPage(n);
+      pdfPages[n] = pdfPage;
+      const strokes = await V.extractStrokeSubpaths(pdfPage, pdfjsLib.OPS);
+      const scores = await V.scorePage(strokes, pdfPage);
+      perPage.push({ pageId: n, scores });
+    }
+
+    const candidates = V.aggregateScores(perPage);
+    if (!candidates.length) {
+      // No usable stroke geometry anywhere in the selection — every page is Tier 1.
+      for (const n of sortedPages) {
+        tierPreview[n] = { eligible: false, wallCount: 0 };
+        updateThumbTierBadge(n);
+      }
+      setStatus('tier-coverage-status', 'No usable wall geometry found on any selected page — Tier 1 (waypoints) only.', '');
+      return;
+    }
+
+    const winner = { color: candidates[0].color, width: candidates[0].width };
+    let eligibleCount = 0;
+    for (const n of sortedPages) {
+      const strokes = await V.extractStrokeSubpaths(pdfPages[n], pdfjsLib.OPS);
+      const { walls } = await V.classifyGeometry(strokes, pdfPages[n], winner);
+      const eligible = walls.length > 0;
+      if (eligible) eligibleCount++;
+      tierPreview[n] = { eligible, wallCount: walls.length };
+      updateThumbTierBadge(n);
+    }
+
+    setStatus('tier-coverage-status',
+      `Tier 3 possible on ${eligibleCount}/${sortedPages.length} selected pages (signature: score ${candidates[0].score}` +
+      (candidates[1] ? ` vs ${candidates[1].score}` : '') + ')',
+      eligibleCount > 0 ? 'ok' : '');
+  } catch (e) {
+    setStatus('tier-coverage-status', 'Preview error: ' + e.message, 'err');
+  }
+}
+
+
 // Persist a human-assigned page role. Updates client state immediately (the gate
 // reads pageCache.page_role), and writes through to the DB when the page row
 // exists (restored projects + any page after the demarc scan). For a brand-new
@@ -1265,6 +1510,23 @@ async function setPageRole(n, role) {
     const j = await r.json().catch(() => ({}));
     if (!r.ok) { setStatus('selection-status', `pg${n} role save failed: ${j.error || r.status}`, 'err'); return; }
     if (j?.page_id) pageCache[n].pageId = j.page_id;
+    // set-page-role.js just deleted this page's device_instances server-side
+    // (any non-counting role clears counts — see its own comment). batchResults
+    // is a client-side cache runBatch fills in and every view (results table,
+    // project total, BOM, confidence map) reads from directly rather than the
+    // DB, so without this the browser kept showing the pre-skip device list
+    // and count indefinitely — correct in Supabase, stale on screen — until a
+    // full reload ran restoreFromSupabase() and resynced everything. Clearing
+    // it here (only when the role is actually a non-counting one — runBatch's
+    // own gate, reused so this never drifts from what the runner considers
+    // "counted") and re-rendering makes the UI catch up immediately instead
+    // of silently disagreeing with the database until the next reload.
+    const Vg = window.TakeoffVec;
+    const isNonCounting = Vg?.runnerWorkForRole?.(pageRole) === 'skip';
+    if (isNonCounting && batchResults[n]) {
+      delete batchResults[n];
+      renderResults();
+    }
   } catch (e) {
     setStatus('selection-status', `pg${n} role save failed: ${e.message}`, 'err');
   }
@@ -1333,6 +1595,20 @@ async function bulkSetRole(role) {
   setStatus('selection-status',
     `Saved ${okN}/${pages.length} page${pages.length !== 1 ? 's' : ''} → ${label}`,
     okN === pages.length ? 'ok' : 'err');
+
+  // Same staleness fix as setPageRole: a bulk skip/legend/schedule/detail
+  // assignment clears device_instances server-side for every one of these
+  // pages, but batchResults is a client cache every view reads from directly
+  // — without this, all of them keep showing their pre-change counts until a
+  // full reload. Only clear the ones that actually saved.
+  const Vg = window.TakeoffVec;
+  if (Vg?.runnerWorkForRole?.(role || null) === 'skip') {
+    let anyCleared = false;
+    pages.forEach((n, i) => {
+      if (results[i] && batchResults[n]) { delete batchResults[n]; anyCleared = true; }
+    });
+    if (anyCleared) renderResults();
+  }
 }
 
 // Clearing ROLES is distinct from clearing the SELECTION. Guarded so it can't be
@@ -1451,6 +1727,23 @@ function updateThumbStates() {
   const count = selectedPages.size;
   setStatus('selection-status', count ? `${count} pages selected` : '—',
     count ? 'ok' : '');
+
+  // Keep the Page Assignment table (2B) in sync with the CURRENT selection.
+  // togglePage()/applyRange()/clearSelection() all funnel through here, and
+  // previously none of them re-rendered that table — it was only ever built
+  // at scan time (runDemarcScan) or on a pin save, so changing the selection
+  // afterward (e.g. re-selecting a wider range on a second pass) left it
+  // frozen on whichever pages were selected during the LAST scan. Every
+  // already-configured page's data (role, TR, pin, exclude zones) lives in
+  // pageCache/trMap/the DB and was never actually lost — the table just
+  // wasn't re-reading the selection against it. Only re-renders once the
+  // table has been shown at least once (the initial pre-scan state stays
+  // untouched, matching the existing gate at restore time) so this doesn't
+  // pop the table into view before there's anything scanned to show.
+  const paWrap = document.getElementById('pa-table-wrap');
+  if (paWrap && paWrap.style.display !== 'none') {
+    renderPageAssignmentTable(Object.values(trMap));
+  }
 }
 
 // Parse range string: "5-31" or "5,7,9-14" or "5, 7, 9-14"
@@ -1493,6 +1786,8 @@ async function runDemarcScan() {
 
   const sortedPages = [...selectedPages].sort((a,b) => a-b);
   const pageBResults = [];
+  const pageTexts    = {};   // pgNum -> flat text, for wireTrReference after the scan below
+  const failedPages = [];   // { pageNum, reason } — surfaced in the final status instead of only console.warn
   let done = 0;
 
   for (const pageNum of sortedPages) {
@@ -1510,6 +1805,17 @@ async function runDemarcScan() {
       await pdfPage.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
       const b64 = cv.toDataURL('image/jpeg', 0.75).split(',')[1];
 
+      // Cheap text pull (no LLM call, same pdf.js page already in hand) — used
+      // below by wireTrReference for coded-note TR cross-references. Doing this
+      // here, not just in the later batch-run loop, means a page's off-sheet TR
+      // can resolve as early as this scan step instead of only after a full
+      // batch run — the earliest point a real coordinate might already exist
+      // for it (this project's on-sheet TRs already had pins from prior work).
+      try {
+        const tc = await pdfPage.getTextContent({ includeMarkedContent: false });
+        pageTexts[pageNum] = tc.items.map((it) => it.str ?? '').join(' ');
+      } catch (e) { console.warn(`[tr-reference] text pull failed pg${pageNum}:`, e.message); }
+
       // Run Pass B
       const r = await fetch(`${base()}/api/pass-b-page`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1525,12 +1831,27 @@ async function runDemarcScan() {
         // suggest_skip/reason) set before this scan, tripping the Step-4 role gate.
         pageCache[pageNum] = { ...pageCache[pageNum], passBResult: j, pageId: j.page_id };
         pageBResults.push({ eval_page_num: pageNum, page_b_result: j });
+      } else {
+        failedPages.push({ pageNum, reason: j.error || `HTTP ${r.status}` });
       }
-    } catch(e) { console.warn(`Page ${pageNum} scan failed:`, e.message); }
+    } catch(e) { failedPages.push({ pageNum, reason: e.message }); }
     done++;
   }
 
   document.getElementById('scan-progress').style.width = '100%';
+
+  // If every selected page's own Pass B call failed, stop here with the real
+  // per-page reason(s) rather than sending an empty pages array to pass-scan —
+  // that endpoint's own "project_id and pages array required" is accurate but
+  // misleading in this case: project_id IS present, the array is just empty
+  // because nothing upstream succeeded. Previously this branch was silent
+  // (console.warn only), so the only thing the user ever saw was pass-scan's
+  // generic message with no indication anything page-specific had failed.
+  if (!pageBResults.length) {
+    const detail = failedPages.map(f => `pg${f.pageNum}: ${f.reason}`).join(' · ');
+    setStatus('scan-status', `Scan failed for all ${failedPages.length} selected page(s) — ${detail}`, 'err');
+    return;
+  }
 
   // Send to pass-scan
   const r2 = await fetch(`${base()}/api/pass-scan`, {
@@ -1544,9 +1865,13 @@ async function runDemarcScan() {
     return;
   }
 
+  const failNote = failedPages.length
+    ? ` · ⚠ ${failedPages.length} page(s) failed: ${failedPages.map(f => `pg${f.pageNum} (${f.reason})`).join(', ')}`
+    : '';
+
   setStatus('scan-status',
-    `✓ ${scanResult.pages_scanned} pages scanned · ${scanResult.tr_rooms} TR rooms found · ${scanResult.off_sheet} need configuration`,
-    scanResult.off_sheet > 0 ? '' : 'ok');
+    `✓ ${scanResult.pages_scanned} pages scanned · ${scanResult.tr_rooms} TR rooms found · ${scanResult.off_sheet} need configuration${failNote}`,
+    (scanResult.off_sheet > 0 || failedPages.length) ? '' : 'ok');
 
   // Merge, don't overwrite — same principle as the pageCache merge above.
   // pass-scan only returns schedule-derived TRs (empty for a no-schedule project
@@ -1559,134 +1884,169 @@ async function runDemarcScan() {
     trMap[tr.name] = { ...(trMap[tr.name] ?? {}), ...tr };
   }
 
+  // Coded-note TR cross-references — run AFTER the trMap merge above so
+  // buildPageAssignments/renderPageAssignmentTable's self-reference check
+  // (trMap[refName].demarc_page_num) has fresh host data to compare against.
+  // Registers the served-page relationship only — see wireTrReference's own
+  // header for why it never writes a coordinate itself.
+  for (const pageNum of sortedPages) {
+    if (pageTexts[pageNum]) await wireTrReference(pageNum, pageTexts[pageNum]);
+  }
+
   renderPageAssignmentTable(Object.values(trMap));
   renderTRMap(Object.values(trMap));
 }
 
-// ── Wall Calibration (3B) — bridges window.TakeoffVec's ESM exports into
-// the inline onclick= handlers, matching how the rest of this file calls
-// module code (see V.deriveSheetClassSignals usage elsewhere). ───────────
-let wallCalibResult = null;   // last wall_calibrations row returned by the API
-let wallCalibPages  = [];     // [{pageNum, pageId, pdfPage}] built fresh each run
+// ── Wall Calibration (step 3) — fully automatic, no human review. Either
+// the aggregated signature clears the confidence gate below and Tier 3
+// routing goes live, or it doesn't and the project stays on Tier 1
+// (waypoint/straight-line) routing. There is nothing here for a human to
+// ── Wall Calibration — runs silently, no UI, no click. Called from
+// lockDemarcs() right before runBatch(), so Tier 3/Tier 1 is already settled
+// before routing needs it. Zero human-in-the-loop: either the aggregated
+// signature clears the confidence gate below and Tier 3 routing goes live,
+// or it doesn't and the project stays on Tier 1 (waypoint/straight-line)
+// routing. There is nothing here for a human to review, edit, or click —
+// an overlay the user can look at but not act on isn't an informed
+// decision, so this doesn't present one. Runs off pageId alone (set as
+// soon as a page gets a role in step 2) — no dependency on the Demarc Scan
+// or Batch Run passes around it.
+//
+// Auto-accept gate (documented here so it can be tuned later without
+// hunting through the function):
+//   - the winning signature must be agreed on by a MAJORITY of pages
+//     evaluated (pagesAgreeing > pages_evaluated / 2)
+//   - if a runner-up signature exists, the winner must score at least 15%
+//     higher (score >= runner_up_score * 1.15) — guards against an
+//     ambiguous tie between two plausible wall conventions
+// Both must hold to auto-confirm; either failing auto-rejects (Tier 1).
+// This 15% is a placeholder, not a derived number — every confirm/reject
+// decision (server-side, in pass-wall-calibrate.js) logs its score/
+// runner_up_score/pages_agreeing/pages_evaluated to wall_calibration_runs,
+// an append-only table separate from wall_calibrations (which gets
+// overwritten per-project on rerun). Once ~8-10 real projects have run
+// through it, pull that table and look for an actual gap in score ratios
+// between confident wins and ambiguous ties — that gap is where this
+// number should really sit.
+let wallCalibResult    = null;   // last wall_calibrations row returned by the API
+let wallCalibPages     = [];     // [{pageNum, pageId, pdfPage}] built fresh each run
+let wallCalibConfirmed = false;  // true only if the auto-accept gate below passed
 
-async function runWallCalibrationUI() {
-  if (!projectId)         { alert('Confirm project first'); return; }
-  if (!pdfDoc)            { alert('Load a PDF first'); return; }
-  if (!selectedPages.size){ alert('Select pages first'); return; }
+async function runWallCalibrationAuto() {
+  if (!projectId || !pdfDoc || !selectedPages.size) return;   // nothing to calibrate against yet — silently skip, Batch Run's own gates will catch a genuinely incomplete setup
 
   const V = window.TakeoffVec;
-  setStatus('wallcal-status', `Scoring ${selectedPages.size} pages…`, 'running');
-  document.getElementById('wallcal-review').style.display = 'none';
+  const statusEl = document.getElementById('wallcal-auto-status');
+  if (statusEl) { statusEl.textContent = 'Checking wall geometry…'; statusEl.className = 'status running'; }
+  wallCalibConfirmed = false;
 
   try {
     const sortedPages = [...selectedPages].sort((a, b) => a - b);
     wallCalibPages = [];
     for (const pageNum of sortedPages) {
       const pageId = pageCache[pageNum]?.pageId;
-      if (!pageId) { console.warn(`Page ${pageNum} has no pageId yet — run Demarc Scan first, skipping.`); continue; }
+      if (!pageId) continue;   // no role assigned yet for this page — Batch Run's own role gate handles that case
       const pdfPage = await pdfDoc.getPage(pageNum);
       wallCalibPages.push({ pageNum, pageId, pdfPage });
     }
     if (!wallCalibPages.length) {
-      setStatus('wallcal-status', 'No scanned pages available — run Demarc Scan (step 3) first so pages have a pageId.', 'err');
+      if (statusEl) { statusEl.textContent = ''; statusEl.className = 'status'; }
       return;
     }
 
     wallCalibResult = await V.runWallCalibration({
       apiBase: base(), projectId, pages: wallCalibPages, OPS: pdfjsLib.OPS,
     });
-    await showCalibrationPreview();
+
+    const agreeing  = wallCalibResult.pages_agreeing ?? 0;
+    const evaluated = wallCalibResult.pages_evaluated ?? wallCalibPages.length;
+    const majority  = agreeing > evaluated / 2;
+    const margin    = !wallCalibResult.runner_up_score
+      || wallCalibResult.score >= wallCalibResult.runner_up_score * 1.15;
+    const passes = majority && margin;
+    wallCalibConfirmed = passes;
+
+    if (passes) {
+      await V.confirmWallCalibration({ apiBase: base(), projectId });
+      const signature = { color: wallCalibResult.stroke_color, width: wallCalibResult.stroke_width };
+      const results = await V.persistAllPageGeometry({
+        apiBase: base(), projectId, pages: wallCalibPages, OPS: pdfjsLib.OPS, signature,
+      });
+      const failed = results.filter((r) => !r.ok);
+      if (statusEl) {
+        statusEl.textContent = failed.length
+          ? `⚠ Wall calibration confirmed but ${failed.length}/${results.length} pages failed to persist geometry — check console.`
+          : `✓ Tier 3 routing (wall-aware) — ${agreeing}/${evaluated} pages agree.`;
+        statusEl.className = failed.length ? 'status err' : 'status ok';
+      }
+      if (failed.length) console.warn('Geometry persist failures:', failed);
+    } else {
+      await V.rejectWallCalibration({ apiBase: base(), projectId });
+      if (statusEl) {
+        statusEl.textContent = `Tier 1 routing (waypoint/straight-line) — wall signature inconclusive (${agreeing}/${evaluated} pages agree).`;
+        statusEl.className = 'status';
+      }
+    }
   } catch (e) {
-    setStatus('wallcal-status', 'Calibration error: ' + e.message, 'err');
+    console.warn('Wall calibration error (falling back to Tier 1):', e.message);
+    if (statusEl) { statusEl.textContent = 'Tier 1 routing (waypoint/straight-line) — calibration check failed.'; statusEl.className = 'status'; }
   }
 }
 
-async function showCalibrationPreview() {
-  const V = window.TakeoffVec;
-  if (!wallCalibResult) return;
-
-  const previewEntry = wallCalibPages.find((p) => p.pageId === wallCalibResult.preview_page_id) ?? wallCalibPages[0];
-  const scale = 1.5; // matches the render scale used elsewhere in this file (runDemarcScan, etc.)
-  const vp = previewEntry.pdfPage.getViewport({ scale });
-  const canvas = document.getElementById('wallcal-preview-canvas');
-  canvas.width = vp.width; canvas.height = vp.height;
-  await previewEntry.pdfPage.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
-
-  const signature = { color: wallCalibResult.stroke_color, width: wallCalibResult.stroke_width };
-  const { wallCount, doorCount } = await V.renderCalibrationPreview({
-    canvas, pdfPage: previewEntry.pdfPage, OPS: pdfjsLib.OPS, signature, viewportScale: scale,
-  });
-
-  const ratio = wallCalibResult.runner_up_score
-    ? (wallCalibResult.score / wallCalibResult.runner_up_score).toFixed(2) : '—';
-  document.getElementById('wallcal-summary').textContent =
-    `${wallCalibResult.pages_agreeing}/${wallCalibResult.pages_evaluated} pages agree · `
-    + `score ${wallCalibResult.score} vs ${wallCalibResult.runner_up_score ?? '—'} (ratio ${ratio}) · `
-    + `preview page: ${wallCount} walls, ${doorCount} doors — does the red overlay trace the walls?`;
-
-  setStatus('wallcal-status', `Suggested signature ready — review the overlay below (page ${previewEntry.pageNum}).`, 'ok');
-  document.getElementById('wallcal-review').style.display = 'block';
-}
-
-async function tryNextCandidateUI() {
-  const V = window.TakeoffVec;
-  try {
-    wallCalibResult = await V.tryNextCandidate({ apiBase: base(), projectId });
-    await showCalibrationPreview();
-  } catch (e) {
-    setStatus('wallcal-status', 'try-next error: ' + e.message, 'err');
-  }
-}
-
-async function confirmWallCalibrationUI() {
-  const V = window.TakeoffVec;
-  if (!wallCalibResult) return;
-  try {
-    setStatus('wallcal-persist-status', 'Confirming…', 'running');
-    await V.confirmWallCalibration({ apiBase: base(), projectId });
-
-    setStatus('wallcal-persist-status', `Persisting geometry for ${wallCalibPages.length} pages…`, 'running');
-    const signature = { color: wallCalibResult.stroke_color, width: wallCalibResult.stroke_width };
-    const results = await V.persistAllPageGeometry({
-      apiBase: base(), projectId, pages: wallCalibPages, OPS: pdfjsLib.OPS, signature,
-    });
-    const failed = results.filter((r) => !r.ok);
-    setStatus('wallcal-persist-status',
-      failed.length
-        ? `✓ Confirmed, but ${failed.length}/${results.length} pages failed to persist geometry — check console.`
-        : `✓ Confirmed and geometry persisted for all ${results.length} pages. Tier 3 routing is live for this project.`,
-      failed.length ? 'err' : 'ok');
-    if (failed.length) console.warn('Geometry persist failures:', failed);
-
-    document.getElementById('test-route-section').style.display = 'block';
-    ensureTestRouteCanvasReady().catch((e) => console.warn('Test-route canvas pre-render failed:', e.message));
-  } catch (e) {
-    setStatus('wallcal-persist-status', 'Confirm/persist error: ' + e.message, 'err');
-  }
-}
-
-async function rejectWallCalibrationUI() {
-  if (!projectId) { alert('Confirm project first'); return; }
-  const V = window.TakeoffVec;
-  try {
-    const row = await V.rejectWallCalibration({ apiBase: base(), projectId });
-    document.getElementById('wallcal-review').style.display = 'none';
-    setStatus('wallcal-status',
-      row.devices_flagged_stale
-        ? `Rejected — ${row.devices_flagged_stale} device(s) flagged wall_calibration_stale for review.`
-        : 'Rejected — staying on waypoint routing.',
-      '');
-  } catch (e) {
-    setStatus('wallcal-status', 'Reject error: ' + e.message, 'err');
-  }
-}
-
-// ── Test Auto Route (3C) — pure client-side. Computes a route with
+// ── Test Auto Route — pure client-side. Computes a route with
 // buildPageRouter directly in the browser; writes nothing anywhere. Safe to
-// use freely to sanity-check auto-routing before it's wired into batch. ──
+// use freely to sanity-check auto-routing. Collapsed by default — only
+// opens/computes when the user clicks it; available any time after setup,
+// independent of wall calibration's outcome (correctly falls back to a
+// "Tier 1 in effect" message below if calibration didn't confirm). ──
 let testRouteMode   = null;      // 'tr' | 'device' | null
 let testRoutePoints = { tr: null, device: null };  // in canvas pixel coords
 const TEST_ROUTE_SCALE = 1.5;
+
+async function toggleTestRouteSection() {
+  const section = document.getElementById('test-route-section');
+  const toggle  = document.getElementById('test-route-toggle');
+  const opening = section.style.display === 'none';
+  section.style.display = opening ? 'block' : 'none';
+  toggle.textContent = opening ? '▼ Test auto-route (optional)' : '▶ Test auto-route (optional)';
+  if (opening) {
+    await ensureWallCalibrationRun();
+    ensureTestRouteCanvasReady().catch((e) => console.warn('Test-route canvas pre-render failed:', e.message));
+  }
+}
+
+// Wall calibration is cheap (client-side geometry scoring, no LLM) and has
+// nothing to do with the expensive Batch Run scan — but it used to only ever
+// fire inside lockDemarcs(), the SAME click that starts that full scan. That
+// meant there was no way to preview Tier 3 routing without first committing
+// to the real run, defeating the point of a preview.
+//
+// This is now the single entry point for both callers (opening Test Auto
+// Route, and lockDemarcs() before the batch starts): checks the persisted
+// wall_calibrations row first — if it's already confirmed, trust it and
+// skip re-scoring. Otherwise runs calibration fresh right now, silently, no
+// UI, no click, so a preview opened right after setup (before ever touching
+// step 4) gets a real answer instead of "hasn't run yet."
+async function ensureWallCalibrationRun() {
+  if (wallCalibConfirmed) return;                                // already known good this session
+  if (!projectId || !pdfDoc || !selectedPages.size) return;       // nothing to calibrate against yet
+
+  try {
+    const r = await fetch(`${base()}/api/pass-wall-calibrate?project_id=${projectId}`);
+    const row = await r.json().catch(() => null);
+    if (row && row.status === 'confirmed') {
+      wallCalibResult = row;
+      wallCalibConfirmed = true;
+      return;
+    }
+  } catch (e) {
+    console.warn('Could not check wall calibration status:', e.message);
+  }
+
+  // Nothing confirmed on record (null, rejected, or a stale 'suggested' row
+  // from before selection changed) — score it now.
+  await runWallCalibrationAuto();
+}
 
 function setTestRouteMode(mode) {
   testRouteMode = mode;
@@ -1779,10 +2139,14 @@ async function computeTestRoute() {
     document.getElementById('test-route-status').textContent = 'Extracting geometry and computing route…';
     const pageNum = Number(canvas.dataset.pageNum);
     const pdfPage = await pdfDoc.getPage(pageNum);
-    const signature = wallCalibResult
+    const signature = wallCalibConfirmed
       ? { color: wallCalibResult.stroke_color, width: wallCalibResult.stroke_width }
       : null;
-    if (!signature) { document.getElementById('test-route-status').textContent = 'Run wall calibration first (3B).'; return; }
+    if (!signature) {
+      document.getElementById('test-route-status').textContent =
+        'Wall calibration is not confirmed for this project — Tier 1 (straight-line/waypoint) routing applies; no wall-aware preview to show.';
+      return;
+    }
 
     const strokes = await V.extractStrokeSubpaths(pdfPage, pdfjsLib.OPS);
     const { walls, doors } = await V.classifyGeometry(strokes, pdfPage, signature);
@@ -1980,7 +2344,16 @@ function renderPageAssignmentTable(trs) {
     // Trim "TELECOMMUNICATIONS PLAN" and long suffixes for display
     const title = raw.replace(/[-–]\s*TELECOMMUNICATIONS.*/i, '').trim().replace(/[-–·]+$/, '').trim();
 
-    // Role
+    // Role — states the actual TR name and exactly what's still needed, rather
+    // than a generic status. Four real states here, not two: a page can have no
+    // TR reference at all (genuinely unassigned), a TR reference to a room that
+    // isn't hosted anywhere in this dataset (can't resolve, needs a manual
+    // pin), a TR reference to a room that IS hosted here but has no exit pin
+    // on this page yet — always requires a human via suggestExitPin's visual
+    // modal; a same-floor different-zone sheet's coordinate space isn't
+    // comparable to another zone's, so this is never auto-written — or a
+    // fully resolved served page.
+    const hasExitPin = trMap[trName]?.extra_pins?.[pgNum] != null;
     let roleHtml;
     if (isHost) {
       roleHtml = `<span class="pa-role-host">✓ host</span>`;
@@ -1990,11 +2363,15 @@ function renderPageAssignmentTable(trs) {
     } else if (split) {
       roleHtml = `<span class="pa-role-split">⚠ split</span>`;
       splitNotes.push(`pg${pgNum} references both <strong>${trName}</strong> and <strong>${split}</strong>`);
-    } else if (!hasHost) {
-      roleHtml = `<span class="pa-role-offsheet">off-sheet TR</span>
-                  <div style="font-size:10px; color:#666; margin-top:2px;">host page not in dataset</div>`;
+    } else if (trName !== '—' && !hasHost) {
+      roleHtml = `<span class="pa-role-offsheet">⚠ ${trName} — not in this dataset</span>
+                  <div style="font-size:10px; color:#666; margin-top:2px;">TR named on sheet, but not drawn/hosted on any loaded page — place pin manually</div>`;
+    } else if (trName !== '—' && hasHost && !hasExitPin) {
+      roleHtml = `<span style="background:#3a0000; border:1px solid #c02020; color:#ff5050; padding:2px 8px; border-radius:3px; font-size:12px; font-weight:bold;">★ ${trName} — exit pin needed</span>`;
+    } else if (trName !== '—') {
+      roleHtml = `<span class="pa-role-served">✓ served — ${trName}</span>`;
     } else {
-      roleHtml = `<span class="pa-role-served">served</span>`;
+      roleHtml = `<span class="pa-role-offsheet" style="opacity:0.6;">— unassigned —</span>`;
     }
 
     // TR dropdown
@@ -2068,36 +2445,76 @@ async function reassignPage(pgNum, newTR) {
 function updatePageRoleBadge(pgNum) {
   const el     = document.getElementById(`pa-role-${pgNum}`);
   if (!el) return;
-  const assign = pageAssignments[pgNum] ?? {};
-  const tr     = trMap[assign.trName];
-  const isHost = tr?.demarc_page_num === pgNum && tr?.on_sheet;
+  const assign  = pageAssignments[pgNum] ?? {};
+  const trName  = assign.trName ?? '—';
+  const tr      = trMap[trName];
+  const isHost  = tr?.demarc_page_num === pgNum && tr?.on_sheet;
   const hasHost = tr?.on_sheet;
+  const hasExitPin = tr?.extra_pins?.[pgNum] != null;
 
   if (isHost) {
     el.innerHTML = `<span class="pa-role-host">✓ host</span>`;
-  } else if (!hasHost) {
-    el.innerHTML = `<span class="pa-role-offsheet">off-sheet TR</span>
-      <div style="font-size:10px; color:#666; margin-top:2px;">host page not in dataset</div>`;
+  } else if (trName !== '—' && !hasHost) {
+    el.innerHTML = `<span class="pa-role-offsheet">⚠ ${trName} — not in this dataset</span>
+      <div style="font-size:10px; color:#666; margin-top:2px;">TR named on sheet, but not drawn/hosted on any loaded page — place pin manually</div>`;
+  } else if (trName !== '—' && hasHost && !hasExitPin) {
+    el.innerHTML = `<span style="background:#3a0000; border:1px solid #c02020; color:#ff5050; padding:2px 8px; border-radius:3px; font-size:12px; font-weight:bold;">★ ${trName} — exit pin needed</span>`;
+  } else if (trName !== '—') {
+    el.innerHTML = `<span class="pa-role-served">✓ served — ${trName}</span>`;
   } else {
-    el.innerHTML = `<span class="pa-role-served">served</span>`;
+    el.innerHTML = `<span class="pa-role-offsheet" style="opacity:0.6;">— unassigned —</span>`;
   }
   el.innerHTML += pinBtnsHtml(pgNum);
 }
 
 // ── Manual demarc placement ───────────────────────────────────────
-// Shown on any page that has no confirmed on-sheet host pin (the no-TR-detected
-// case the scan leaves stranded). Both paths seed an ad-hoc entry in trMap and
-// reuse openPinModal/confirmPin/buildPinsForPage unchanged — a serving pin is an
-// on-sheet TR (demarc_page_num === this page), an exit pin is an off-sheet TR.
+// Shown per-page in the assignment table, state-aware rather than one fixed
+// pair of buttons regardless of status — the previous version showed "+ exit
+// pin" identically whether a pin already existed or not, which is exactly
+// the ambiguity that prompted this rewrite.
 function pinBtnsHtml(pgNum) {
   const assign = pageAssignments[pgNum] ?? {};
-  const tr     = trMap[assign.trName];
-  const hasServingPin = tr && tr.demarc_page_num === pgNum && tr.on_sheet
-                        && (tr.pin_x != null || tr.demarc_x != null);
-  if (hasServingPin) return '';
-  return `<div style="margin-top:5px; display:flex; gap:5px;">
-    <button class="info" style="padding:2px 8px; font-size:11px;" onclick="placeManualTR(${pgNum})">📍 set TR pin</button>
-    <button style="padding:2px 8px; font-size:11px;" onclick="placeManualExit(${pgNum})">＋ exit pin</button>
+  const trName = assign.trName ?? '—';
+  const tr     = trMap[trName];
+  const isHost = tr?.demarc_page_num === pgNum && tr?.on_sheet;
+  const hasServingPin = isHost && (tr.pin_x != null || tr.demarc_x != null);
+  if (hasServingPin) return '';   // hosts its own TR and it's pinned — nothing to do
+
+  if (trName === '—') {
+    // Genuinely unassigned — no TR reference known at all for this page.
+    return `<div style="margin-top:5px; display:flex; gap:5px;">
+      <button class="info" style="padding:2px 8px; font-size:11px;" onclick="placeManualTR(${pgNum})">📍 set TR pin</button>
+      <button style="padding:2px 8px; font-size:11px;" onclick="placeManualExit(${pgNum})">＋ exit pin</button>
+    </div>`;
+  }
+
+  if (isHost) {
+    // Hosts its own named TR but has no pin placed yet.
+    return `<div style="margin-top:5px;">
+      <button class="amber" style="padding:2px 8px; font-size:11px;" onclick="openPinModal('${trName}', ${pgNum})">📍 set TR pin</button>
+    </div>`;
+  }
+
+  // Served page (TR hosted elsewhere) — the trName is already known, so
+  // "needs a pin" and "review the pin" both go through suggestExitPin, which
+  // opens the visual pin-canvas modal pre-seeded at the serving demarc's
+  // coordinates — never placeManualExit's from-scratch name prompt, which
+  // doesn't apply once the TR is already identified.
+  const exitPin = tr?.extra_pins?.[pgNum];
+  if (exitPin) {
+    const ft = exitPin.stub_ft ?? 0;
+    const ftWarn = ft > 0
+      ? `${ft} ft`
+      : `<span style="color:#f0c040;">0 ft ⚠ enter jumper distance</span>`;
+    return `<div style="margin-top:5px; font-size:12px; color:#7af07a;">
+      ✓ exit pin set — ${ftWarn}
+      <a href="#" onclick="suggestExitPin('${trName}', ${pgNum}); return false;"
+         style="color:#aaa; font-size:11px; margin-left:8px;">review / adjust</a>
+    </div>`;
+  }
+  return `<div style="margin-top:5px;">
+    <button style="padding:2px 8px; font-size:11px; background:#3a0000; border:1px solid #c02020; color:#ff5050;"
+      onclick="suggestExitPin('${trName}', ${pgNum})">⚠ exit pin needed — place</button>
   </div>`;
 }
 
@@ -2134,11 +2551,65 @@ function wpBtnHtml(pgNum) {
   </div>`;
 }
 
-async function ensureServedPage(name, pgNum) {
+// Text-detected cross-sheet TR reference (see tr-reference.js). Runs once per
+// page right after text extraction, using the same coded-note text pass-b
+// already has in hand — no extra LLM call, no extra pass. Only ever
+// REGISTERS the served-page relationship (ensureServedPage), which is purely
+// informational bookkeeping already used by the manual placeManualExit flow;
+// it never writes a pin itself. Actually placing the pin still goes through
+// suggestExitPin/suggestAllExitPins, which already show the exact position in
+// a confirm() dialog before writing and leave a permanent "override" link
+// afterward — this only replaces the manual prompt() step of typing in which
+// TR a page belongs to, not the human confirmation of where the pin lands.
+//
+// viaTextRef is stamped on the served-page entry (see ensureServedPage) so
+// renderTRCard can show a distinct "detected, not yet confirmed" badge (a
+// filled red star, matching the confidence map's demarc marker) instead of
+// the generic "needs pin" badge a page nobody has looked at yet would show —
+// the two states look identical to a computer (no pin exists either way) but
+// mean very different things to a human triaging a project: one is "nobody's
+// touched this," the other is "the sheet itself is telling you where this
+// needs to go."
+async function wireTrReference(pgNum, pageText) {
+  const V = window.TakeoffVec;
+  const refName = V?.extractTrReference?.(pageText);
+  if (!refName) return;
+
+  // If this page's OWN TR already resolved to the same name (self-reference,
+  // e.g. T1.3.H's note pointing at H335-1 which is drawn on T1.3.H itself),
+  // there's nothing to register — the page already serves itself. Checked
+  // two ways since this runs from two different call sites at two different
+  // points in the setup flow: pageAssignments is set by the later batch-run
+  // path, demarc_page_num comes from pass-scan's host detection and is
+  // available as early as runDemarcScan, before pageAssignments exists yet.
+  if (pageAssignments[pgNum]?.trName === refName) return;
+  if (trMap[refName]?.demarc_page_num === pgNum) return;
+
+  if (!trMap[refName]) {
+    trMap[refName] = { name: refName, on_sheet: false, demarc_page_num: null, source: 'off_sheet' };
+  }
+  await ensureServedPage(refName, pgNum, /* viaTextRef */ true);
+  // Deliberately does NOT auto-write a pin. autoResolveTrReference previously
+  // copied the serving TR's raw (x_norm, y_norm) onto this page, which only
+  // means anything when two pages share the same physical footprint (e.g.
+  // stacked floors with a riser at the same plan position) — it does NOT hold
+  // between same-floor ZONE sheets (T1.3.J and T1.3.K are both "third floor"
+  // but different crops of different areas), so the copied coordinate landed
+  // in unrelated white space off the actual plan on a real project (T1.3.J,
+  // confirmed on screen). Per "flag, don't guess": registering the served-page
+  // relationship (above) is enough to surface the "exit pin needed" badge in
+  // renderPageAssignmentTable/renderTRCard — a human places the real pin via
+  // suggestExitPin's visual modal, same as any other unresolved exit pin.
+}
+
+async function ensureServedPage(name, pgNum, viaTextRef = false) {
   trMap[name].pages = trMap[name].pages ?? [];
-  if (!trMap[name].pages.find(p => p.eval_page_num === pgNum)) {
+  const existing = trMap[name].pages.find(p => p.eval_page_num === pgNum);
+  if (!existing) {
     const pb = pageCache[pgNum]?.passBResult ?? {};
-    trMap[name].pages.push({ eval_page_num: pgNum, building: pb.building ?? null, floor: pb.level ?? null });
+    trMap[name].pages.push({ eval_page_num: pgNum, building: pb.building ?? null, floor: pb.level ?? null, viaTextRef });
+  } else if (viaTextRef) {
+    existing.viaTextRef = true;   // a later text-detect pass can upgrade a manual entry's badge
   }
   // Persist so restoreFromSupabase can reconstruct this page's TR assignment —
   // shared by both placeManualTR (serving) and placeManualExit (off-sheet exit).
@@ -2222,10 +2693,25 @@ async function deleteTRRoom(trName) {
   if (projectId) { await restoreFromSupabase(projectId); await attemptAutoLoadPdf(projectId); }
 }
 
+// Collapses/expands the whole TR-setup body (summary bar, assignment table,
+// TR cards) once the user is done reviewing it — mirrors the collapse pattern
+// used elsewhere (Test Auto Route, confidence map). Leaves step 4's
+// "Confirm Demarc Config → Start Batch" button untouched either way, since
+// that lives in its own section now.
+function toggleTRSetupCollapse() {
+  const section   = document.getElementById('tr-map-section');
+  const collapsed = document.getElementById('tr-map-collapsed');
+  const opening   = section.style.display === 'none';
+  section.style.display   = opening ? 'block' : 'none';
+  collapsed.style.display = opening ? 'none'  : 'flex';
+}
+
 function renderTRMap(trs) {
   const container = document.getElementById('tr-cards');
   container.innerHTML = '';
   document.getElementById('tr-map-section').style.display = 'block';
+  document.getElementById('tr-map-collapsed').style.display = 'none';   // a fresh scan needs review — don't leave it collapsed from a prior run
+  document.getElementById('batch-section').style.display = 'block';   // reveal step 4's heading + confirm button together with the TR review above it
 
   // Summary bar
   const onSheet      = trs.filter(t => t.on_sheet);
@@ -2233,6 +2719,7 @@ function renderTRMap(trs) {
   const schematicIds = [...new Set(trs.map(t => t.schematic_id).filter(v => v != null))];
   document.getElementById('tr-summary-text').textContent =
     `${trs.length} TR room${trs.length !== 1 ? 's' : ''} · ${schematicIds.length} schematic${schematicIds.length !== 1 ? 's' : ''} · ${onSheet.length} on-sheet · ${offSheet.length} off-sheet`;
+  document.getElementById('tr-map-collapsed-text').textContent = document.getElementById('tr-summary-text').textContent;
   const noDemarc = trs.filter(t => !t.demarc_id);
   document.getElementById('tr-warnings-text').textContent =
     noDemarc.length > 0 ? `⚠ ${noDemarc.length} TR${noDemarc.length > 1 ? 's' : ''} need a demarc + pin` : '';
@@ -2428,11 +2915,20 @@ function renderTRCard(tr, container) {
         // If already auto-suggested, start collapsed
         const isAutoSuggested = hasPin?.source === 'suggested';
 
+        // A page whose OWN coded notes named this TR (viaTextRef) but has no pin
+        // yet is a materially different state than a page nobody's looked at —
+        // the sheet is actively telling a human where this needs to go. Flag it
+        // with the same red-star visual language the confidence map uses for its
+        // demarc marker, rather than the generic amber "needs pin" badge, so it
+        // reads as "the drawing says this" not "unconfigured."
+        const needsPinBadge = pg.viaTextRef
+          ? `<span class="badge off" id="floor-badge-${pinKey}" style="font-size:12px; background:#3a0000; border-color:#c02020; color:#ff5050;">★ TR named on sheet — confirm pin</span>`
+          : `<span class="badge off" id="floor-badge-${pinKey}" style="font-size:10px;">⚠ needs pin</span>`;
         row.innerHTML = `
           <div class="floor-row-header">
             <span style="color:#f0c040; font-size:12px; font-weight:bold;">pg${pg.eval_page_num}</span>
             <span class="floor-row-label">${pgLabel}</span>
-            <span class="badge ${hasPin ? 'on' : 'off'}" id="floor-badge-${pinKey}" style="font-size:10px;">${hasPin ? '✓ pin set' : '⚠ needs pin'}</span>
+            ${hasPin ? `<span class="badge on" id="floor-badge-${pinKey}" style="font-size:10px;">✓ pin set</span>` : needsPinBadge}
           </div>
 
           <div class="floor-row-body" style="padding:10px 12px; display:flex; flex-direction:column; gap:8px;">
@@ -2590,20 +3086,41 @@ function redrawPinDot() {
   if (pinTarget?.xNorm != null) {
     const dot = document.createElement('div');
     dot.className = 'placed-pin';
+    // Suggested-but-not-yet-reviewed position gets a distinct look (dashed
+    // amber ring + label) so it never reads as an already-saved pin — the
+    // moment the user clicks anywhere to place/move it, pinTarget.isSuggested
+    // clears and it becomes a normal solid dot.
+    if (pinTarget.isSuggested) {
+      dot.style.cssText = 'position:absolute; width:22px; height:22px; border-radius:50%;' +
+        'border:3px dashed #f0c040; background:rgba(240,192,64,0.15); box-sizing:border-box;';
+      const label = document.createElement('div');
+      label.textContent = '⚡ suggested — click to adjust';
+      label.style.cssText = 'position:absolute; left:26px; top:-8px; white-space:nowrap;' +
+        'background:#1a1a00; color:#f0c040; font-size:12px; padding:2px 6px; border-radius:3px; border:1px solid #f0c040;';
+      dot.appendChild(label);
+    }
     // Native canvas px inside the transformed layer; counter-scale so the marker
     // stays a constant on-screen size as the layer zooms.
     dot.style.left = (pinTarget.xNorm * pinCanvasNativeW) + 'px';
     dot.style.top  = (pinTarget.yNorm * pinCanvasNativeH) + 'px';
-    dot.style.transform = `translate(-50%, -50%) scale(${1 / pinZoomLevel})`;
+    dot.style.transform += ` translate(-50%, -50%) scale(${1 / pinZoomLevel})`;
     dot.style.transformOrigin = 'center';
     layer.appendChild(dot);
   }
 }
 
-async function openPinModal(trName, targetPageNum) {
+/**
+ * @param {string} trName
+ * @param {number} [targetPageNum]
+ * @param {{x:number, y:number}} [suggestedXY]  when opening to review an
+ *   auto-derived position (e.g. from suggestExitPin) rather than an already-
+ *   saved pin or a blank canvas. Ignored if a real pin already exists for
+ *   this trName/page — never overwrites a human's prior placement.
+ */
+async function openPinModal(trName, targetPageNum, suggestedXY) {
   const isExtraPin = targetPageNum && targetPageNum !== trMap[trName]?.demarc_page_num;
   const pageNum = targetPageNum ?? trMap[trName]?.demarc_page_num ?? [...selectedPages].sort((a,b)=>a-b)[0];
-  pinTarget = { trName, pageNum, isExtraPin, xNorm: null, yNorm: null };
+  pinTarget = { trName, pageNum, isExtraPin, xNorm: null, yNorm: null, isSuggested: false };
   pinZoomLevel = 1.0; pinPanX = 0; pinPanY = 0;
 
   document.getElementById('pin-modal-title').textContent = isExtraPin
@@ -2632,13 +3149,24 @@ async function openPinModal(trName, targetPageNum) {
   pinPanY = 0;
   applyPinTransform();
 
-  // Set up existing pin if any
+  // Set up existing pin if any — a real saved pin always wins over a suggestion,
+  // never silently overwritten by re-opening this modal.
   const existing = isExtraPin
     ? trMap[trName]?.extra_pins?.[pageNum]
     : trMap[trName];
   if (existing?.pin_x != null || existing?.x_norm != null) {
     pinTarget.xNorm = existing.pin_x ?? existing.x_norm;
     pinTarget.yNorm = existing.pin_y ?? existing.y_norm;
+    redrawPinDot();
+  } else if (suggestedXY?.x != null && suggestedXY?.y != null) {
+    // No real pin yet — show the suggested position pre-plotted on the actual
+    // rendered plan (dashed amber marker, see redrawPinDot) instead of making
+    // the user picture raw x/y numbers. Any click clears isSuggested; either
+    // way, "Confirm Pin" saves through the normal confirmPin() path.
+    pinTarget.xNorm = suggestedXY.x;
+    pinTarget.yNorm = suggestedXY.y;
+    pinTarget.isSuggested = true;
+    setStatus('pin-status', '⚡ Suggested position shown — drag/click to adjust, or Confirm Pin to accept as-is', 'ok');
     redrawPinDot();
   }
 
@@ -2667,6 +3195,7 @@ async function openPinModal(trName, targetPageNum) {
     // rendered size and collapsed every click toward the corner).
     pinTarget.xNorm = Math.min(1, Math.max(0, (e.clientX - cvRect.left) / cvRect.width));
     pinTarget.yNorm = Math.min(1, Math.max(0, (e.clientY - cvRect.top)  / cvRect.height));
+    pinTarget.isSuggested = false;   // user has now actively placed it themselves
     document.getElementById('pin-coords').textContent =
       `Pin at (${pinTarget.xNorm.toFixed(3)}, ${pinTarget.yNorm.toFixed(3)})`;
     setStatus('pin-status', '✓ Pin placed — Confirm Pin to save', 'ok');
@@ -3427,8 +3956,9 @@ async function lockDemarcs() {
     }
   }
 
-  document.getElementById('batch-section').style.display = 'block';
+  document.getElementById('batch-progress-wrap-outer').style.display = 'block';
   document.getElementById('batch-section').scrollIntoView({ behavior: 'smooth' });
+  await ensureWallCalibrationRun();   // no-op if the preview above already resolved it this session
   await runBatch();
 }
 
@@ -3479,6 +4009,9 @@ async function runBatch(quiet = false) {
   const setPhase = p => { phase = p; };
 
   // ── Prefetch device types with llm_description for visual augment ─
+  // (disambiguate_from variants no longer need a client-side pass here — see
+  // pipeline.js's disambiguateByAdjacentCount, which splits them server-side
+  // from the text layer before device_instances are ever written.)
   let augmentTypes = [];
   try {
     const dtR = await fetch(`${base()}/api/takeoff-summary?project_id=${projectId}`);
@@ -3575,6 +4108,44 @@ async function runBatch(quiet = false) {
           font_size: 10
         });
       }
+
+      // ── TR schedule pages (e.g. T-500) — route to pass-tr-schedule.js and
+      // skip everything below (wireTrReference, symbol detection, pass-batch).
+      // A tr_schedule config means this page has no UIN, no x/y, nothing to
+      // route or measure. pass-batch's scale gate has no page_role branch —
+      // it 422s on "scale not set" unconditionally, regardless of role — so
+      // this check runs BEFORE that call is ever made, not as a fallback
+      // after it fails. See pass-tr-schedule.js's own header for why it's a
+      // separate endpoint rather than an exemption bolted onto pass-batch.
+      if (cache.tr_schedule && cache.tr_schedule.present !== false) {
+        setPhase(`pg${pageNum}: reading TR schedule`);
+        const r = await fetch(`${base()}/api/pass-tr-schedule`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ project_id: projectId, page_id: pageId, text_items: textItems })
+        });
+        const j = await r.json();
+        if (!pageCache[pageNum]) pageCache[pageNum] = {};
+        pageCache[pageNum].status     = r.ok ? 'done' : 'error';
+        pageCache[pageNum].status_msg = r.ok ? null : (j.error ?? null);
+        updateThumbStatusBadge(pageNum);
+        const msg = r.ok
+          ? `pg${pageNum}: ${j.tr_count} TR row${j.tr_count !== 1 ? 's' : ''}`
+          : `pg${pageNum}: ERROR — ${j.error}`;
+        if (!quiet) {
+          log.innerHTML += `<div style="color:${r.ok ? '#7af07a' : '#f07a7a'}">${msg}</div>`;
+          log.scrollTop = log.scrollHeight;
+        }
+        done++;
+        bar.classList.remove('indeterminate');
+        bar.style.width = `${Math.round((done / sortedPages.length) * 100)}%`;
+        continue;
+      }
+
+      // Cross-sheet TR reference (coded-note text, e.g. "...PATCH PANELS IN TR
+      // H335-1") — registers the served-page relationship only, never writes a
+      // pin. See wireTrReference's own header for why this is safe to run
+      // unconditionally on every page, every run.
+      await wireTrReference(pageNum, allRaw.map((r) => r.s).join(' '));
 
       // Build demarc pins for this page
       const demarcPins = buildPinsForPage(pageNum, passBRes, W, H);
@@ -3749,7 +4320,6 @@ async function runBatch(quiet = false) {
         log.innerHTML += `<div style="color:${r.ok ? '#7af07a' : '#f07a7a'}">${msg}</div>`;
         log.scrollTop = log.scrollHeight;
       }
-
 
     } catch(e) {
       if (!quiet) log.innerHTML += `<div style="color:#f07a7a;">pg${pageNum}: ${e.message}</div>`;
@@ -3988,8 +4558,16 @@ function renderByPage() {
 
     let noDistCount = 0;
     (res.devices ?? []).forEach((d, i) => {
+      // Routing indicator — same badge as the report/confidence map, here inline
+      // next to the distance figure since that's what it qualifies. Only shown
+      // when there's a distance to qualify (no-dist rows have neither tier set).
+      const routeIcon = d.total_ft != null
+        ? (d.routed_via_tier3
+            ? ' <span title="Tier 3 — wall-aware routed path" style="font-size:10px;">🔵</span>'
+            : ' <span title="Tier 1 — straight-line fallback (route came back unreachable through the wall graph)" style="font-size:10px;">⚠️</span>')
+        : '';
       const dist = d.total_ft != null
-        ? `<strong style="color:${d.tia_flag ? '#f07a7a' : '#7af07a'}">${d.total_ft}ft</strong>`
+        ? `<strong style="color:${d.tia_flag ? '#f07a7a' : '#7af07a'}">${d.total_ft}ft</strong>${routeIcon}`
         : '—';
       const fl = d.flags ?? [];
       const culled = fl.includes('manual_excluded');
@@ -4330,9 +4908,15 @@ let confArmedForCull = null;   // _num of a device clicked once, awaiting a seco
 const CULL_PAD_FRAC = 0.012;
 let confClickStart = null;   // {x,y} client coords at mousedown, to distinguish a click from a pan drag
 let confPendingAddXY = null; // {x,y} identity-frame coords awaiting a type choice in the add panel
+// Manual adds are batched, not auto-recalculated — see submitManualAdd/recalcPendingManualAdds.
+// Keyed per page number since re-opening the confidence map on a different page shouldn't
+// carry over another page's pending count.
+let confPendingManualCounts = {};
 let confWaypoints = [], confDemarcs = {};   // for routed-path visualization on hover
+let confExclusionZones = [];                // page_regions kind='exclude' rows for this page — green boxes
 let confShowAllPaths = false;               // path-confidence layer toggle
 let confZoom = 1, confPanX = 0, confPanY = 0, confDrag = null, confCW = 0, confCH = 0;
+let confPageWidthPts = 0, confPageHeightPts = 0;   // raw PDF point-space page size — see openConfidenceModal
 
 const CONF_COLOR = { high: '#7af07a', medium: '#f0c040', low: '#f07a7a' };
 
@@ -4354,12 +4938,49 @@ function confReset() { confZoom = 1; confPanX = 0; confPanY = 0; confApplyTransf
 
 function confRedraw() {
   const layer = document.getElementById('conf-layer');
-  layer.querySelectorAll('.conf-star, .conf-wp').forEach(e => e.remove());
+  layer.querySelectorAll('.conf-star, .conf-wp, .conf-excl-zone, .conf-demarc-star').forEach(e => e.remove());
 
   // Waypoints are placed via the same full-page-fraction click mechanic as demarc
   // pins, so they use the identity bbox — same reasoning as bboxForDevice's llm-symbol
   // case, just always identity rather than conditional.
   const identityBbox = { xmin_frac: 0, ymin_frac: 0, w_frac: 1, h_frac: 1 };
+
+  // Exclusion zones (page_regions kind='exclude') — green boxes, drawn first so
+  // everything else layers on top. x0/y0/x1/y1 are identity-frame fractions,
+  // same convention as waypoints/demarc pins (see loadExclConfirmedZones).
+  for (const z of confExclusionZones) {
+    const p0 = normToCanvasXY(z.x0, z.y0, identityBbox, confCW, confCH);
+    const p1 = normToCanvasXY(z.x1, z.y1, identityBbox, confCW, confCH);
+    const box = document.createElement('div');
+    box.className = 'conf-excl-zone';
+    box.style.cssText = `position:absolute; left:${Math.min(p0.x,p1.x)}px; top:${Math.min(p0.y,p1.y)}px;
+      width:${Math.abs(p1.x-p0.x)}px; height:${Math.abs(p1.y-p0.y)}px;
+      border:${2/confZoom}px solid #4ad86a; background:rgba(74,216,106,0.12);
+      pointer-events:none; z-index:5;`;
+    box.title = 'Exclusion zone';
+    layer.appendChild(box);
+  }
+
+  // Demarc location(s) — bright red star, larger and distinct from device
+  // confidence stars so it reads as "the target," not another detection.
+  for (const dm of Object.values(confDemarcs)) {
+    if (dm.x_norm == null || dm.y_norm == null) continue;
+    const pos = normToCanvasXY(dm.x_norm, dm.y_norm, identityBbox, confCW, confCH);
+    const size = 22 / confZoom;
+    const star = document.createElement('div');
+    star.className = 'conf-demarc-star';
+    star.style.cssText = `position:absolute; width:${size}px; height:${size}px;
+      transform:translate(-50%,-50%); pointer-events:none; z-index:8;
+      display:flex; align-items:center; justify-content:center;
+      font-size:${size}px; line-height:1; color:#ff2020;
+      text-shadow:0 0 ${3/confZoom}px rgba(0,0,0,0.95), 0 0 ${1.5/confZoom}px rgba(0,0,0,0.95);`;
+    star.textContent = '★';
+    star.title = `Demarc: ${dm.name ?? 'TR'}`;
+    star.style.left = pos.x + 'px';
+    star.style.top  = pos.y + 'px';
+    layer.appendChild(star);
+  }
+
   for (const w of confWaypoints) {
     const dot = document.createElement('div');
     dot.className = 'conf-wp';
@@ -4401,7 +5022,22 @@ function confRedraw() {
     star.style.top  = pos.y + 'px';
     if (!culled) {
       star.onmouseenter = () => {
-        const routeNote = d.routed_via_waypoints?.length ? `  ·  via ${d.routed_via_waypoints.length} waypoint(s)` : '';
+        // routed_via_tier3 tells us Tier 3 vs Tier 1 directly. There is no
+        // "routed_via_waypoints" field on the persisted device row — the
+        // previous version of this note checked one, which meant every
+        // fallback device's hover text silently said nothing about routing
+        // at all. Tier 1's actual waypoint-corroboration level (high/medium/
+        // low) only exists as a live computeDevicePath() result, same as the
+        // path-confidence overlay — so compute it here rather than guess.
+        const routeNote = d.routed_via_tier3
+          ? `  ·  🔵 Tier 3 (wall-aware, ${d.route_geometry?.length ?? '?'} pts)`
+          : d.total_ft != null
+          ? (() => {
+              const p = computeDevicePath(d);
+              const tierLabel = { high: 'via 2+ waypoints', medium: 'via 1 waypoint', low: 'straight line, no waypoints' };
+              return `  ·  ⚠️ Tier 1 fallback (${tierLabel[p?.tier] ?? 'straight line'})`;
+            })()
+          : '';
         const cullNote = armed ? '  ·  click again to exclude' : '  ·  click to exclude';
         document.getElementById('conf-hover-info').textContent =
           `${d.name ?? d.type ?? '—'}  ·  ${(d.raw_labels ?? []).join(' · ')}  ·  confidence: ${d.confidence ?? '—'}${routeNote}${cullNote}`;
@@ -4714,6 +5350,16 @@ async function openAddDevicePanel(e) {
   sel.innerHTML = types.length
     ? types.map(t => `<option value="${t.id}">${t.name ?? t.legend_id}</option>`).join('')
     : '<option value="">No device types configured</option>';
+
+  // If the confidence map is filtered to a single type, pre-select that type here —
+  // triaging one type at a time (e.g. hunting missed WAPs) shouldn't require
+  // re-picking it from this dropdown on every add. Holds until the filter itself
+  // changes (setConfTypeFilter/openConfidenceModal reset confTypeFilter, not this).
+  // "All types" (confTypeFilter === null) leaves the dropdown's default untouched.
+  if (confTypeFilter) {
+    const match = types.find(t => (t.name ?? t.legend_id) === confTypeFilter);
+    if (match) sel.value = String(match.id);
+  }
 }
 
 function cancelManualAdd() {
@@ -4763,23 +5409,56 @@ async function submitManualAdd() {
     if (bt) bt.count = (bt.count ?? 0) + 1;
     else (res.by_type ?? (res.by_type = [])).push({ legend_id: dt?.legend_id ?? null, name: dt?.name ?? 'device', count: 1, tia: 0 });
   }
-  document.getElementById('conf-hover-info').textContent = 'Added — re-running this page for distance…';
+  document.getElementById('conf-hover-info').textContent = 'Added — click Recalculate when done adding to compute distance';
   confDevices = (res?.devices || [])
     .map((d, i) => ({ ...d, _num: i + 1 }))
     .filter(d => d.x_norm != null && d.y_norm != null);
   confRedraw();
   renderResults();
 
+  // Batched, not automatic — a manual add here just records the position and
+  // shows it with distance pending (total_ft: null on the pushed entry above).
+  // The full pipeline rerun (symbol detection, reconcile, routing — everything
+  // rerunPageAfterManualAdd/runBatch does) only fires once, when the user
+  // clicks Recalculate, however many devices they've tagged in the meantime.
+  confPendingManualCounts[confPageNum] = (confPendingManualCounts[confPageNum] ?? 0) + 1;
+  updateConfRecalcButton();
+}
+
+// Reflects the current page's pending-add count on the Recalculate button —
+// hidden at 0 so it doesn't sit there as a permanent no-op control.
+function updateConfRecalcButton() {
+  const btn = document.getElementById('conf-recalc-btn');
+  if (!btn) return;
+  const n = confPendingManualCounts[confPageNum] ?? 0;
+  btn.style.display = n > 0 ? 'inline-block' : 'none';
+  btn.textContent = `⟳ Recalculate (${n} pending)`;
+}
+
+// Fires the one deferred pipeline rerun for every manual add batched since the
+// last recalc (or since the modal opened). Same rerunPageAfterManualAdd/
+// runBatch(true) call submitManualAdd used to fire per-add — just deferred to
+// a single explicit click instead of automatically after every single tag.
+async function recalcPendingManualAdds() {
+  const n = confPendingManualCounts[confPageNum] ?? 0;
+  if (!n) return;
+  const btn = document.getElementById('conf-recalc-btn');
+  if (btn) { btn.disabled = true; btn.textContent = `⟳ Recalculating…`; }
+  document.getElementById('conf-hover-info').textContent = `Recalculating distance for ${n} added device${n !== 1 ? 's' : ''}…`;
+
   await rerunPageAfterManualAdd(confPageNum);
 
   // runBatch() replaced batchResults[confPageNum] wholesale with the server's
-  // authoritative pass — re-sync the map from it (the optimistic entry above is
+  // authoritative pass — re-sync the map from it (every optimistic entry is
   // now superseded, distance included).
   const fresh = batchResults[confPageNum];
   confDevices = (fresh?.devices || [])
     .map((d, i) => ({ ...d, _num: i + 1 }))
     .filter(d => d.x_norm != null && d.y_norm != null);
   document.getElementById('conf-hover-info').textContent = '';
+  confPendingManualCounts[confPageNum] = 0;
+  if (btn) btn.disabled = false;
+  updateConfRecalcButton();
   confRedraw();
 }
 
@@ -4800,17 +5479,38 @@ async function rerunPageAfterManualAdd(pageNum) {
   }
 }
 
-// Draw the device's routed path (device -> waypoints -> demarc) as an SVG polyline,
-// recomputed live via the SAME pure buildGreedyPath the server uses — nothing here is
-// persisted; it's fully derivable from data already on hand (device xy, waypoint pool,
-// demarc xy), consistent with why routed_via_waypoints isn't persisted server-side either.
+// Draw the device's routed path as an SVG polyline. Two sources, depending on
+// how this device was actually routed (see routed_via_tier3 on the persisted
+// row):
+//   - Tier 3: use the PERSISTED route_geometry directly — the real wall-aware
+//     path pass-batch.js computed and saved, not a live recompute. This was
+//     previously always recomputed via buildGreedyPath regardless of which
+//     tier actually routed the device, which meant this view could never show
+//     a Tier 3 route even when one existed — every path looked like Tier 1
+//     because it WAS Tier 1, freshly recomputed, no matter what actually ran
+//     server-side. Confirmed on real data: a project with 75/75 devices
+//     routed via Tier 3 in the database still rendered 75 straight Tier-1
+//     lines here, because this function never looked at the persisted result.
+//   - Tier 1 (or no persisted route yet): recompute live via the same pure
+//     buildGreedyPath the server uses — unchanged from before, since Tier 1
+//     routes were never persisted in the first place (deliberately ephemeral,
+//     see waypoint-path.js's own header).
 function computeDevicePath(d) {
   const V = window.TakeoffVec;
-  if (!V?.buildGreedyPath || !d.demarc_id) return null;
+  if (!d.demarc_id) return null;
   const demarc = confDemarcs[d.demarc_id];
   if (!demarc || demarc.x_norm == null || demarc.y_norm == null) return null;
-
   const identityBbox = { xmin_frac: 0, ymin_frac: 0, w_frac: 1, h_frac: 1 };
+
+  if (d.routed_via_tier3 && Array.isArray(d.route_geometry) && d.route_geometry.length >= 2 && confPageWidthPts && confPageHeightPts) {
+    const points = d.route_geometry.map(([px, py]) => {
+      const p = normToCanvasXY(px / confPageWidthPts, py / confPageHeightPts, identityBbox, confCW, confCH);
+      return [p.x, p.y];
+    });
+    return { points, tier: 'tier3' };
+  }
+
+  if (!V?.buildGreedyPath) return null;
   const devPos    = normToCanvasXY(d.x_norm, d.y_norm, bboxForDevice(confPageNum, d), confCW, confCH);
   const demarcPos = normToCanvasXY(demarc.x_norm, demarc.y_norm, identityBbox, confCW, confCH);
   const wpPos     = confWaypoints.map(w => {
@@ -4825,7 +5525,7 @@ function computeDevicePath(d) {
   return { points: path.points, tier };
 }
 
-const PATH_TIER_COLOR = { high: '#40f0a0', medium: '#f0c040', low: '#f07a7a' };
+const PATH_TIER_COLOR = { high: '#40f0a0', medium: '#f0c040', low: '#f07a7a', tier3: '#4da3ff' };
 function svgPolyline(svg, points, color, width, opacity, dashed) {
   const ns = 'http://www.w3.org/2000/svg';
   const poly = document.createElementNS(ns, 'polyline');
@@ -4901,6 +5601,7 @@ async function openConfidenceModal(pageNum) {
   confPinnedPath = null;
   confTypeFilter = null;
   document.getElementById('conf-cull-panel').style.display = 'none';
+  updateConfRecalcButton();
   confDevices = (res.devices || [])
     .map((d, i) => ({ ...d, _num: i + 1 }))   // matches the # column in the by-page device table
     .filter(d => d.x_norm != null && d.y_norm != null);
@@ -4925,23 +5626,33 @@ async function openConfidenceModal(pageNum) {
   const pdfPage = await pdfDoc.getPage(pageNum);
   const vp = pdfPage.getViewport({ scale: 2.5 });
   confCW = vp.width; confCH = vp.height;
+  // Raw PDF point-space dimensions (scale:1) — needed to convert persisted
+  // route_geometry (stored in page-point space by wall-aware-path.js, same
+  // convention as pass-batch.js's deviceXY/demarcXY) back into the [0,1]
+  // identity-frame fractions normToCanvasXY expects. Separate from
+  // confCW/confCH, which are already scaled to the 2.5x render viewport.
+  const vp1 = pdfPage.getViewport({ scale: 1 });
+  confPageWidthPts = vp1.width; confPageHeightPts = vp1.height;
   await renderToCanvas(cv, pdfPage, vp);
   confZoom = Math.min((wrap.offsetWidth || window.innerWidth * 0.88) / vp.width, 1.0);
 
   // Waypoints + demarcs, for the routed-path-on-hover overlay. Best-effort: a fetch
   // failure just means no path line draws, never blocks opening the map.
   const pageId = pageCache[pageNum]?.pageId;
-  confWaypoints = []; confDemarcs = {};
+  confWaypoints = []; confDemarcs = {}; confExclusionZones = [];
   if (pageId) {
     try {
-      const [wpR, dmR] = await Promise.all([
+      const [wpR, dmR, rgR] = await Promise.all([
         fetch(`${base()}/api/pass-waypoint?page_id=${pageId}`),
-        fetch(`${base()}/api/pass-demarc?page_id=${pageId}`)
+        fetch(`${base()}/api/pass-demarc?page_id=${pageId}`),
+        fetch(`${base()}/api/page-regions?page_id=${pageId}`)
       ]);
       confWaypoints = wpR.ok ? await wpR.json() : [];
       const demarcRows = dmR.ok ? await dmR.json() : [];
       confDemarcs = Object.fromEntries(demarcRows.map(dm => [dm.id, dm]));
-    } catch (e) { console.warn('[confidence map] waypoint/demarc fetch failed', e.message); }
+      const regionRows = rgR.ok ? await rgR.json() : [];
+      confExclusionZones = (regionRows ?? []).filter(z => z.kind === 'exclude' && z.x0 != null);
+    } catch (e) { console.warn('[confidence map] waypoint/demarc/region fetch failed', e.message); }
   }
 
   confApplyTransform();
@@ -4976,11 +5687,124 @@ async function openConfidenceModal(pageNum) {
   document.getElementById('conf-hover-info').textContent = '';
   document.getElementById('conf-paths-toggle').textContent = confShowAllPaths ? '🔀 hide path confidence' : '🔀 show path confidence';
   document.getElementById('conf-path-legend').style.display = confShowAllPaths ? 'block' : 'none';
+
+  // Tier-mix summary — how many of this page's devices actually routed Tier 3
+  // (wall-aware) vs. Tier 1 (waypoint/straight-line) fallback. Informs the
+  // multiplier judgment call below: predominantly Tier 1 / straight-line runs
+  // are typically the ones that warrant a multiplier above 1.0.
+  const routedCount = confDevices.filter(d => d.x_norm != null).length;
+  const tier3Count  = confDevices.filter(d => d.routed_via_tier3).length;
+  document.getElementById('conf-tier-summary').textContent = routedCount
+    ? `Routing: ${tier3Count} of ${routedCount} devices via Tier 3 (wall-aware) · ${routedCount - tier3Count} via Tier 1`
+    : '';
+
+  initLengthMultiplierControls();
+
   document.getElementById('conf-modal').style.display = 'flex';
   confRedraw();
 }
 
+// Pre-fills both multiplier inputs with the current project-wide values.
+function initLengthMultiplierControls() {
+  document.getElementById('conf-mult-routed-input').value = projectDefaultMultiplier;
+  document.getElementById('conf-mult-fallback-input').value = projectFallbackMultiplier;
+  document.getElementById('conf-mult-status').textContent = '';
+}
+
+// Persists both project-wide cable-length multipliers. One value each for the
+// whole project — does not vary by page. Same action the report page's own
+// multiplier fields use, so either surface stays in sync.
+async function saveLengthMultiplier() {
+  const routedVal   = Number(document.getElementById('conf-mult-routed-input').value);
+  const fallbackVal = Number(document.getElementById('conf-mult-fallback-input').value);
+  const statusEl = document.getElementById('conf-mult-status');
+  if (!Number.isFinite(routedVal) || routedVal <= 0 || !Number.isFinite(fallbackVal) || fallbackVal <= 0) {
+    statusEl.style.color = '#f07a7a';
+    statusEl.textContent = 'both multipliers must be positive numbers';
+    return;
+  }
+  if (!projectId) { statusEl.style.color = '#f07a7a'; statusEl.textContent = 'no project loaded'; return; }
+  statusEl.style.color = '#888';
+  statusEl.textContent = 'saving…';
+  try {
+    const r = await fetch(`${base()}/api/projects`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'update_project', project_id: projectId,
+        default_length_multiplier: routedVal, fallback_length_multiplier: fallbackVal
+      })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || r.status);
+    projectDefaultMultiplier = routedVal;
+    projectFallbackMultiplier = fallbackVal;
+    statusEl.style.color = '#7af07a';
+    statusEl.textContent = `saved (routed ${routedVal}× · fallback ${fallbackVal}×)`;
+    syncMultiplierInputs();
+  } catch (e) {
+    statusEl.style.color = '#f07a7a';
+    statusEl.textContent = `save failed: ${e.message}`;
+  }
+}
+
+// Same project-wide values, different UI (Step 1 panel vs Confidence Map
+// modal) — this is the Step 1 panel's save button. Shares the same
+// update_project call and globals as saveLengthMultiplier() above so
+// whichever one you edit last wins, and both displays reflect it.
+async function saveProjectMultipliers() {
+  const routedVal   = Number(document.getElementById('proj-mult-routed-input').value);
+  const fallbackVal = Number(document.getElementById('proj-mult-fallback-input').value);
+  const statusEl = document.getElementById('proj-mult-status');
+  if (!Number.isFinite(routedVal) || routedVal <= 0 || !Number.isFinite(fallbackVal) || fallbackVal <= 0) {
+    statusEl.style.color = '#f07a7a';
+    statusEl.textContent = 'both multipliers must be positive numbers';
+    return;
+  }
+  if (!projectId) { statusEl.style.color = '#f07a7a'; statusEl.textContent = 'no project loaded'; return; }
+  statusEl.style.color = '#888';
+  statusEl.textContent = 'saving…';
+  try {
+    const r = await fetch(`${base()}/api/projects`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'update_project', project_id: projectId,
+        default_length_multiplier: routedVal, fallback_length_multiplier: fallbackVal
+      })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || r.status);
+    projectDefaultMultiplier = routedVal;
+    projectFallbackMultiplier = fallbackVal;
+    statusEl.style.color = '#7af07a';
+    statusEl.textContent = `saved (routed ${routedVal}× · fallback ${fallbackVal}×)`;
+    syncMultiplierInputs();
+  } catch (e) {
+    statusEl.style.color = '#f07a7a';
+    statusEl.textContent = `save failed: ${e.message}`;
+  }
+}
+
+// Pushes the shared projectDefaultMultiplier/projectFallbackMultiplier
+// globals into whichever of the two multiplier UIs exist on the page right
+// now, so editing one and reopening the other never shows a stale value.
+function syncMultiplierInputs() {
+  const routed   = document.getElementById('conf-mult-routed-input');
+  const fallback = document.getElementById('conf-mult-fallback-input');
+  const pRouted  = document.getElementById('proj-mult-routed-input');
+  const pFallback = document.getElementById('proj-mult-fallback-input');
+  if (routed)    routed.value    = projectDefaultMultiplier;
+  if (fallback)  fallback.value  = projectFallbackMultiplier;
+  if (pRouted)   pRouted.value   = projectDefaultMultiplier;
+  if (pFallback) pFallback.value = projectFallbackMultiplier;
+  const panel = document.getElementById('multiplier-panel');
+  if (panel) panel.style.display = 'block';
+}
+
 function closeConfidenceModal() {
+  const n = confPendingManualCounts[confPageNum] ?? 0;
+  if (n > 0 && !confirm(`${n} added device${n !== 1 ? 's' : ''} on this page still ${n !== 1 ? 'have' : 'has'} no distance calculated — the BOM/report will show them with a missing run length until you click Recalculate. Close anyway?`)) {
+    return;
+  }
   document.getElementById('conf-modal').style.display = 'none';
   confArmedForCull = null;
   confCullTarget = null;
@@ -5263,6 +6087,20 @@ async function loadProjectCard(pid) {
     document.getElementById('project-card-name').textContent = p.name ?? `Project ${pid}`;
     const meta = [p.project_number, p.client].filter(Boolean).join(' · ');
     document.getElementById('project-card-meta').textContent = meta || `ID: ${pid}`;
+
+    // Accepted-final-run lock — a manual sign-off bookmark on the current
+    // state (not a run history). While set, pass-batch/pass-extract/
+    // pass-visual-augment/set-page-role's count-clearing path refuse writes,
+    // so surface it here rather than let a run silently fail with no context.
+    const lockEl = document.getElementById('project-card-lock');
+    if (lockEl) {
+      if (p.accepted_final_run_at) {
+        lockEl.textContent = `🔒 Locked — accepted final run on ${new Date(p.accepted_final_run_at).toLocaleString()}. Unlock from the Report page to re-run.`;
+        lockEl.style.display = 'block';
+      } else {
+        lockEl.style.display = 'none';
+      }
+    }
     if (p.pdf_filename) {
       document.getElementById('project-card-file').textContent = '📄 ' + p.pdf_filename;
       document.getElementById('project-card-file').style.color = '#4a7a4a';
@@ -5296,6 +6134,10 @@ async function restoreFromSupabase(pid) {
 
     const projPages   = j.project_pages ?? [];
     const demarcs     = j.demarcs      ?? [];
+    projectDefaultMultiplier = j.default_length_multiplier ?? 1.0;
+    projectFallbackMultiplier = j.fallback_length_multiplier ?? 1.0;
+    syncMultiplierInputs();
+    populateLibraryPanel(j);
     const pageRegions = j.page_regions ?? [];   // schematics (page → 1+ regions)
     const regionById  = new Map(pageRegions.map(rg => [rg.id, rg]));
     // Distance-scope boxes, keyed by page_id (devices are scoped against these).
@@ -5334,6 +6176,7 @@ async function restoreFromSupabase(pid) {
           suggest_reason: pg.suggest_reason ?? null,
           status:         pg.status ?? null,       // 'ready' | 'running' | 'done' | 'error'
           status_msg:     pg.status_msg ?? null,
+          tr_schedule:    pg.tr_schedule ?? null,   // presence -> route batch run to pass-tr-schedule, not pass-batch
           passBResult: {
             page_id:     pg.page_id,
             sheet_title: pg.sheet_title ?? pg.drawing_number ?? `Page ${pg.eval_page_num}`,
@@ -5444,6 +6287,7 @@ async function restoreFromSupabase(pid) {
         const container = document.getElementById('tr-cards');
         if (container) container.innerHTML = '';
         document.getElementById('tr-map-section').style.display = 'none';
+        document.getElementById('batch-section').style.display = 'none';
       }
     } catch (e) {
       console.error('restoreFromSupabase: TR map restoration failed, continuing to results —', e);
@@ -5517,7 +6361,17 @@ async function restoreFromSupabase(pid) {
     // takeoff-summary already returns device_types — use j directly.
     const dtCount = j.device_types?.length ?? 0;
     if (dtCount > 0) {
-      setDeviceTypeBarReady(`${dtCount} device type${dtCount !== 1 ? 's' : ''} configured`);
+      // Library badge: either this project IS a library (is_library), or it's
+      // synced to one (library_project) — see projects.library_project_id.
+      // Neither set just means this project keeps its own device types
+      // independently, which is a normal state, not shown as a warning.
+      let libNote = '';
+      if (j.is_library) {
+        libNote = ` — 📚 ${j.library_name || 'this is a device library'}`;
+      } else if (j.library_project) {
+        libNote = ` — using library "${j.library_project.name}" (Project ${j.library_project.id})`;
+      }
+      setDeviceTypeBarReady(`${dtCount} device type${dtCount !== 1 ? 's' : ''} configured${libNote}`);
     }
 
     // PDF auto-load runs independently, outside this function's try/catch — see

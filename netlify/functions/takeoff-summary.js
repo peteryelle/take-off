@@ -5,7 +5,7 @@
 
 import { getSupabase, ok, err, CORS } from "./utils/clients.js";
 
-import { requireOrg, assertProjectInOrg, assertPageInOrg } from "./utils/auth.js";
+import { requireOrg, assertProjectInOrg, assertPageInOrg, resolveDeviceTypesProjectId } from "./utils/auth.js";
 
 // Supabase/PostgREST caps a single unpaginated request at 1000 rows by
 // default. parts_priced for a real catalog can exceed that (BOM A alone is
@@ -79,10 +79,40 @@ export default async function handler(req) {
   // layer.
   const { data: projectRow } = await supabase
     .from("projects")
-    .select("catalog_id")
+    .select("catalog_id, default_length_multiplier, fallback_length_multiplier, accepted_final_run_at, is_library, library_name, library_project_id")
     .eq("id", project_id)
     .single();
   const catalog_id = projectRow?.catalog_id ?? null;
+  // Which library this project's device_types/assembly/labor are kept in sync
+  // with (see docs on projects.library_project_id) — null if this project IS
+  // a library (is_library) or maintains its own device set independently.
+  // Resolved to a name here so the client doesn't need a second round-trip
+  // just to label the badge.
+  let library_project = null;
+  if (projectRow?.library_project_id) {
+    const { data: libRow } = await supabase
+      .from("projects")
+      .select("id, name, library_name")
+      .eq("id", projectRow.library_project_id)
+      .single();
+    if (libRow) library_project = { id: libRow.id, name: libRow.library_name || libRow.name };
+  }
+  // Project-wide cable-length multipliers, set by the user after reviewing
+  // route quality in the confidence map (or edited directly on the report).
+  // default_length_multiplier applies to Tier 3 (wall-aware routed) device
+  // instances; fallback_length_multiplier applies to Tier 1 (straight-line)
+  // ones — see device_instances.routed_via_tier3. Each is a single value
+  // for the whole project — does not vary by page.
+  const default_length_multiplier = projectRow?.default_length_multiplier ?? 1.0;
+  const fallback_length_multiplier = projectRow?.fallback_length_multiplier ?? 1.0;
+  // Accepted-final-run lock — null unless a human has marked this run as final
+  // on the Report page. Count-changing endpoints refuse writes while set.
+  const accepted_final_run_at = projectRow?.accepted_final_run_at ?? null;
+
+  // device_types for a synced project live under the library's project_id
+  // (see resolveDeviceTypesProjectId) — resolve once, ahead of the parallel
+  // batch below, same as catalog_id above.
+  const dtProjectId = await resolveDeviceTypesProjectId(supabase, project_id);
 
   // Run all queries in parallel
   const [
@@ -93,7 +123,7 @@ export default async function handler(req) {
     // Device types — full fields needed for detection and restore
     supabase.from("device_types")
       .select("id, legend_id, name, discipline, category, human_description, llm_description, text_anchors, detection_config, example_image_base64, assembly, labor")
-      .eq("project_id", project_id)
+      .eq("project_id", dtProjectId)
       .order("legend_id"),
 
     // Pages — slim summary (used by existing single-page views)
@@ -138,7 +168,7 @@ export default async function handler(req) {
           demarc_label, demarc_x, demarc_y, demarc_is_host,
           demarc_type, demarc_source,
           content_xmin_frac, content_ymin_frac, content_w_frac, content_h_frac,
-          status, status_msg
+          status, status_msg, tr_schedule
         )
       `)
       .eq("project_id", project_id)
@@ -159,6 +189,7 @@ export default async function handler(req) {
         port_count_data, port_count_voice,
         run_length_ft, total_ft, tia_flag, tia_reason,
         demarc_id, confidence, xy_source, symbol_via,
+        route_geometry, routed_via_tier3,
         flags, cull_category, cull_reason,
         device_types ( id, legend_id, name )
       `)
@@ -217,6 +248,7 @@ export default async function handler(req) {
     // not the real thing pass-batch.js itself already tracks.
     status:            pp.pages?.status            ?? null,
     status_msg:        pp.pages?.status_msg         ?? null,
+    tr_schedule:       pp.pages?.tr_schedule        ?? null,
   }));
 
   // Annotate redundant-overall suggestions (advisory; the human confirms in the picker).
@@ -263,7 +295,17 @@ export default async function handler(req) {
     // catalog assigned yet; catalog_parts is [] in that case, not an error.
     catalog_id,
     catalog_parts:    catalogPartsRes.data ?? [],
-    labor_tasks:      laborTasksRes.data   ?? []
+    labor_tasks:      laborTasksRes.data   ?? [],
+    default_length_multiplier,
+    fallback_length_multiplier,
+    accepted_final_run_at,
+    // Library badge — see projects.library_project_id. is_library=true means
+    // THIS project is a library others sync from; library_project set means
+    // this project's device_types/assembly/labor are kept in sync with that
+    // library. The two are mutually exclusive in normal use.
+    is_library:      projectRow?.is_library ?? false,
+    library_name:    projectRow?.library_name ?? null,
+    library_project
   });
 }
 
