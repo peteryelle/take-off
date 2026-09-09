@@ -68,11 +68,19 @@ export default async function handler(req) {
     if (rows.length === 0) {
       const xs = text_items.map((t) => t.cx_norm);
       const ys = text_items.map((t) => t.cy_norm);
+      // Targeted, not just "first 15" (which caught only title-block
+      // boilerplate last time — pdf.js's extraction order isn't top-to-bottom).
+      // Grab anything that could plausibly be the real table's title/header,
+      // so the ACTUAL tokenization (how pdf.js split these specific runs,
+      // which may differ from the Python/PyMuPDF extraction this was tuned
+      // against) is visible without another round-trip.
+      const KEYWORDS = /SCHEDULE|ROOM|BUILDING|LEVEL|TERMINATION|PATCH|TELECOMMUNICATION|CAT6A/i;
+      const headerish = text_items.filter((t) => KEYWORDS.test(t.str));
       diag = {
         item_count: text_items.length,
         cx_range: [Math.min(...xs), Math.max(...xs)],
         cy_range: [Math.min(...ys), Math.max(...ys)],
-        sample: text_items.slice(0, 15),
+        headerish_items: headerish,
         tr_schedule_cfg: page.tr_schedule,
       };
     }
