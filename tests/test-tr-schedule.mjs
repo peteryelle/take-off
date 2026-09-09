@@ -42,9 +42,12 @@ console.log('T-500 TR TERMINATION AND HARDWARE SCHEDULE (real sheet):');
   const rows = parseTrSchedule(realItems, cfg);
 
   // Locked to the sheet's actual row count — verified by hand against the
-  // source table (44 TRs). A regression here means the header/data-offset
-  // or dense-line-pitch handling broke again.
-  assert(rows.length === 44, `44 real TR rows parsed (got ${rows.length})`);
+  // source table (45 TRs). The count previously asserted here (44) was
+  // itself a miscount that happened to match a real bug: the shipped
+  // rowTol default (0.010) chain-merged the last row (J527-1) with the
+  // footer notes line 0.0093 below it and silently dropped it. Both the
+  // miscount and the bug are fixed now — see tr-schedule.js's rowTol comment.
+  assert(rows.length === 45, `45 real TR rows parsed (got ${rows.length})`);
 
   assert(rows.every((r) => r.tr_number), 'every row carries a tr_number');
   assert(rows.every((r) => Number.isInteger(r.total_terminations)), 'total_terminations is an integer on every row');
@@ -68,7 +71,15 @@ console.log('T-500 TR TERMINATION AND HARDWARE SCHEDULE (real sheet):');
   const last = rows.find((r) => r.tr_number === 'J427-1');
   assert(last && last.building === '01' && last.level === '4'
     && last.total_terminations === 306 && last.min_patch_panels === 7,
-    "J427-1 (last row) matches source: bldg 01, lvl 4, 306 terms, 7 panels");
+    "J427-1 (second-to-last row) matches source: bldg 01, lvl 4, 306 terms, 7 panels");
+
+  // The row this whole fix is about: sits only 0.0093 from the footer notes
+  // block that follows it — closer than the OLD default rowTol (0.010) ever
+  // safely allowed. Its presence here is the actual regression guard.
+  const trueLast = rows.find((r) => r.tr_number === 'J527-1');
+  assert(trueLast && trueLast.building === '01' && trueLast.level === '5'
+    && trueLast.total_terminations === 268 && trueLast.min_patch_panels === 6,
+    "J527-1 (true last row, sits 0.0093 from footer notes) matches source: bldg 01, lvl 5, 268 terms, 6 panels");
 
   const h519 = rows.find((r) => r.tr_number === 'H519-1');
   assert(h519 && h519.total_terminations === 288 && h519.min_patch_panels === 6,
@@ -93,14 +104,22 @@ console.log('Edge cases:');
   // tolerances belong on the config (per-AE, Discovery-calibrated), not
   // hardcoded -- confirm the config path actually wins over both opts and
   // the built-in defaults, so a future AE's calibrated numbers really apply.
-  const cfgWithTol = { ...cfg, tolerances: { rowTol: 0.010, colTol: 0.012, headerBandTol: 0.010 } };
+  const cfgWithTol = { ...cfg, tolerances: { rowTol: 0.008, colTol: 0.012, headerBandTol: 0.010 } };
   const viaConfig = parseTrSchedule(realItems, cfgWithTol);
-  assert(viaConfig.length === 44, `config-supplied tolerances still parse all 44 rows (got ${viaConfig.length})`);
+  assert(viaConfig.length === 45, `config-supplied tolerances still parse all 45 rows (got ${viaConfig.length})`);
 
   const cfgBadTol = { ...cfg, tolerances: { colTol: 0.0001 } }; // absurdly tight -> columns fail to join
   const viaBadConfig = parseTrSchedule(realItems, cfgBadTol, { colTol: 0.012 });
   assert(viaBadConfig.length === 0,
     'config.tolerances overrides opts, even to a value that breaks parsing (priority order confirmed)');
+
+  // Document the actual bug this file's default used to have: rowTol:0.010
+  // chain-merges J527-1 (the true last row) with the footer notes line 0.0093
+  // below it, silently dropping it. Locked here so 0.010 never quietly
+  // becomes the default again.
+  const viaOldBuggyRowTol = parseTrSchedule(realItems, { ...cfg, tolerances: { rowTol: 0.010 } });
+  assert(viaOldBuggyRowTol.length === 44 && !viaOldBuggyRowTol.some((r) => r.tr_number === 'J527-1'),
+    'rowTol:0.010 reproduces the historical bug (44 rows, J527-1 dropped) -- documents why the default changed');
 }
 
 console.log(failures === 0 ? '\nALL GATES PASS' : `\n${failures} ASSERTION(S) FAILED`);

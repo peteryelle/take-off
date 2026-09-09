@@ -37,7 +37,11 @@ const QTY_HEADERS = [/\bQUANTITY\b/, /\bQTY\b/, /\bGRAND\s*TOTAL\b/, /\bTOTAL\b/
 const TYPE_HEADERS = [/^TYPE$/, /OUTLET\s*TYPE/, /DEVICE\s*TYPE/, /^DESIGNATOR$/];
 const GRAND_TOTAL = /\bGRAND\s*TOTAL\b/;
 const ROOM_KEY_HEADERS = [/\bROOM\s*NUMBER\b/, /\bTELECOMMUNICATIONS\s*ROOM\b/, /^TR$/, /^TR\s*(NUMBER|NAME|ID)$/];
-const PER_ROOM_METRIC_HEADERS = [/\bTERMINATIONS\b/, /\bPATCH\s*PANELS?\b/];
+const TERMINATIONS_HEADER = /\bTERMINATIONS\b/;
+const PATCH_PANELS_HEADER = /\bPATCH\s*PANELS?\b/;
+const PER_ROOM_METRIC_HEADERS = [TERMINATIONS_HEADER, PATCH_PANELS_HEADER];
+const BUILDING_HEADER = /\bBUILDING\b/;
+const LEVEL_HEADER = /^LEVEL$/;
 
 const anyMatch = (s, res) => res.some((re) => re.test(s));
 
@@ -152,6 +156,13 @@ export const ROUTE = {
 };
 
 export const CLASSIFIER_VERSION = 'archetype-2';
+
+// Exported for discover-tr-schedule.js — column-MAPPING (which header string
+// means which semantic key) has to use the exact same patterns as
+// classification, or the two could disagree about what a header means.
+export const HEADER_PATTERNS = {
+  ROOM_KEY_HEADERS, TERMINATIONS_HEADER, PATCH_PANELS_HEADER, BUILDING_HEADER, LEVEL_HEADER,
+};
 
 // Produce the persistable pages.route row from already-derived sheet signals.
 // Discovery calls this once per sheet and stores the result; buildDeviceList

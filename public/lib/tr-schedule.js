@@ -120,7 +120,13 @@ function headerXBand(bandItems, label, colTol) {
  *   config yet.
  * @param {Object} opts  { rowTol, colTol, headerBandTol } — back-compat /
  *   direct-call override, lower priority than trScheduleCfg.tolerances.
- *   rowTol: y-tolerance for DATA rows (single-line, tight spacing). ~0.010.
+ *   rowTol: y-tolerance for DATA rows (single-line, tight spacing). ~0.008.
+ *     NOT 0.010 -- on the real T-500 sheet, the last data row (J527-1) sits
+ *     only 0.0093 from the footer notes block's first line. 0.010 chain-merges
+ *     them into one row, fails the exact-column-count check, and silently
+ *     drops that entire row (a real bug this shipped with briefly — caught by
+ *     Discovery's auto-calibration finding a tighter, measured value than the
+ *     hand-tuned default here ever was).
  *   colTol: x-tolerance for clustering header columns. Keep tight — real
  *     adjacent columns can be ~0.027 apart. Default 0.012.
  *   headerBandTol: y-window searched together for HEADER labels, to catch a
@@ -138,7 +144,7 @@ export function parseTrSchedule(textItems = [], trScheduleCfg = {}, opts = {}) {
   if (!cols.tr_number || !cols.terminations || !cols.patch_panels) return [];
 
   const tol = trScheduleCfg.tolerances || {};
-  const rowTol = tol.rowTol ?? opts.rowTol ?? 0.010;
+  const rowTol = tol.rowTol ?? opts.rowTol ?? 0.008;
   const colTol = tol.colTol ?? opts.colTol ?? 0.012;
   const headerBandTol = tol.headerBandTol ?? opts.headerBandTol ?? 0.010;
 
