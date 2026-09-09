@@ -18,7 +18,7 @@
 // this page's rows in tr_schedule_rows. That's the whole pass.
 
 import { getSupabase, ok, err, CORS } from "./utils/clients.js";
-import { requireOrg, assertProjectInOrg, assertPageInOrg, assertProjectUnlocked } from "./utils/auth.js";
+import { requireOrg, assertProjectInOrg, assertPageInOrg } from "./utils/auth.js";
 import { parseTrSchedule } from "../../public/lib/tr-schedule.js";
 
 export default async function handler(req) {
@@ -38,8 +38,10 @@ export default async function handler(req) {
 
   if (!(await assertProjectInOrg(supabase, project_id, orgId))) return err("Project not found in your organization", 404);
   if (!(await assertPageInOrg(supabase, page_id, orgId))) return err("Page not found in your organization", 404);
-  if (!(await assertProjectUnlocked(supabase, project_id)))
-    return err("Project is locked (accepted final run) — unlock it from the Report page before re-running.", 423);
+  // Note: no assertProjectUnlocked check here — that helper doesn't exist on
+  // this branch's auth.js yet (main has it, development doesn't; pass-batch.js
+  // on this same branch doesn't call it either). Add it back once the lock
+  // feature merges into development.
 
   await supabase.from("pages").update({ status: "running", status_msg: null }).eq("id", page_id);
 
