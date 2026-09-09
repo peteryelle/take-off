@@ -56,6 +56,27 @@ export default async function handler(req) {
 
     const rows = parseTrSchedule(text_items, page.tr_schedule);
 
+    // TEMPORARY diagnostic (remove once the real-browser-extraction shape is
+    // confirmed): 0 rows against real production text_items, despite the
+    // exact same locator/columns/tolerances working on a Python-extracted
+    // fixture, points at a normalization-shape mismatch (multi-page.html
+    // normalizes cx_norm/cy_norm relative to a trimmed content frame with a
+    // Y-flip; the fixture used plain full-page-fraction). Capture what this
+    // pass actually received so that can be confirmed from Supabase directly,
+    // no DevTools round-trip needed.
+    let diag = null;
+    if (rows.length === 0) {
+      const xs = text_items.map((t) => t.cx_norm);
+      const ys = text_items.map((t) => t.cy_norm);
+      diag = {
+        item_count: text_items.length,
+        cx_range: [Math.min(...xs), Math.max(...xs)],
+        cy_range: [Math.min(...ys), Math.max(...ys)],
+        sample: text_items.slice(0, 15),
+        tr_schedule_cfg: page.tr_schedule,
+      };
+    }
+
     // Always-overwrite semantics for this page — same convention as the
     // device-library sync (legend_id-keyed), not an append. A re-run after a
     // config fix should replace, not accumulate duplicate TR rows.
@@ -78,8 +99,11 @@ export default async function handler(req) {
       if (insErr) throw new Error(`tr_schedule_rows insert failed: ${insErr.message}`);
     }
 
-    await supabase.from("pages").update({ status: "done", status_msg: null }).eq("id", page_id);
-    return ok({ tr_count: rows.length, rows });
+    await supabase.from("pages").update({
+      status: "done",
+      status_msg: diag ? JSON.stringify(diag) : null,
+    }).eq("id", page_id);
+    return ok({ tr_count: rows.length, rows, diag });
 
   } catch (e) {
     await supabase.from("pages").update({ status: "error", status_msg: e.message }).eq("id", page_id);
