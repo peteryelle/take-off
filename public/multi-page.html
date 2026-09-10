@@ -710,10 +710,12 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
            rejectWallCalibration, tryNextCandidate, persistAllPageGeometry } from './lib/wall-calibration-client.js';
   import { buildPageRouter } from './lib/wall-aware-path.js';
   import { extractTrReference } from './lib/tr-reference.js';
+  import { stitchRuns } from './lib/stitch-runs.js';
   window.TakeoffVec = { contentFrame, extractFilledSubpaths, extractCameraBlobs, debugNearbyStrokes,
                         classifySheetClass, deriveSheetClassSignals,
                         planSymbolDetection, locateVector, blobsToInstances,
                         runnerWorkForRole, unassignedPages,
+                        stitchRuns,
                         aggregateBom, buildGreedyPath,
                         extractStrokeSubpaths, scorePage, aggregateScores, classifyGeometry,
                         runWallCalibration, renderCalibrationPreview, confirmWallCalibration,
@@ -744,36 +746,6 @@ let pdfDoc       = null;
 // for tr_schedule pages (see its one call site) -- normal device-anchor
 // pages keep every run separate on purpose, since anchor detection expects
 // precise per-token positions, not merged prose.
-function stitchRuns(rawItems, opts = {}) {
-  const yTol = opts.yTol ?? 1.0;                    // PDF points, same-line tolerance
-  const gapSpaceFrac = opts.gapSpaceFrac ?? 0.15;    // × font size -> treat as a real space
-  const maxMergeFrac = opts.maxMergeFrac ?? 1.0;     // × font size -> beyond this, stop merging
-  // maxMergeFrac matters as much as gapSpaceFrac: without a ceiling, this
-  // merged real, separate table columns ("BUILDING NUMBER" + "LEVEL", an
-  // 11pt gap at font-size 10) into one string during testing. A genuine
-  // inter-word space within wrapped prose is a few points at most; a
-  // column-to-column gap in a drawn table is sized for cell content and
-  // is typically much wider than one font-height. One font-height as the
-  // cutoff kept the real word-boundary case (3pt gap, correctly merges)
-  // and rejected the real column case (11pt gap, correctly stays separate).
-  const sorted = [...rawItems].sort((a, b) => a.cy - b.cy || a.left - b.left);
-  const merged = [];
-  let cur = null;
-  for (const it of sorted) {
-    const gap = cur ? it.left - cur.right : null;
-    const fs = (cur?.fs) || 10;
-    if (cur && Math.abs(it.cy - cur.cy) <= yTol && gap <= fs * maxMergeFrac) {
-      cur.s = cur.s + (gap > fs * gapSpaceFrac ? ' ' : '') + it.s;
-      cur.right = Math.max(cur.right, it.right);
-    } else {
-      if (cur) merged.push(cur);
-      cur = { s: it.s, cy: it.cy, left: it.left, right: it.right, fs: it.fs };
-    }
-  }
-  if (cur) merged.push(cur);
-  return merged.map((r) => ({ s: r.s, cx: (r.left + r.right) / 2, cy: r.cy }));
-}
-
 let totalPages   = 0;
 let selectedPages = new Set();   // PDF page numbers
 let pageCache    = {};           // pageNum → { canvas, passBResult, pageId }
@@ -4178,7 +4150,7 @@ async function runBatch(quiet = false) {
         // artifact. tr-schedule.js's title/header search expects those back
         // together as one string. Normal device-anchor pages don't take this
         // path and are unaffected.
-        const stitchedItems = stitchRuns(allRaw).map((it) => ({
+        const stitchedItems = window.TakeoffVec.stitchRuns(allRaw).map((it) => ({
           str:       it.s,
           cx_norm:   parseFloat(((it.cx - xMin) / cW).toFixed(4)),
           cy_norm:   parseFloat((1 - (it.cy - yMin) / cH).toFixed(4)),
