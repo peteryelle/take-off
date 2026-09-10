@@ -16,7 +16,8 @@
   import { stitchRuns } from './lib/stitch-runs.js';
   import { parseCodedNotes } from './lib/parse-coded-notes.js';
   import { categorizeCodedNote } from './lib/categorize-coded-note.js';
-  window.TakeoffVec = { stitchRuns, parseCodedNotes, categorizeCodedNote };
+  import { resolveTrMatch } from './lib/normalize-tr-name.js';
+  window.TakeoffVec = { stitchRuns, parseCodedNotes, categorizeCodedNote, resolveTrMatch };
 </script>
 <style>
 * { box-sizing:border-box; margin:0; padding:0; }
@@ -57,8 +58,12 @@ button.danger { background:#3a1e1e; border-color:#7a3a3a; color:#f07a7a; }
 .hint { color:#555; font-size:11px; margin-top:6px; line-height:1.5; }
 .add-popup { position:absolute; background:#161616; border:1px solid #3a3a3a; border-radius:4px;
              padding:10px; z-index:20; box-shadow:0 4px 16px rgba(0,0,0,0.6); min-width:260px; }
-.add-popup select { width:100%; margin-bottom:8px; }
+.add-popup select, .add-popup input[type="text"] { width:100%; margin-bottom:8px; }
 .add-popup .btn-row { display:flex; gap:6px; }
+.resolve-note { font-size:11px; margin-bottom:8px; padding:6px; border-radius:3px; }
+.resolve-note.ok  { background:#0f2a0f; color:#7af07a; }
+.resolve-note.warn { background:#2a2000; color:#f0c040; }
+.resolve-note.err { background:#2a1414; color:#f07a7a; }
 </style>
 </head>
 <body>
@@ -90,9 +95,9 @@ button.danger { background:#3a1e1e; border-color:#7a3a3a; color:#f07a7a; }
 
   <div class="side-panel">
     <div class="card">
-      <h2>Crop Region</h2>
-      <div class="hint">Drag on the drawing to mark this room's boundary — auto-detecting room boundaries from text position was tried and found too fragile (grid layouts, inconsistent spacing between sheets). A human-drawn box is simpler and more reliable.</div>
-      <button onclick="confirmCrop()" id="confirm-crop-btn" disabled style="margin-top:8px;">Confirm crop → load devices</button>
+      <h2>Current Room</h2>
+      <div class="hint">Drag a box on the drawing to mark a room's boundary — you'll be prompted for its name right after. Auto-detecting room boundaries from text position was tried on a real 9-room sheet and found too fragile (grid layouts, inconsistent spacing between rows); a human-drawn box per room is simpler and reliable.</div>
+      <div id="current-room-label" class="resolve-note" style="margin-top:8px; display:none;"></div>
     </div>
 
     <div class="card">
@@ -149,7 +154,11 @@ async function loadTrRooms() {
 
 function onTrRoomChosen() {
   currentTrNumber = document.getElementById('tr-select').value || null;
-  document.getElementById('confirm-crop-btn').disabled = !(currentTrNumber && cropRect);
+  // If a crop box is already drawn on this page, switch the review to this
+  // room using that same box (useful for re-checking a room without
+  // re-drawing). If no box drawn yet, this just pre-notes the selection --
+  // the actual room association happens when a box is drawn and named.
+  if (currentTrNumber && cropRect) confirmCrop();
 }
 
 // ── PDF load + page render ──────────────────────────────────────
@@ -198,7 +207,7 @@ async function loadPage() {
   cropRect = null;
   devices = [];
   renderMarkers();
-  document.getElementById('confirm-crop-btn').disabled = true;
+  document.getElementById('current-room-label').style.display = 'none';
   document.getElementById('vision-btn').disabled = true;
 }
 
@@ -214,35 +223,109 @@ function wireCropDrag(canvas) {
     const end = { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
     const dx = Math.abs(end.x - dragStart.x), dy = Math.abs(end.y - dragStart.y);
     if (dx < 0.01 && dy < 0.01) {
-      // A click, not a drag -> if a crop is already confirmed, treat as "add device here".
-      if (cropRect) onCanvasClick(end);
+      // A click, not a drag -> if a room is already confirmed, treat as "add device here".
+      if (cropRect && currentTrNumber) onCanvasClick(end);
       dragStart = null;
       return;
     }
-    cropRect = {
+    const pendingCrop = {
       x0: Math.min(dragStart.x, end.x), y0: Math.min(dragStart.y, end.y),
       x1: Math.max(dragStart.x, end.x), y1: Math.max(dragStart.y, end.y),
     };
     dragStart = null;
-    drawCropOverlay();
-    document.getElementById('confirm-crop-btn').disabled = !currentTrNumber;
+    drawCropOverlay(pendingCrop);
+    showTrNamePopup(pendingCrop);
   };
 }
 
-function drawCropOverlay() {
-  if (!cropRect) return;
+function drawCropOverlay(rect) {
+  const box = rect || cropRect;
+  if (!box) return;
   const canvas = document.getElementById('page-canvas');
   const ctx = canvas.getContext('2d');
   ctx.save();
   ctx.strokeStyle = '#f0c040'; ctx.lineWidth = 2;
-  ctx.strokeRect(cropRect.x0 * canvas.width, cropRect.y0 * canvas.height,
-                 (cropRect.x1 - cropRect.x0) * canvas.width, (cropRect.y1 - cropRect.y0) * canvas.height);
+  ctx.strokeRect(box.x0 * canvas.width, box.y0 * canvas.height,
+                 (box.x1 - box.x0) * canvas.width, (box.y1 - box.y0) * canvas.height);
   ctx.restore();
+}
+
+// ── Name the room right after drawing its crop box ───────────────
+// Deliberately crop-first, name-second: the natural workflow on a 9-room
+// sheet is draw a box around one room, name it, move to the next box — not
+// pre-picking a name up top before knowing which box goes with it.
+function showTrNamePopup(pendingCrop) {
+  document.querySelectorAll('.add-popup').forEach((el) => el.remove());
+  const canvas = document.getElementById('page-canvas');
+  const popup = document.createElement('div');
+  popup.className = 'add-popup';
+  popup.style.left = (pendingCrop.x1 * canvas.clientWidth + 8) + 'px';
+  popup.style.top  = (pendingCrop.y0 * canvas.clientHeight) + 'px';
+  popup.innerHTML = `
+    <select id="tr-name-select" onchange="document.getElementById('tr-name-input').value=this.value">
+      <option value="">— or pick from schedule —</option>
+      ${scheduleRows.map((r) => `<option value="${r.tr_number}">${r.tr_number}</option>`).join('')}
+    </select>
+    <input type="text" id="tr-name-input" placeholder="type the room name as shown on the drawing (e.g. EB51A-1)">
+    <div id="tr-resolve-feedback"></div>
+    <div class="btn-row">
+      <button onclick="resolveAndConfirmCrop()">Confirm room name</button>
+      <button class="danger" onclick="cancelCropNaming()">Cancel</button>
+    </div>`;
+  document.getElementById('canvas-pane').appendChild(popup);
+  window._pendingCrop = pendingCrop;
+  document.getElementById('tr-name-input').focus();
+}
+
+function cancelCropNaming() {
+  document.querySelectorAll('.add-popup').forEach((el) => el.remove());
+  window._pendingCrop = null;
+  // Redraw the page to clear the abandoned crop overlay.
+  loadPage();
+}
+
+async function resolveAndConfirmCrop() {
+  const typed = document.getElementById('tr-name-input').value.trim();
+  const feedback = document.getElementById('tr-resolve-feedback');
+  if (!typed) { feedback.className = 'resolve-note err'; feedback.textContent = 'enter a room name'; return; }
+
+  // scheduleRows entries are { id, tr_number, rack_count } -- resolveTrMatch
+  // accepts row objects directly (not just bare strings) precisely so an
+  // ambiguous result can carry the real colliding rows, not just their names.
+  const result = window.TakeoffVec.resolveTrMatch(typed, scheduleRows);
+
+  if (result.match && result.tier === 'exact') {
+    feedback.className = 'resolve-note ok';
+    feedback.textContent = `matched: ${result.match}`;
+  } else if (result.match) {
+    feedback.className = 'resolve-note warn';
+    feedback.textContent = `matched to schedule as "${result.match}" (resolved via ${result.tier} -- typed "${typed}")`;
+  } else if (result.candidates) {
+    feedback.className = 'resolve-note err';
+    feedback.innerHTML = `ambiguous -- ${result.candidates.length} schedule rows match: ` +
+      result.candidates.map((c) => `<button style="margin:2px;" onclick="document.getElementById('tr-name-input').value='${c.tr_number}'; resolveAndConfirmCrop();">${c.tr_number}</button>`).join(' ');
+    return; // don't proceed until they pick one explicitly
+  } else {
+    feedback.className = 'resolve-note warn';
+    feedback.textContent = `"${typed}" not found in the TR schedule -- proceeding will use it as-is (rack_count won't roll up unless this room is added to the schedule)`;
+  }
+
+  const finalName = result.match || typed;
+  cropRect = window._pendingCrop;
+  currentTrNumber = finalName;
+  document.getElementById('tr-select').value = scheduleRows.some((r) => r.tr_number === finalName) ? finalName : '';
+  document.querySelectorAll('.add-popup').forEach((el) => el.remove());
+  await confirmCrop();
 }
 
 // ── Confirm crop → load existing devices ────────────────────────
 async function confirmCrop() {
   if (!cropRect || !currentTrNumber) return;
+  const label = document.getElementById('current-room-label');
+  label.style.display = 'block';
+  label.className = 'resolve-note ok';
+  label.textContent = `reviewing: ${currentTrNumber}`;
+
   setStatus('resolving page record…', 'run');
   // The page this drawing lives on must already exist in `pages` (created by
   // the normal upload/batch flow) -- this page does not create pages rows,
@@ -403,7 +486,8 @@ window.loadTrRooms = loadTrRooms;
 window.onTrRoomChosen = onTrRoomChosen;
 window.onPdfChosen = onPdfChosen;
 window.loadPage = loadPage;
-window.confirmCrop = confirmCrop;
+window.resolveAndConfirmCrop = resolveAndConfirmCrop;
+window.cancelCropNaming = cancelCropNaming;
 window.runVisionDetection = runVisionDetection;
 window.submitAdd = submitAdd;
 window.saveRollupToSchedule = saveRollupToSchedule;
