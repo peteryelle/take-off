@@ -28,5 +28,12 @@ ok(topRight>=Math.ceil(fx.length*0.7), `top suggestion correct on >=70% (${topRi
 // (c) the classifier always returns a confidence the UI can sort on
 ok(fx.every(p=>['high','medium','low'].includes(classifyPageRole(p).confidence)), `every page has a sortable confidence`);
 
+console.log('\nNote: per-drawing captions on a multi-drawing sheet (e.g. T-401\'s');
+console.log('"B01 - BASEMENT - A030A-1 - ENLARGED TELECOM NEW", 9 tokens counting');
+console.log('hyphens) exceed extractTitlePhrases\' 8-word cap and never become a');
+console.log('candidate phrase -- confirmed real behavior, not a bug. Classification');
+console.log('still works because the SHEET-level title ("ENLARGED DATA ROOMS") is');
+console.log('short enough to survive and carries the same signal.');
+
 console.log('\n'+(fail===0?`ALL PASS — ${pass} assertions; ${topRight}/${fx.length} top-correct, all roles offered`:`${fail} FAILED`));
 process.exit(fail?1:0);

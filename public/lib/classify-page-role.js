@@ -23,11 +23,18 @@
 
 const norm = (s) => String(s).trim().toUpperCase().replace(/\s+/g, ' ');
 
-// Title-phrase patterns -> role. Order matters only for tie display; scoring is
-// additive. Each pattern is matched against extracted title-like phrases.
+// Title-phrase patterns -> role. Order matters both for tie display AND for
+// per-phrase priority (a phrase can only grant ONE role — first match wins)
+// — tr_room is checked before the generic detail pattern so "ENLARGED
+// TELECOM NEW" / "ENLARGED DATA ROOMS" (a TR room's own enlarged floor plan,
+// confirmed on a real sheet, T-401) scores tr_room, not detail. A true
+// reference/typical detail sheet (rack elevations, wall-mount enclosure
+// details) has no TELECOM/DATA ROOM phrase and still falls through to detail
+// as before.
 const TITLE_PATTERNS = [
   { role: 'schedule', re: /\bSCHEDULE\b/ },
   { role: 'legend',   re: /\b(LEGEND|ABBREVIATION|ABBREVIATIONS|SYMBOLS?)\b/ },
+  { role: 'tr_room',  re: /ENLARGED\s+(DATA\s+ROOMS?|TELECOM)\b/ },
   { role: 'detail',   re: /\b(DETAIL|ELEVATION|TYPICAL|ENLARGED|RISER|DIAGRAM)\b/ },
   { role: 'plan',     re: /\bPLAN\b/ },
 ];
@@ -61,7 +68,7 @@ export function classifyPageRole(page = {}) {
     ? page.titlePhrases.map(norm)
     : extractTitlePhrases(page.lines || []);
 
-  const scores = { plan: 0, schedule: 0, legend: 0, detail: 0 };
+  const scores = { plan: 0, schedule: 0, legend: 0, detail: 0, tr_room: 0 };
   const reasons = [];
 
   // Title phrases: a phrase naming a role scores that role. A phrase can only

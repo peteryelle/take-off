@@ -270,6 +270,7 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
     <button class="info" onclick="bulkSetRole('schedule')" style="padding:3px 10px; font-size:12px;">schedule</button>
     <button class="info" onclick="bulkSetRole('legend')"   style="padding:3px 10px; font-size:12px;">legend</button>
     <button class="info" onclick="bulkSetRole('detail')"   style="padding:3px 10px; font-size:12px;">detail</button>
+    <button class="info" onclick="bulkSetRole('tr_room')"  style="padding:3px 10px; font-size:12px;" title="Enlarged TR-room floor plan (T-401 series) — its own workflow via tr-room-review.html, not counted by Batch Run">tr_room</button>
     <button class="info" onclick="bulkSetRole('skip')"     style="padding:3px 10px; font-size:12px;">skip</button>
     <button onclick="bulkClearRoles()" style="padding:3px 10px; font-size:12px;" title="unset role on selected pages (does not change the selection)">clear roles</button>
     <span style="color:#666; font-size:11px;">— tip: type a range above (e.g. 1-39) &amp; Apply, stamp the common role, then fix exceptions in 🔍 view</span>
@@ -683,6 +684,7 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
     <button data-role="schedule" onclick="prSetRole('schedule')">schedule</button>
     <button data-role="legend"   onclick="prSetRole('legend')">legend</button>
     <button data-role="detail"   onclick="prSetRole('detail')">detail</button>
+    <button data-role="tr_room"  onclick="prSetRole('tr_room')" title="Enlarged TR-room floor plan (T-401 series) — own workflow, not counted by Batch Run">tr_room</button>
     <button data-role="skip"     onclick="prSetRole('skip')">skip</button>
   </div>
   <div id="pr-wrap" style="overflow:hidden; width:94vw; height:74vh; position:relative;
@@ -1326,6 +1328,7 @@ async function renderThumbnails() {
       '<option value="schedule">schedule</option>' +
       '<option value="legend">legend</option>' +
       '<option value="detail">detail</option>' +
+      '<option value="tr_room">tr_room</option>' +
       '<option value="skip">skip</option>';
     sel.value = pageCache[n]?.page_role ?? '';
     sel.onclick  = (e) => e.stopPropagation();

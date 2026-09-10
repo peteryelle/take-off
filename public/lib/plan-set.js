@@ -30,14 +30,22 @@ import { classifySheet } from './classify-archetype.js';
 // can BLOCK rather than count: nothing counts until a human has named the page.
 //   plan     -> 'count'          (detect + symbol)
 //   schedule -> 'read_schedule'  (schedule reader; symbol detection skipped)
-//   legend|detail|skip -> 'skip' (not counted)
+//   legend|detail|tr_room|skip -> 'skip' (not counted)
 //   null / anything else -> 'needs_role' (BLOCK)
+//
+// tr_room (an enlarged TR-room floor plan, e.g. T-401 series) is 'skip' here
+// for the SAME reason detail is: it doesn't go through pass-batch.js's
+// device-anchor pipeline at all. Unlike detail, it isn't simply uncounted —
+// it has its own separate workflow (tr-room-review.html's vision-based
+// device detection), which this dispatch has no opinion on; it only decides
+// what Batch Run does, and Batch Run does nothing with either role.
 export function runnerWorkForRole(role) {
   switch (role) {
     case 'plan': return 'count';
     case 'schedule': return 'read_schedule';
     case 'legend':
     case 'detail':
+    case 'tr_room':
     case 'skip': return 'skip';
     default: return 'needs_role';
   }

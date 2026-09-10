@@ -6,6 +6,7 @@ A(runnerWorkForRole('plan')==='count', "plan -> count");
 A(runnerWorkForRole('schedule')==='read_schedule', "schedule -> read_schedule");
 A(runnerWorkForRole('legend')==='skip', "legend -> skip");
 A(runnerWorkForRole('detail')==='skip', "detail -> skip");
+A(runnerWorkForRole('tr_room')==='skip', "tr_room -> skip (has its own workflow, not pass-batch)");
 A(runnerWorkForRole('skip')==='skip', "skip -> skip");
 A(runnerWorkForRole(null)==='needs_role', "null -> needs_role (BLOCK)");
 A(runnerWorkForRole(undefined)==='needs_role', "unassigned -> needs_role (BLOCK)");
