@@ -46,6 +46,8 @@ export function runnerWorkForRole(role) {
     case 'legend':
     case 'detail':
     case 'tr_room':
+    case 'rack_detail':
+    case 'fiber_riser':
     case 'skip': return 'skip';
     default: return 'needs_role';
   }
