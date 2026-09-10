@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TR Room Device Review — Take-off</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="auth.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>pdfjsLib.GlobalWorkerOptions.workerSrc =
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
+<script type="module">
+  // Pure ESM libs, same window.TakeoffVec pattern multi-page.html and
+  // discover.html already use — a separate page, not shared inline code,
+  // but the same reuse-not-reimplement convention.
+  import { stitchRuns } from './lib/stitch-runs.js';
+  import { parseCodedNotes } from './lib/parse-coded-notes.js';
+  import { categorizeCodedNote } from './lib/categorize-coded-note.js';
+  window.TakeoffVec = { stitchRuns, parseCodedNotes, categorizeCodedNote };
+</script>
+<style>
+* { box-sizing:border-box; margin:0; padding:0; }
+body { font-family:monospace; background:#0d0d0d; color:#e0e0e0; font-size:13px; }
+h1 { color:#f0c040; font-size:16px; letter-spacing:2px; text-transform:uppercase; }
+h2 { color:#f0c040; font-size:11px; letter-spacing:1px; text-transform:uppercase; margin-bottom:10px; }
+.top-bar { padding:16px 20px 8px; border-bottom:1px solid #1e1e1e; }
+.subtitle { color:#555; font-size:11px; margin-top:3px; }
+.config-bar { display:flex; gap:10px; align-items:center; padding:8px 20px;
+              background:#0a0a0a; border-bottom:1px solid #1e1e1e; flex-wrap:wrap; }
+.config-bar label { color:#666; font-size:11px; }
+input[type="text"], input[type="number"], select { background:#111; border:1px solid #2a2a2a;
+  color:#e0e0e0; padding:4px 8px; border-radius:3px; font-family:monospace; font-size:12px; }
+button { background:#1e3a1e; border:1px solid #3a7a3a; color:#7af07a; padding:5px 12px;
+         border-radius:3px; cursor:pointer; font-family:monospace; font-size:12px; }
+button:hover { background:#2a4a2a; }
+button:disabled { opacity:0.3; cursor:not-allowed; }
+button.amber { background:#2a2000; border-color:#6a5000; color:#f0c040; }
+button.amber:hover { background:#332800; }
+button.danger { background:#3a1e1e; border-color:#7a3a3a; color:#f07a7a; }
+.status { font-size:11px; color:#666; }
+.status.ok  { color:#7af07a; }
+.status.err { color:#f07a7a; }
+.status.run { color:#f0c040; }
+.body { display:flex; gap:16px; padding:16px 20px; }
+.canvas-pane { position:relative; border:1px solid #2a2a2a; background:#000; flex:1; min-width:0; }
+.canvas-pane canvas { display:block; max-width:100%; cursor:crosshair; }
+.marker { position:absolute; width:14px; height:14px; margin:-7px 0 0 -7px;
+          border-radius:50%; border:2px solid #f0c040; background:rgba(240,192,64,0.25);
+          cursor:pointer; font-size:9px; color:#f0c040; display:flex; align-items:center; justify-content:center; }
+.marker.manual { border-color:#7ac0f0; background:rgba(122,192,240,0.25); color:#7ac0f0; }
+.marker:hover { background:rgba(240,80,80,0.5); border-color:#f07a7a; }
+.side-panel { width:320px; flex-shrink:0; }
+.card { background:#111; border:1px solid #2a2a2a; border-radius:4px; padding:14px; margin-bottom:12px; }
+.rollup-row { display:flex; justify-content:space-between; padding:3px 0; border-bottom:1px solid #1e1e1e; font-size:12px; }
+.rollup-row .cat { color:#999; }
+.rollup-row .count { color:#f0c040; font-weight:bold; }
+.hint { color:#555; font-size:11px; margin-top:6px; line-height:1.5; }
+.add-popup { position:absolute; background:#161616; border:1px solid #3a3a3a; border-radius:4px;
+             padding:10px; z-index:20; box-shadow:0 4px 16px rgba(0,0,0,0.6); min-width:260px; }
+.add-popup select { width:100%; margin-bottom:8px; }
+.add-popup .btn-row { display:flex; gap:6px; }
+</style>
+</head>
+<body>
+
+<div class="top-bar">
+  <h1>TR Room Device Review</h1>
+  <div class="subtitle">Vision-proposed + human-confirmed device counts per TR room — feeds tr_schedule_rows rollups (rack_count, etc.)</div>
+</div>
+
+<div class="config-bar">
+  <label>Netlify URL</label>
+  <input type="text" id="netlify-url" value="https://winquest-take-off.netlify.app" size="34">
+  <label>Project ID</label>
+  <input type="number" id="project-id" size="4">
+  <button onclick="loadTrRooms()">Load Project</button>
+  <label>PDF</label>
+  <input type="file" id="pdf-file" accept="application/pdf" onchange="onPdfChosen(event)">
+  <label>Page</label>
+  <input type="number" id="page-num" value="1" min="1" size="3" onchange="loadPage()">
+  <label>TR Room</label>
+  <select id="tr-select" onchange="onTrRoomChosen()"><option value="">— load project first —</option></select>
+  <span id="status" class="status"></span>
+</div>
+
+<div class="body">
+  <div class="canvas-pane" id="canvas-pane">
+    <canvas id="page-canvas"></canvas>
+  </div>
+
+  <div class="side-panel">
+    <div class="card">
+      <h2>Crop Region</h2>
+      <div class="hint">Drag on the drawing to mark this room's boundary — auto-detecting room boundaries from text position was tried and found too fragile (grid layouts, inconsistent spacing between sheets). A human-drawn box is simpler and more reliable.</div>
+      <button onclick="confirmCrop()" id="confirm-crop-btn" disabled style="margin-top:8px;">Confirm crop → load devices</button>
+    </div>
+
+    <div class="card">
+      <h2>Vision Detection</h2>
+      <div class="hint">Runs Claude vision against the cropped room image, using this sheet's own coded notes. Every result is a proposal — review before trusting it.</div>
+      <button onclick="runVisionDetection()" id="vision-btn" disabled style="margin-top:8px;">Run vision detection</button>
+    </div>
+
+    <div class="card">
+      <h2>Devices in this room</h2>
+      <div class="hint" style="margin-bottom:8px;">Click empty space on the drawing to add a device. Click an existing marker to remove it.</div>
+      <div id="rollup"></div>
+    </div>
+
+    <div class="card">
+      <button class="amber" onclick="saveRollupToSchedule()" id="save-btn" disabled>Save rack_count to TR Schedule</button>
+      <div class="hint">Writes the current rack_new count for this room into tr_schedule_rows.rack_count.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+function base() { return document.getElementById('netlify-url').value.replace(/\/$/, ''); }
+function setStatus(msg, cls) { const s = document.getElementById('status'); s.textContent = msg; s.className = 'status ' + (cls || ''); }
+
+let pdfDoc = null;
+let currentPageNum = 1;
+let projectId = null;
+let currentPageId = null; // pages.id for the currently loaded PDF page — must exist in DB already
+let currentTrNumber = null;
+let scheduleRows = [];     // tr_schedule_rows for this project — populated on Load Project
+let codedNotes = [];       // parsed from the current page's text
+let cropRect = null;       // { x0, y0, x1, y1 } normalized to the FULL PAGE
+let devices = [];          // tr_room_devices for the current (page_id, tr_number)
+let dragStart = null;
+
+// ── Project / TR room list ──────────────────────────────────────
+async function loadTrRooms() {
+  projectId = parseInt(document.getElementById('project-id').value, 10);
+  if (!projectId) { setStatus('enter a project id', 'err'); return; }
+  setStatus('loading TR rooms…', 'run');
+  const { data, error } = await window.TakeoffAuth.client
+    .from('tr_schedule_rows')
+    .select('id, tr_number, rack_count')
+    .eq('project_id', projectId)
+    .order('tr_number');
+  if (error) { setStatus('error: ' + error.message, 'err'); return; }
+  scheduleRows = data || [];
+  const sel = document.getElementById('tr-select');
+  sel.innerHTML = '<option value="">— select a TR room —</option>' +
+    scheduleRows.map((r) => `<option value="${r.tr_number}">${r.tr_number}${r.rack_count != null ? ` (rack_count: ${r.rack_count})` : ''}</option>`).join('');
+  setStatus(`${scheduleRows.length} TR rooms loaded`, 'ok');
+}
+
+function onTrRoomChosen() {
+  currentTrNumber = document.getElementById('tr-select').value || null;
+  document.getElementById('confirm-crop-btn').disabled = !(currentTrNumber && cropRect);
+}
+
+// ── PDF load + page render ──────────────────────────────────────
+async function onPdfChosen(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const buf = await file.arrayBuffer();
+  pdfDoc = await pdfjsLib.getDocument({ data: buf }).promise;
+  setStatus(`PDF loaded, ${pdfDoc.numPages} pages`, 'ok');
+  await loadPage();
+}
+
+async function loadPage() {
+  if (!pdfDoc) return;
+  currentPageNum = parseInt(document.getElementById('page-num').value, 10) || 1;
+  const page = await pdfDoc.getPage(currentPageNum);
+  const viewport = page.getViewport({ scale: 1.5 });
+  const canvas = document.getElementById('page-canvas');
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  const ctx = canvas.getContext('2d');
+  await page.render({ canvasContext: ctx, viewport }).promise;
+
+  // Real extraction, stitched — same lesson as tr-schedule.js's file header:
+  // pdf.js's raw per-run text needs reassembling before any title/legend
+  // search runs against it.
+  const textContent = await page.getTextContent();
+  const raw = textContent.items.map((item) => {
+    const tx = item.transform[4], ty = item.transform[5];
+    const tw = item.width ?? 0;
+    const fs = Math.abs(item.transform[3]) || 10;
+    return { s: item.str, cy: viewport.height - ty, left: tx, right: tx + tw, fs };
+  }).filter((it) => it.s.trim());
+
+  const stitched = window.TakeoffVec.stitchRuns(raw);
+  const stitchedItems = stitched.map((it) => ({
+    str: it.s,
+    cx_norm: it.cx / viewport.width,
+    cy_norm: it.cy / viewport.height,
+  }));
+
+  codedNotes = window.TakeoffVec.parseCodedNotes(stitchedItems);
+  setStatus(`page ${currentPageNum} loaded — ${codedNotes.length} coded notes found`, 'ok');
+
+  wireCropDrag(canvas);
+  cropRect = null;
+  devices = [];
+  renderMarkers();
+  document.getElementById('confirm-crop-btn').disabled = true;
+  document.getElementById('vision-btn').disabled = true;
+}
+
+// ── Crop-box drag ────────────────────────────────────────────────
+function wireCropDrag(canvas) {
+  canvas.onmousedown = (e) => {
+    const r = canvas.getBoundingClientRect();
+    dragStart = { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
+  };
+  canvas.onmouseup = (e) => {
+    if (!dragStart) return;
+    const r = canvas.getBoundingClientRect();
+    const end = { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
+    const dx = Math.abs(end.x - dragStart.x), dy = Math.abs(end.y - dragStart.y);
+    if (dx < 0.01 && dy < 0.01) {
+      // A click, not a drag -> if a crop is already confirmed, treat as "add device here".
+      if (cropRect) onCanvasClick(end);
+      dragStart = null;
+      return;
+    }
+    cropRect = {
+      x0: Math.min(dragStart.x, end.x), y0: Math.min(dragStart.y, end.y),
+      x1: Math.max(dragStart.x, end.x), y1: Math.max(dragStart.y, end.y),
+    };
+    dragStart = null;
+    drawCropOverlay();
+    document.getElementById('confirm-crop-btn').disabled = !currentTrNumber;
+  };
+}
+
+function drawCropOverlay() {
+  if (!cropRect) return;
+  const canvas = document.getElementById('page-canvas');
+  const ctx = canvas.getContext('2d');
+  ctx.save();
+  ctx.strokeStyle = '#f0c040'; ctx.lineWidth = 2;
+  ctx.strokeRect(cropRect.x0 * canvas.width, cropRect.y0 * canvas.height,
+                 (cropRect.x1 - cropRect.x0) * canvas.width, (cropRect.y1 - cropRect.y0) * canvas.height);
+  ctx.restore();
+}
+
+// ── Confirm crop → load existing devices ────────────────────────
+async function confirmCrop() {
+  if (!cropRect || !currentTrNumber) return;
+  setStatus('resolving page record…', 'run');
+  // The page this drawing lives on must already exist in `pages` (created by
+  // the normal upload/batch flow) -- this page does not create pages rows,
+  // it only reads/writes tr_room_devices against an existing one.
+  const { data: pageRow, error: pageErr } = await window.TakeoffAuth.client
+    .from('pages').select('id').eq('project_id', projectId).eq('pdf_page_number', currentPageNum).maybeSingle();
+  if (pageErr || !pageRow) {
+    setStatus('no page record found for this project/page number — load it through Batch Run first', 'err');
+    return;
+  }
+  currentPageId = pageRow.id;
+  document.getElementById('vision-btn').disabled = false;
+  await loadDevices();
+}
+
+async function loadDevices() {
+  if (!currentPageId || !currentTrNumber) return;
+  setStatus('loading devices…', 'run');
+  const r = await fetch(`${base()}/api/tr-room-device?page_id=${currentPageId}&tr_number=${encodeURIComponent(currentTrNumber)}`);
+  const j = await r.json();
+  if (!r.ok) { setStatus('error: ' + j.error, 'err'); return; }
+  devices = j;
+  renderMarkers();
+  renderRollup();
+  document.getElementById('save-btn').disabled = false;
+  setStatus(`${devices.length} devices loaded for ${currentTrNumber}`, 'ok');
+}
+
+// ── Markers (page-normalized coords → pixel position on the canvas) ──
+function renderMarkers() {
+  document.querySelectorAll('.marker').forEach((el) => el.remove());
+  const canvas = document.getElementById('page-canvas');
+  const pane = document.getElementById('canvas-pane');
+  const scaleX = canvas.clientWidth / canvas.width || 1;
+  const scaleY = canvas.clientHeight / canvas.height || 1;
+  for (const d of devices) {
+    const el = document.createElement('div');
+    el.className = 'marker' + (d.source === 'manual' ? ' manual' : '');
+    el.style.left = (d.x_norm * canvas.width * scaleX) + 'px';
+    el.style.top  = (d.y_norm * canvas.height * scaleY) + 'px';
+    el.title = `${d.coded_note_number != null ? '#' + d.coded_note_number + ' ' : ''}${d.category || 'uncategorized'} (${d.source}) — click to remove`;
+    el.textContent = d.coded_note_number ?? '?';
+    el.onclick = (e) => { e.stopPropagation(); removeDevice(d.id); };
+    pane.appendChild(el);
+  }
+}
+
+async function removeDevice(id) {
+  if (!confirm('Remove this device?')) return;
+  const r = await fetch(`${base()}/api/tr-room-device?id=${id}`, { method: 'DELETE' });
+  if (!r.ok) { const j = await r.json(); setStatus('error: ' + j.error, 'err'); return; }
+  devices = devices.filter((d) => d.id !== id);
+  renderMarkers();
+  renderRollup();
+}
+
+// ── Add device (click empty space inside the confirmed crop) ────
+function onCanvasClick(normPos) {
+  if (!cropRect) return;
+  if (normPos.x < cropRect.x0 || normPos.x > cropRect.x1 || normPos.y < cropRect.y0 || normPos.y > cropRect.y1) return; // outside the room
+  showAddPopup(normPos);
+}
+
+function showAddPopup(normPos) {
+  document.querySelectorAll('.add-popup').forEach((el) => el.remove());
+  const canvas = document.getElementById('page-canvas');
+  const popup = document.createElement('div');
+  popup.className = 'add-popup';
+  popup.style.left = (normPos.x * canvas.clientWidth) + 'px';
+  popup.style.top  = (normPos.y * canvas.clientHeight) + 'px';
+  popup.innerHTML = `
+    <select id="add-note-select">
+      ${codedNotes.map((n) => `<option value="${n.number}">#${n.number} — ${n.text.slice(0, 60)}${n.text.length > 60 ? '…' : ''}</option>`).join('')}
+      <option value="">(no matching coded note)</option>
+    </select>
+    <div class="btn-row">
+      <button onclick="submitAdd(${normPos.x}, ${normPos.y})">Add</button>
+      <button class="danger" onclick="this.closest('.add-popup').remove()">Cancel</button>
+    </div>`;
+  document.getElementById('canvas-pane').appendChild(popup);
+}
+
+async function submitAdd(x_norm, y_norm) {
+  const sel = document.getElementById('add-note-select');
+  const noteNum = sel.value ? parseInt(sel.value, 10) : null;
+  const note = noteNum != null ? codedNotes.find((n) => n.number === noteNum) : null;
+  const r = await fetch(`${base()}/api/tr-room-device`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      project_id: projectId, page_id: currentPageId, tr_number: currentTrNumber,
+      coded_note_number: noteNum, coded_note_text: note?.text ?? null,
+      x_norm, y_norm,
+    }),
+  });
+  const j = await r.json();
+  document.querySelectorAll('.add-popup').forEach((el) => el.remove());
+  if (!r.ok) { setStatus('error: ' + j.error, 'err'); return; }
+  devices.push(j);
+  renderMarkers();
+  renderRollup();
+}
+
+// ── Vision detection ─────────────────────────────────────────────
+async function runVisionDetection() {
+  if (!cropRect || !currentPageId || !currentTrNumber) return;
+  setStatus('cropping + running vision detection…', 'run');
+  const canvas = document.getElementById('page-canvas');
+  const cropCanvas = document.createElement('canvas');
+  cropCanvas.width = (cropRect.x1 - cropRect.x0) * canvas.width;
+  cropCanvas.height = (cropRect.y1 - cropRect.y0) * canvas.height;
+  cropCanvas.getContext('2d').drawImage(
+    canvas,
+    cropRect.x0 * canvas.width, cropRect.y0 * canvas.height, cropCanvas.width, cropCanvas.height,
+    0, 0, cropCanvas.width, cropCanvas.height
+  );
+  const dataUrl = cropCanvas.toDataURL('image/png');
+  const base64 = dataUrl.split(',')[1];
+
+  const r = await fetch(`${base()}/api/pass-tr-room-vision`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      project_id: projectId, page_id: currentPageId, tr_number: currentTrNumber,
+      room_image_base64: base64, coded_notes: codedNotes,
+    }),
+  });
+  const j = await r.json();
+  if (!r.ok) { setStatus('vision error: ' + j.error, 'err'); return; }
+  setStatus(`vision found ${j.devices_found} device(s)${j.warnings?.length ? ' — ' + j.warnings.join('; ') : ''}`, 'ok');
+  await loadDevices();
+}
+
+// ── Rollup ────────────────────────────────────────────────────────
+function renderRollup() {
+  const counts = {};
+  for (const d of devices) {
+    const k = d.category || 'uncategorized';
+    counts[k] = (counts[k] || 0) + 1;
+  }
+  const el = document.getElementById('rollup');
+  const keys = Object.keys(counts).sort();
+  el.innerHTML = keys.length
+    ? keys.map((k) => `<div class="rollup-row"><span class="cat">${k}</span><span class="count">${counts[k]}</span></div>`).join('')
+    : '<div class="hint">no devices yet</div>';
+}
+
+async function saveRollupToSchedule() {
+  if (!currentTrNumber) return;
+  const rackNew = devices.filter((d) => d.category === 'rack_new').length;
+  const { error } = await window.TakeoffAuth.client
+    .from('tr_schedule_rows').update({ rack_count: rackNew })
+    .eq('project_id', projectId).eq('tr_number', currentTrNumber);
+  if (error) { setStatus('save error: ' + error.message, 'err'); return; }
+  setStatus(`saved rack_count=${rackNew} for ${currentTrNumber}`, 'ok');
+  await loadTrRooms();
+}
+
+window.loadTrRooms = loadTrRooms;
+window.onTrRoomChosen = onTrRoomChosen;
+window.onPdfChosen = onPdfChosen;
+window.loadPage = loadPage;
+window.confirmCrop = confirmCrop;
+window.runVisionDetection = runVisionDetection;
+window.submitAdd = submitAdd;
+window.saveRollupToSchedule = saveRollupToSchedule;
+</script>
+</body>
+</html>
