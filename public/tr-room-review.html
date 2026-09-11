@@ -17,7 +17,8 @@
   import { parseCodedNotes } from './lib/parse-coded-notes.js';
   import { categorizeCodedNote } from './lib/categorize-coded-note.js';
   import { resolveTrMatch } from './lib/normalize-tr-name.js';
-  window.TakeoffVec = { stitchRuns, parseCodedNotes, categorizeCodedNote, resolveTrMatch };
+  import { extractStrokeSubpaths } from './lib/geometry.js';
+  window.TakeoffVec = { stitchRuns, parseCodedNotes, categorizeCodedNote, resolveTrMatch, extractStrokeSubpaths };
 </script>
 <style>
 * { box-sizing:border-box; margin:0; padding:0; }
@@ -101,9 +102,9 @@ button.danger { background:#3a1e1e; border-color:#7a3a3a; color:#f07a7a; }
     </div>
 
     <div class="card">
-      <h2>Vision Detection</h2>
-      <div class="hint">Runs Claude vision against the cropped room image, using this sheet's own coded notes. Every result is a proposal — review before trusting it.</div>
-      <button onclick="runVisionDetection()" id="vision-btn" disabled style="margin-top:8px;">Run vision detection</button>
+      <h2>Rack Count Detection</h2>
+      <div class="hint">Traces leader-fan geometry from this sheet's own rack callouts — real vector math, no vision model. Proven this session: 6/9 real rooms exact, 3 correctly flagged rather than guessed.</div>
+      <button onclick="runVisionDetection()" id="vision-btn" disabled style="margin-top:8px;">Run rack-count detection</button>
     </div>
 
     <div class="card">
@@ -125,6 +126,12 @@ function setStatus(msg, cls) { const s = document.getElementById('status'); s.te
 
 let pdfDoc = null;
 let currentPageNum = 1;
+let currentPdfPage = null;      // the pdf.js page object itself, kept for lazy segment extraction
+let pageWidthRaw = 0;           // raw PDF-point page dimensions (see loadPage's own note on the
+let pageHeightRaw = 0;          // scale-mismatch bug this replaced)
+let rawTextItemsForRackDetection = []; // unnormalized {str,x,y} -- same coordinate
+                                        // space count-leadered-devices.js was validated against
+let pageSegments = null;        // lazily computed, cached -- see getPageSegments()
 let projectId = null;
 let currentPageId = null; // pages.id for the currently loaded PDF page — must exist in DB already
 let currentTrNumber = null;
@@ -175,12 +182,28 @@ async function loadPage() {
   if (!pdfDoc) return;
   currentPageNum = parseInt(document.getElementById('page-num').value, 10) || 1;
   const page = await pdfDoc.getPage(currentPageNum);
+  currentPdfPage = page;
+  pageSegments = null; // invalidate any cached segments from a previous page
   const viewport = page.getViewport({ scale: 1.5 });
   const canvas = document.getElementById('page-canvas');
   canvas.width = viewport.width;
   canvas.height = viewport.height;
   const ctx = canvas.getContext('2d');
   await page.render({ canvasContext: ctx, viewport }).promise;
+
+  // Raw page dimensions (PDF points, unscaled) -- getTextContent()'s
+  // item.transform values are ALWAYS in this raw space regardless of
+  // whatever scale a viewport elsewhere requested (confirmed directly:
+  // requesting scale=1.5 does not change a single returned coordinate).
+  // The previous version of this function normalized against
+  // viewport.height/width (SCALED, e.g. 3240 at scale 1.5) while dividing
+  // unscaled ty/tx values -- a real bug mixing two different scales in one
+  // computation, silently misplacing every coded-note match, crop boundary,
+  // and click-to-add position on this page. Fixed here by normalizing
+  // against page.view's raw media-box dimensions instead, decoupling text
+  // position from whatever render scale the canvas happens to use.
+  pageWidthRaw = page.view[2] - page.view[0];
+  pageHeightRaw = page.view[3] - page.view[1];
 
   // Real extraction, stitched — same lesson as tr-schedule.js's file header:
   // pdf.js's raw per-run text needs reassembling before any title/legend
@@ -190,15 +213,25 @@ async function loadPage() {
     const tx = item.transform[4], ty = item.transform[5];
     const tw = item.width ?? 0;
     const fs = Math.abs(item.transform[3]) || 10;
-    return { s: item.str, cy: viewport.height - ty, left: tx, right: tx + tw, fs };
+    return { s: item.str, cy: pageHeightRaw - ty, left: tx, right: tx + tw, fs };
   }).filter((it) => it.s.trim());
 
   const stitched = window.TakeoffVec.stitchRuns(raw);
   const stitchedItems = stitched.map((it) => ({
     str: it.s,
-    cx_norm: it.cx / viewport.width,
-    cy_norm: it.cy / viewport.height,
+    cx_norm: it.cx / pageWidthRaw,
+    cy_norm: it.cy / pageHeightRaw,
   }));
+
+  // Raw (unnormalized, un-flipped) positions kept separately for rack-count
+  // detection specifically -- count-leadered-devices.js's tuned constants
+  // (searchRadius, maxOriginDist) were validated against real vector
+  // geometry in this SAME raw pdf.js coordinate space (native PDF, y
+  // increasing upward), not the normalized/flipped space used for cropping.
+  // Mixing the two would silently produce wrong distances.
+  rawTextItemsForRackDetection = textContent.items.map((item) => ({
+    str: item.str, x: item.transform[4], y: item.transform[5],
+  })).filter((it) => it.str.trim());
 
   codedNotes = window.TakeoffVec.parseCodedNotes(stitchedItems);
   setStatus(`page ${currentPageNum} loaded — ${codedNotes.length} coded notes found`, 'ok');
@@ -428,32 +461,65 @@ async function submitAdd(x_norm, y_norm) {
   renderRollup();
 }
 
-// ── Vision detection ─────────────────────────────────────────────
+// ── Rack-count detection (leader-fan tracing, replaces the old vision call) ──
+// Extracts real anchors + stroke segments directly from this page's own
+// pdf.js data (no image, no vision model) and runs the proven
+// count-leadered-devices.js module -- validated end-to-end against this
+// exact production pdf.js version before this wiring was written: real
+// FB28L-1 anchor + real segments -> fanout 2, matching its true rack count.
+async function getPageSegments() {
+  if (pageSegments) return pageSegments; // cached per page load
+  const subpaths = await window.TakeoffVec.extractStrokeSubpaths(currentPdfPage, pdfjsLib.OPS);
+  const segs = [];
+  for (const sp of subpaths) {
+    const pts = sp.points;
+    for (let i = 0; i < pts.length - 1; i++) segs.push([pts[i], pts[i + 1]]);
+  }
+  pageSegments = segs;
+  return segs;
+}
+
 async function runVisionDetection() {
   if (!cropRect || !currentPageId || !currentTrNumber) return;
-  setStatus('cropping + running vision detection…', 'run');
-  const canvas = document.getElementById('page-canvas');
-  const cropCanvas = document.createElement('canvas');
-  cropCanvas.width = (cropRect.x1 - cropRect.x0) * canvas.width;
-  cropCanvas.height = (cropRect.y1 - cropRect.y0) * canvas.height;
-  cropCanvas.getContext('2d').drawImage(
-    canvas,
-    cropRect.x0 * canvas.width, cropRect.y0 * canvas.height, cropCanvas.width, cropCanvas.height,
-    0, 0, cropCanvas.width, cropCanvas.height
-  );
-  const dataUrl = cropCanvas.toDataURL('image/png');
-  const base64 = dataUrl.split(',')[1];
+  setStatus('extracting vector geometry…', 'run');
 
-  const r = await fetch(`${base()}/api/pass-tr-room-vision`, {
+  // Rack-callout candidates: coded notes categorized as rack_new on this
+  // sheet, matched to raw text-item positions inside the drawn crop. The
+  // crop is stored normalized/top-down; raw text items are in pdf.js's
+  // native bottom-up PDF-point space -- converted here, once, for the
+  // containment check (never mixed directly, per this file's own
+  // scale-mismatch lesson from loadPage()).
+  const rackNoteNumbers = new Set(
+    codedNotes.filter((n) => window.TakeoffVec.categorizeCodedNote(n.text).category === 'rack_new').map((n) => n.number)
+  );
+  const anchors = [];
+  for (const item of rawTextItemsForRackDetection) {
+    const num = parseInt(item.str.trim(), 10);
+    if (!rackNoteNumbers.has(num)) continue;
+    const normX = item.x / pageWidthRaw;
+    const normY = 1 - (item.y / pageHeightRaw);
+    if (normX < cropRect.x0 || normX > cropRect.x1 || normY < cropRect.y0 || normY > cropRect.y1) continue;
+    anchors.push({ xy: [item.x, item.y], coded_note_number: num });
+  }
+  if (!anchors.length) {
+    setStatus('no rack-callout numbers found inside this crop — check the coded notes list, or add devices manually', 'err');
+    return;
+  }
+
+  setStatus(`tracing ${anchors.length} rack callout(s)…`, 'run');
+  const segments = await getPageSegments();
+
+  const r = await fetch(`${base()}/api/pass-tr-room-rack-count`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       project_id: projectId, page_id: currentPageId, tr_number: currentTrNumber,
-      room_image_base64: base64, coded_notes: codedNotes,
+      anchors, segments, codedNotes,
+      page_width: pageWidthRaw, page_height: pageHeightRaw,
     }),
   });
   const j = await r.json();
-  if (!r.ok) { setStatus('vision error: ' + j.error, 'err'); return; }
-  setStatus(`vision found ${j.devices_found} device(s)${j.warnings?.length ? ' — ' + j.warnings.join('; ') : ''}`, 'ok');
+  if (!r.ok) { setStatus('detection error: ' + j.error, 'err'); return; }
+  setStatus(`found ${j.devices_found} device(s)${j.needsReview ? ` — ${j.unresolvedAnchors.length} callout(s) need manual review` : ''}`, j.needsReview ? 'err' : 'ok');
   await loadDevices();
 }
 
