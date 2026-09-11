@@ -157,6 +157,41 @@ async function loadTrRooms() {
   sel.innerHTML = '<option value="">— select a TR room —</option>' +
     scheduleRows.map((r) => `<option value="${r.tr_number}">${r.tr_number}${r.rack_count != null ? ` (rack_count: ${r.rack_count})` : ''}</option>`).join('');
   setStatus(`${scheduleRows.length} TR rooms loaded`, 'ok');
+
+  // Same persisted-drawing-set mechanism multi-page.html already uses --
+  // this page was built with only a manual file-browse, an inconsistency
+  // rather than an intentional difference. If this project already has a
+  // PDF in Storage (true for project 23 -- confirmed already persisted
+  // via multi-page.html earlier this session), load it automatically so
+  // the person doesn't need to re-browse a file they already attached once.
+  await attemptAutoLoadPdf(projectId);
+}
+
+// Mirrors multi-page.html's attemptAutoLoadPdf exactly -- same endpoint,
+// same signed-URL download, same graceful no-op if nothing's persisted yet
+// (this project's first-ever load, or an expired/failed prior upload).
+async function attemptAutoLoadPdf(pid) {
+  if (pdfDoc) return true; // already loaded this session
+  try {
+    const r = await fetch(`${base()}/api/pdf-storage-url`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: pid, mode: 'download' }),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.url) return false; // nothing persisted yet -- fall back to manual browse
+    setStatus('loading persisted drawing set…', 'run');
+    const resp = await fetch(j.url);
+    if (!resp.ok) throw new Error(`Storage fetch failed: ${resp.status}`);
+    const ab = await resp.arrayBuffer();
+    pdfDoc = await pdfjsLib.getDocument({ data: ab }).promise;
+    setStatus(`✓ ${pdfDoc.numPages} pages loaded (persisted)`, 'ok');
+    await loadPage();
+    return true;
+  } catch (e) {
+    console.warn('[attemptAutoLoadPdf]', e.message);
+    setStatus(`could not auto-load the persisted PDF (${e.message}) — please browse for it below`, 'err');
+    return false;
+  }
 }
 
 function onTrRoomChosen() {
@@ -176,6 +211,29 @@ async function onPdfChosen(e) {
   pdfDoc = await pdfjsLib.getDocument({ data: buf }).promise;
   setStatus(`PDF loaded, ${pdfDoc.numPages} pages`, 'ok');
   await loadPage();
+  // Persist for next time -- same convention as multi-page.html: a manual
+  // pick uploads to the same "schematics" Storage bucket keyed by project,
+  // so this browse is a one-time cost, not a per-session one.
+  if (projectId) persistPdfToStorage(file);
+}
+
+async function persistPdfToStorage(file) {
+  try {
+    const r = await fetch(`${base()}/api/pdf-storage-url`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: projectId, mode: 'upload', filename: file.name }),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.url) throw new Error(j.error || 'no upload URL returned');
+    const putRes = await fetch(j.url, { method: 'PUT', body: file, headers: { 'Content-Type': 'application/pdf' } });
+    if (!putRes.ok) throw new Error(`Storage upload failed: ${putRes.status}`);
+    await fetch(`${base()}/api/projects`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'update_project', project_id: projectId, pdf_storage_path: j.path }),
+    });
+  } catch (e) {
+    console.warn('[persistPdfToStorage]', e.message); // best-effort, never blocks the current session
+  }
 }
 
 async function loadPage() {
