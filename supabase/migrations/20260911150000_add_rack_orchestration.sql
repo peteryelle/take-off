@@ -1,52 +1,23 @@
--- Rack orchestration — schema for wiring tr_schedule_rows + tr_room_devices +
--- (eventually) fiber-feed plant type into per-TR rack sizing.
+-- Rack orchestration — schema for wiring tr_schedule_rows.rack_count
+-- (already written by tr-room-review.html's Save button) and the fiber-feed
+-- plant type into per-TR rack sizing.
 --
--- Three pieces:
---   1. Bug fix: tr_room_devices.source CHECK never included 'leader_fan',
---      the value pass-tr-room-rack-count.js has been writing since that pass
---      replaced the vision-based one. Every leader-fan insert has been
---      violating this constraint. 'vision' is kept for any legacy/manual
---      vision-sourced rows; 'leader_fan' is added, not substituted for it.
---   2. tr_room_status — one row per (project, tr_number): has a room's
---      device set been human-reviewed via the confidence-map UI? A scan
---      that ran but wasn't confirmed and an unscanned room produce the same
---      device rows either way (empty or partial); the ONLY way to tell them
---      apart is this explicit status, which is why it's a separate table
---      rather than a flag inferred from tr_room_devices existing.
---   3. project_fiber_config — plant type (ISP/OSP) and strand basis for the
---      whole project, one row per project. Confirmed to be the SAME across
---      every TR on a job (Peter, chat) — this is deliberately NOT scoped to
---      tr_number the way tr_room_status is.
---   4. tr_rack_sizing — the orchestration's actual output: rack count
---      (from tr_room_devices, category='rack_new', only once tr_room_status
---      is 'confirmed') plus rack-assembly-rules.js's computed distribution.
---      A separate table, not columns bolted onto tr_schedule_rows, because
---      this is fully derived/recomputable — same reasoning as keeping
---      tr_room_devices separate from tr_schedule_rows: recomputing on rerun
---      should never require touching the schedule's own source-of-truth row.
-
-ALTER TABLE tr_room_devices DROP CONSTRAINT IF EXISTS tr_room_devices_source_check;
-ALTER TABLE tr_room_devices ADD CONSTRAINT tr_room_devices_source_check
-  CHECK (source IN ('vision', 'leader_fan', 'manual'));
-
-CREATE TABLE IF NOT EXISTS public.tr_room_status (
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  org_id bigint NOT NULL REFERENCES organizations(id),
-  project_id bigint NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  tr_number text NOT NULL,
-  status text NOT NULL CHECK (status IN ('scanned', 'confirmed')),
-  confirmed_at timestamptz,
-  updated_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (project_id, tr_number)
-);
-CREATE INDEX IF NOT EXISTS idx_tr_room_status_project ON tr_room_status(project_id);
-
-ALTER TABLE tr_room_status ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS org_isolation ON tr_room_status;
-CREATE POLICY org_isolation ON tr_room_status
-  FOR ALL TO authenticated
-  USING (org_id = auth_org_id())
-  WITH CHECK (org_id = auth_org_id());
+-- No confirmation table here. tr_schedule_rows.rack_count already IS the
+-- confirmation signal -- null means unconfirmed, a number (including 0)
+-- means a human reviewed the confidence map and saved it. A separate
+-- confirmed/scanned status table was drafted for this migration and
+-- dropped once that existing column and button were found -- it would
+-- have given the app two sources of truth for the same fact.
+--
+-- Two pieces:
+--   1. project_fiber_config — plant type (ISP/OSP) for the whole project,
+--      one row per project. Confirmed (Peter, chat) to be the SAME across
+--      every TR on a job — deliberately NOT scoped to tr_number.
+--   2. tr_rack_sizing — the orchestration's derived output only (patch
+--      panel distribution, sidecar count, fiber cassette count). rack_count
+--      itself is NOT duplicated as an input source here; it's carried on
+--      each row purely as a record of what count this sizing was computed
+--      against, read back from tr_schedule_rows.rack_count at compute time.
 
 CREATE TABLE IF NOT EXISTS public.project_fiber_config (
   project_id bigint PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,

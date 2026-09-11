@@ -2,14 +2,15 @@
 // SAME real hand-verified truth_rack_count values from
 // fixtures/tr-rack-leader-fixture.json (Gainesville EHRM, confirmed against
 // actual T-401 sheet geometry) paired with the actual T-500 schedule figures
-// for those same rooms — not synthetic numbers.
+// for those same rooms — not synthetic numbers. scheduleRow.rack_count here
+// stands in for whatever tr-room-review.html's Save button already wrote.
 //
 // Run: node --test tests/test-rack-orchestration.mjs
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { deriveRackCount, sizeTrRacks } from '../public/lib/rack-orchestration.js';
+import { sizeTrRacks } from '../public/lib/rack-orchestration.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -24,42 +25,25 @@ const leaderFixture = JSON.parse(
 );
 const truthByRoom = new Map(leaderFixture.map((r) => [r.room, r.truth_rack_count]));
 
-// T-500's own real "Minimum Number of Patch Panels" column for the same rooms.
 const T500_PANELS = {
   'B050C-1': 3, 'C085A-1': 3, 'EB51A-1': 10,
   'FB23B-1': 3, 'A132A-1': 12, 'C259-1': 8, 'FB28L-1': 2, 'DB97-1': 7,
 };
 
-console.log('deriveRackCount — from tr_room_devices rows:');
+console.log('sizeTrRacks — gating on rack_count being null (unconfirmed):');
 {
-  const devices = [
-    { category: 'rack_new' }, { category: 'rack_new' },
-    { category: 'rack_existing' },    // must NOT count
-    { category: 'backboard' },        // must NOT count
-    { category: null },               // uncategorized — must NOT count
-  ];
-  assert(deriveRackCount(devices) === 2, 'counts only rack_new, ignores rack_existing/backboard/null (expect 2)');
-  assert(deriveRackCount([]) === 0, 'empty device list -> 0');
+  const unconfirmed = sizeTrRacks({ tr_number: 'EB51A-1', min_patch_panels: 10, rack_count: null }, null);
+  assert(unconfirmed.sized === false && /not confirmed/.test(unconfirmed.reason),
+    'null rack_count refuses to size, regardless of anything else on the row');
 }
 
-console.log('\nsizeTrRacks — gating on room-status confirmation:');
-{
-  const row = { tr_number: 'EB51A-1', min_patch_panels: T500_PANELS['EB51A-1'] };
-  const pending = sizeTrRacks(row, { status: 'pending' }, null);
-  assert(pending.sized === false && pending.reason === 'room not scanned', 'pending status refuses to size');
-
-  const scanned = sizeTrRacks(row, { status: 'scanned', rack_count: 3 }, null);
-  assert(scanned.sized === false && /not yet confirmed/.test(scanned.reason),
-    'scanned-but-unconfirmed status refuses to size, even with a rack_count present');
-}
-
-console.log('\nsizeTrRacks — real fixture rooms, confirmed status, no fiber yet:');
+console.log('\nsizeTrRacks — real fixture rooms, confirmed rack_count, no fiber yet:');
 for (const room of ['B050C-1', 'C085A-1', 'EB51A-1', 'FB23B-1', 'A132A-1', 'C259-1', 'FB28L-1', 'DB97-1']) {
   const rackCount = truthByRoom.get(room);
-  const row = { tr_number: room, min_patch_panels: T500_PANELS[room] };
-  const result = sizeTrRacks(row, { status: 'confirmed', rack_count: rackCount }, null);
+  const scheduleRow = { tr_number: room, min_patch_panels: T500_PANELS[room], rack_count: rackCount };
+  const result = sizeTrRacks(scheduleRow, null);
 
-  assert(result.sized === true, `${room}: confirmed status sizes successfully`);
+  assert(result.sized === true, `${room}: confirmed rack_count sizes successfully`);
   assert(result.rack_count === rackCount, `${room}: rack_count matches fixture truth (${rackCount})`);
   assert(result.fiber_cassette_count === null && result.fiber_pending === true,
     `${room}: no fiber config yet -> cassette count null, fiber_pending true`);
@@ -80,8 +64,8 @@ for (const room of ['B050C-1', 'C085A-1', 'EB51A-1', 'FB23B-1', 'A132A-1', 'C259
 
 console.log('\nsizeTrRacks — fiber known (project_fiber_config parsed):');
 {
-  const row = { tr_number: 'EB51A-1', min_patch_panels: T500_PANELS['EB51A-1'] };
-  const result = sizeTrRacks(row, { status: 'confirmed', rack_count: 3 }, 'ISP');
+  const scheduleRow = { tr_number: 'EB51A-1', min_patch_panels: 10, rack_count: 3 };
+  const result = sizeTrRacks(scheduleRow, 'ISP');
   assert(result.fiber_pending === false, 'fiber_pending flips false once plantType is supplied');
   assert(result.fiber_cassette_count === 6, 'ISP cassette count: 3 per core x 2 cores = 6 (rack-assembly-rules.js math)');
 }

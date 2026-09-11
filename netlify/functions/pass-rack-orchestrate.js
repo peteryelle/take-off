@@ -1,27 +1,29 @@
 // netlify/functions/pass-rack-orchestrate.js
-// Orchestration for Path A: tr_schedule_rows + tr_room_devices (confirmed) +
-// project_fiber_config -> tr_rack_sizing. Every computation is delegated to
-// public/lib/rack-orchestration.js (pure, fixtures-tested); this file only
-// does the reads, the confirm-status write, and the persist.
+// Orchestration for Path A: tr_schedule_rows.rack_count (already written by
+// tr-room-review.html's "Save rack_count to TR Schedule" button) +
+// project_fiber_config -> sized rack components. Every computation is
+// delegated to public/lib/rack-orchestration.js (pure, fixtures-tested);
+// this file only does the reads and the persist.
+//
+// No confirm step lives here -- tr_schedule_rows.rack_count IS the
+// confirmation signal (null = unconfirmed), already written elsewhere.
+// Adding a second confirmation table would give the app two sources of
+// truth for the same fact; see rack-orchestration.js's own header.
 //
 // Actions:
-//   confirm_room  — mark a TR's room-scan reviewed (tr_room_status ->
-//                   'confirmed'). This is the human's explicit act in the
-//                   confidence-map UI; nothing here infers confirmation from
-//                   a scan simply having run.
 //   size_tr       — run the orchestration for one tr_number and persist to
-//                   tr_rack_sizing. No-ops (returns sized:false) if the room
-//                   isn't confirmed yet, same as the pure module.
+//                   tr_rack_sizing. Returns sized:false (nothing persisted)
+//                   if rack_count is still null on the schedule row.
 //   size_project  — size_tr for every schedule row in the project, for the
-//                   status-view screen. Confirmed rooms get sized; others
-//                   come back with their reason, same shape either way.
+//                   status-view screen. Every row comes back sized or with
+//                   its reason, same shape either way.
 //
 // POST /api/pass-rack-orchestrate
 // Body: { action, project_id, ...action-specific fields }
 
 import { getSupabase, ok, err, CORS } from "./utils/clients.js";
-import { requireOrg, assertProjectInOrg, assertProjectUnlocked } from "./utils/auth.js";
-import { deriveRackCount, sizeTrRacks } from "../../public/lib/rack-orchestration.js";
+import { requireOrg, assertProjectInOrg } from "./utils/auth.js";
+import { sizeTrRacks } from "../../public/lib/rack-orchestration.js";
 
 export default async function handler(req) {
   if (req.method === "OPTIONS") return new Response("", { headers: CORS });
@@ -42,65 +44,26 @@ export default async function handler(req) {
     return err("Project not found in your organization", 404);
 
   switch (action) {
-    case "confirm_room": return await actionConfirmRoom(supabase, orgId, body);
-    case "size_tr":       return await actionSizeTr(supabase, orgId, body);
-    case "size_project":  return await actionSizeProject(supabase, orgId, body);
+    case "size_tr":      return await actionSizeTr(supabase, orgId, body);
+    case "size_project": return await actionSizeProject(supabase, orgId, body);
     default: return err(`Unknown action: ${action}`);
   }
 }
 
-// ── confirm_room ─────────────────────────────────────────────────────────
-// The only place tr_room_status ever moves to 'confirmed'. A prior scan run
-// (pass-tr-room-rack-count.js) may have already written 'scanned' rows to
-// tr_room_devices; this is a separate, explicit human act on top of that —
-// see rack-orchestration.js's own header for why the two are never conflated.
-async function actionConfirmRoom(supabase, orgId, body) {
-  const { project_id, tr_number } = body;
-  if (!tr_number) return err("tr_number required");
-
-  if (!(await assertProjectUnlocked(supabase, project_id)))
-    return err("Project is locked (accepted final run) — unlock it from the Report page before re-running.", 423);
-
-  const { error } = await supabase.from("tr_room_status").upsert({
-    org_id: orgId, project_id, tr_number,
-    status: "confirmed", confirmed_at: new Date(), updated_at: new Date(),
-  }, { onConflict: "project_id,tr_number" });
-
-  if (error) return err(`tr_room_status upsert failed: ${error.message}`, 500);
-  return ok({ tr_number, status: "confirmed" });
-}
-
-// ── shared: read everything one TR's sizing needs ──────────────────────
 async function loadInputs(supabase, project_id, tr_number) {
-  const [scheduleRes, statusRes, devicesRes, fiberRes] = await Promise.all([
-    supabase.from("tr_schedule_rows").select("tr_number, min_patch_panels")
+  const [scheduleRes, fiberRes] = await Promise.all([
+    supabase.from("tr_schedule_rows").select("tr_number, min_patch_panels, rack_count")
       .eq("project_id", project_id).eq("tr_number", tr_number).maybeSingle(),
-    supabase.from("tr_room_status").select("status")
-      .eq("project_id", project_id).eq("tr_number", tr_number).maybeSingle(),
-    supabase.from("tr_room_devices").select("category")
-      .eq("project_id", project_id).eq("tr_number", tr_number),
     supabase.from("project_fiber_config").select("plant_type")
       .eq("project_id", project_id).maybeSingle(),
   ]);
 
   if (scheduleRes.error) throw new Error(`tr_schedule_rows read failed: ${scheduleRes.error.message}`);
-  if (statusRes.error) throw new Error(`tr_room_status read failed: ${statusRes.error.message}`);
-  if (devicesRes.error) throw new Error(`tr_room_devices read failed: ${devicesRes.error.message}`);
   if (fiberRes.error) throw new Error(`project_fiber_config read failed: ${fiberRes.error.message}`);
 
-  const scheduleRow = scheduleRes.data;
-  const status = statusRes.data?.status ?? "pending";
-  // rack_count is derived from the CURRENT device rows every time, never
-  // cached on tr_room_status itself -- a manual add/remove in the
-  // confidence-map UI after confirmation must be reflected on the next
-  // size_tr call without a second confirm step re-deriving it.
-  const rackCount = deriveRackCount(devicesRes.data || []);
-  const plantType = fiberRes.data?.plant_type ?? null;
-
-  return { scheduleRow, roomStatus: { status, rack_count: rackCount }, plantType };
+  return { scheduleRow: scheduleRes.data, plantType: fiberRes.data?.plant_type ?? null };
 }
 
-// ── size_tr ──────────────────────────────────────────────────────────────
 async function actionSizeTr(supabase, orgId, body) {
   const { project_id, tr_number } = body;
   if (!tr_number) return err("tr_number required");
@@ -111,9 +74,9 @@ async function actionSizeTr(supabase, orgId, body) {
 
   if (!inputs.scheduleRow) return err(`No tr_schedule_rows entry for "${tr_number}" in this project`, 404);
 
-  const result = sizeTrRacks(inputs.scheduleRow, inputs.roomStatus, inputs.plantType);
+  const result = sizeTrRacks(inputs.scheduleRow, inputs.plantType);
 
-  if (!result.sized) return ok(result); // pending/unconfirmed -- nothing to persist
+  if (!result.sized) return ok(result); // unconfirmed -- nothing to persist
 
   const { error } = await supabase.from("tr_rack_sizing").upsert({
     org_id: orgId, project_id, tr_number,
@@ -129,10 +92,6 @@ async function actionSizeTr(supabase, orgId, body) {
   return ok(result);
 }
 
-// ── size_project ─────────────────────────────────────────────────────────
-// Drives the rack-orchestration status view: every schedule row, sized where
-// confirmed, flagged with its reason where not -- same shape as size_tr,
-// just for the whole project in one call instead of one round trip per row.
 async function actionSizeProject(supabase, orgId, body) {
   const { project_id } = body;
 
