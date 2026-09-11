@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rack Orchestration — Take-off</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="auth.js"></script>
+<style>
+* { box-sizing:border-box; margin:0; padding:0; }
+body { font-family:monospace; background:#0d0d0d; color:#e0e0e0; font-size:13px; }
+h1 { color:#f0c040; font-size:16px; letter-spacing:2px; text-transform:uppercase; }
+.top-bar { padding:16px 20px 8px; border-bottom:1px solid #1e1e1e; }
+.subtitle { color:#555; font-size:11px; margin-top:3px; }
+.config-bar { display:flex; gap:10px; align-items:center; padding:8px 20px;
+              background:#0a0a0a; border-bottom:1px solid #1e1e1e; flex-wrap:wrap; }
+.config-bar label { color:#666; font-size:11px; }
+input[type="text"], input[type="number"] { background:#111; border:1px solid #2a2a2a;
+  color:#e0e0e0; padding:4px 8px; border-radius:3px; font-family:monospace; font-size:12px; }
+button { background:#1e3a1e; border:1px solid #3a7a3a; color:#7af07a; padding:5px 12px;
+         border-radius:3px; cursor:pointer; font-family:monospace; font-size:12px; }
+button:hover { background:#2a4a2a; }
+button:disabled { opacity:0.3; cursor:not-allowed; }
+button.amber { background:#2a2000; border-color:#6a5000; color:#f0c040; }
+button.amber:hover { background:#332800; }
+button.small { padding:3px 10px; font-size:11px; }
+.status { font-size:11px; color:#666; }
+.status.ok  { color:#7af07a; }
+.status.err { color:#f07a7a; }
+.status.run { color:#f0c040; }
+.summary-bar { padding:10px 20px; color:#888; font-size:12px; border-bottom:1px solid #1e1e1e; }
+.summary-bar b { color:#e0e0e0; }
+table { width:100%; border-collapse:collapse; margin:0 20px; }
+thead th { text-align:left; padding:8px 10px; font-size:10px; text-transform:uppercase;
+           letter-spacing:0.04em; color:#666; border-bottom:1px solid #2a2a2a; }
+tbody td { padding:8px 10px; border-bottom:1px solid #161616; vertical-align:top; }
+tbody tr:hover { background:#111; }
+.tr-name { color:#7af07a; font-weight:bold; }
+.badge { display:inline-block; padding:2px 8px; border-radius:3px; font-size:10px; }
+.badge.pending   { background:#3a3a3a; color:#999; }
+.badge.confirmed { background:#0f2a0f; color:#7af07a; }
+.badge.sized     { background:#0f2a2a; color:#7ae0f0; }
+.muted { color:#555; }
+.sizing-line { color:#ccc; font-size:12px; }
+.sizing-line .k { color:#666; }
+.fiber-pending { color:#6a5000; }
+</style>
+</head>
+<body>
+
+<nav id="to-nav"></nav>
+<script src="nav.js"></script>
+
+<div class="top-bar">
+  <h1>Rack Orchestration</h1>
+  <div class="subtitle">tr_schedule_rows.rack_count (confirmed via TR Room Device Review) + fiber plant type → sized rack components, per TR.</div>
+</div>
+
+<div class="config-bar">
+  <label>Netlify URL</label>
+  <input type="text" id="netlify-url" value="https://winquest-take-off.netlify.app" size="34">
+  <label>Project ID</label>
+  <input type="number" id="project-id" size="4">
+  <button onclick="loadRows()">Load Project</button>
+  <button class="amber" onclick="sizeAll()" id="size-all-btn" disabled>Size all confirmed TRs</button>
+  <span id="status" class="status"></span>
+</div>
+
+<div class="summary-bar" id="summary" style="display:none;"></div>
+
+<table id="rows-table" style="display:none;">
+  <thead>
+    <tr>
+      <th style="width:20px;"></th>
+      <th>TR</th>
+      <th>Terminations</th>
+      <th>Min panels</th>
+      <th>Status</th>
+      <th>Sizing</th>
+      <th style="width:90px;"></th>
+    </tr>
+  </thead>
+  <tbody id="rows-body"></tbody>
+</table>
+
+<script type="module">
+function base() { return document.getElementById('netlify-url').value.replace(/\/$/, ''); }
+function setStatus(msg, cls) { const s = document.getElementById('status'); s.textContent = msg; s.className = 'status ' + (cls || ''); }
+
+let projectId = null;
+let scheduleRows = [];   // tr_schedule_rows: { tr_number, total_terminations, min_patch_panels, rack_count }
+let sizingByTr = {};     // tr_number -> tr_rack_sizing row, keyed after load
+
+// ── Load ─────────────────────────────────────────────────────────────────
+async function loadRows() {
+  projectId = parseInt(document.getElementById('project-id').value, 10);
+  if (!projectId) { setStatus('enter a project id', 'err'); return; }
+  setStatus('loading…', 'run');
+
+  const [scheduleRes, sizingRes] = await Promise.all([
+    window.TakeoffAuth.client
+      .from('tr_schedule_rows')
+      .select('tr_number, total_terminations, min_patch_panels, rack_count')
+      .eq('project_id', projectId)
+      .order('tr_number'),
+    window.TakeoffAuth.client
+      .from('tr_rack_sizing')
+      .select('tr_number, rack_count, patch_panel_distribution, sidecar_count, fiber_cassette_count, fiber_pending')
+      .eq('project_id', projectId),
+  ]);
+
+  if (scheduleRes.error) { setStatus('error: ' + scheduleRes.error.message, 'err'); return; }
+  if (sizingRes.error) { setStatus('error: ' + sizingRes.error.message, 'err'); return; }
+
+  scheduleRows = scheduleRes.data || [];
+  sizingByTr = Object.fromEntries((sizingRes.data || []).map((r) => [r.tr_number, r]));
+
+  document.getElementById('size-all-btn').disabled = scheduleRows.length === 0;
+  render();
+  setStatus(`${scheduleRows.length} TR rooms loaded`, 'ok');
+}
+
+// ── Render ───────────────────────────────────────────────────────────────
+function statusFor(row) {
+  if (row.rack_count == null) return { key: 'pending', label: 'not confirmed' };
+  if (sizingByTr[row.tr_number]) return { key: 'sized', label: 'sized' };
+  return { key: 'confirmed', label: 'confirmed — not sized yet' };
+}
+
+function sizingLine(row) {
+  const s = sizingByTr[row.tr_number];
+  if (!s) return '<span class="muted">—</span>';
+  if (s.rack_count === 0) return '<span class="sizing-line">0 new racks — no components to size</span>';
+  const dist = (s.patch_panel_distribution || []).join(', ');
+  const fiber = s.fiber_pending
+    ? '<span class="fiber-pending">fiber pending</span>'
+    : `${s.fiber_cassette_count} cassettes`;
+  return `<span class="sizing-line"><span class="k">panels</span> [${dist}] · <span class="k">sidecars</span> ${s.sidecar_count} · ${fiber}</span>`;
+}
+
+function render() {
+  const tbody = document.getElementById('rows-body');
+  tbody.innerHTML = '';
+
+  const confirmedCount = scheduleRows.filter((r) => r.rack_count != null).length;
+  const sizedCount = scheduleRows.filter((r) => sizingByTr[r.tr_number]).length;
+  document.getElementById('summary').style.display = scheduleRows.length ? 'block' : 'none';
+  document.getElementById('summary').innerHTML =
+    `<b>${scheduleRows.length}</b> TR rooms · <b>${confirmedCount}</b> confirmed · <b>${sizedCount}</b> sized`;
+  document.getElementById('rows-table').style.display = scheduleRows.length ? 'table' : 'none';
+
+  scheduleRows.forEach((row, i) => {
+    const st = statusFor(row);
+    const canSize = row.rack_count != null;
+
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td></td>
+      <td class="tr-name">${row.tr_number}</td>
+      <td>${row.total_terminations ?? '—'}</td>
+      <td>${row.min_patch_panels ?? '—'}</td>
+      <td><span class="badge ${st.key}">${st.label}</span></td>
+      <td>${sizingLine(row)}</td>
+      <td><button class="small" data-tr="${row.tr_number}" ${canSize ? '' : 'disabled'}>size</button></td>
+    `;
+    tbody.appendChild(tr);
+    tr.querySelector('button').addEventListener('click', () => sizeOne(row.tr_number));
+  });
+}
+
+// ── Size one / all ────────────────────────────────────────────────────────
+async function sizeOne(tr_number) {
+  setStatus(`sizing ${tr_number}…`, 'run');
+  try {
+    const r = await fetch(`${base()}/api/pass-rack-orchestrate`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'size_tr', project_id: projectId, tr_number }),
+    });
+    const j = await r.json();
+    if (!r.ok) { setStatus(`${tr_number}: ${j.error}`, 'err'); return; }
+    if (!j.sized) { setStatus(`${tr_number}: ${j.reason}`, 'err'); return; }
+    sizingByTr[tr_number] = j;
+    render();
+    setStatus(`${tr_number} sized`, 'ok');
+  } catch (e) { setStatus('error: ' + e.message, 'err'); }
+}
+
+async function sizeAll() {
+  setStatus('sizing all confirmed TRs…', 'run');
+  try {
+    const r = await fetch(`${base()}/api/pass-rack-orchestrate`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'size_project', project_id: projectId }),
+    });
+    const j = await r.json();
+    if (!r.ok) { setStatus('error: ' + j.error, 'err'); return; }
+    for (const res of j.results) if (res.sized) sizingByTr[res.tr_number] = res;
+    render();
+    const sizedNow = j.results.filter((res) => res.sized).length;
+    setStatus(`sized ${sizedNow}/${j.count} TRs`, 'ok');
+  } catch (e) { setStatus('error: ' + e.message, 'err'); }
+}
+
+window.loadRows = loadRows;
+window.sizeAll = sizeAll;
+</script>
+
+</body>
+</html>

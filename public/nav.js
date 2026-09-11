@@ -14,6 +14,7 @@
     { file: 'projects.html',     label: '⚡ Projects' },
     { file: 'discover.html',     label: '🔍 Discover' },
     { file: 'multi-page.html',   label: 'Take-off' },
+    { file: 'rack-orchestration.html', label: 'Rack Orch' },
     { file: 'report.html',       label: '📋 Report' },
     { file: 'device-types.html', label: '⚙ Device Types' },
     { file: 'users.html',        label: '👥 Users' },
