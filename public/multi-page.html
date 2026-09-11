@@ -281,7 +281,7 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
 
 <!-- ── STEP 2B: DEMARC SCAN — TR/exclusion-zone/waypoint setup. Still part of
      the "setup" phase (not a device/path scan) — see step 4 for that. ──── -->
-<div class="section">
+<div class="section" id="step-2b-section">
   <div class="section-title">2B · Demarc Scan &amp; TR Setup</div>
   <div style="font-size:13px; color:#aaa; margin-bottom:8px;">
     Runs Pass B on all selected pages to extract TR room references and build the demarc map.
@@ -338,6 +338,28 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
   </div>
 </div>
 
+<!-- ── STEP 2B (tr_design projects only): the demarc/waypoint/exclusion-zone
+     setup above is floor-plan-only (device stamps routed to a TR pin) — a
+     tr_design project's schedule/rack_detail/tr_room pages have none of
+     that to set up. Schedule-page routing already happens inside Batch
+     Run's own loop (cache.tr_schedule branch); tr_room pages route to
+     TR Room Device Review, a separate page built specifically for the
+     leader-fan scan + confidence-map review — not duplicated here. ── -->
+<div class="section" id="step-patha-section" style="display:none;">
+  <div class="section-title">2B · TR Design Take-off</div>
+  <div style="font-size:13px; color:#aaa; margin-bottom:10px;">
+    No demarc pins or routing here — a TR design take-off has one length capture only (manual cable-tray
+    trace, in TR Room Device Review). Schedule pages are read when you run Batch Run below; TR room pages
+    are scanned and reviewed on their own page.
+  </div>
+  <button onclick="openTrRoomReview()">↗ Open TR Room Device Review</button>
+  <div style="font-size:11px; color:#666; margin-top:8px;">
+    Opens with this project's id — crop each TR room, assign it against the parsed schedule, and confirm
+    its rack count there. Once schedule pages are tagged <code>schedule</code> and TR room pages are
+    tagged <code>tr_room</code> (done in step 2 above), Batch Run picks up the schedule pages on its own.
+  </div>
+</div>
+
 <!-- ── STEP 3: TEST AUTO ROUTE — optional preview, collapsed until the user
      asks for it. Pure client-side, does NOT touch device_instances/total_ft/
      BOM — nothing here is persisted or affects Batch Run's output. Wall
@@ -345,7 +367,7 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
      ensureWallCalibrationRun(), triggered here on first open, or from
      lockDemarcs() before the batch starts if this was never opened. Its
      outcome shows as a status line in step 4 below. ── -->
-<div class="section">
+<div class="section" id="step-3-section">
   <div class="section-title">3 · Test Auto Route <span style="font-size:11px; color:#888; font-weight:normal;">(optional preview — writes nothing)</span></div>
   <button class="info" id="test-route-toggle" onclick="toggleTestRouteSection()">▶ Test auto-route (optional)</button>
   <div id="test-route-section" style="display:none; margin-top:10px;">
@@ -4186,6 +4208,31 @@ async function runBatch(quiet = false) {
         continue;
       }
 
+      // TR room pages have no scale/demarc/UIN either -- and unlike a
+      // schedule page, there's no dedicated pass to route them to from this
+      // loop. TR room scanning (leader-fan rack count + coded-note
+      // categorization) is built specifically into TR Room Device Review's
+      // own crop/confirm workflow, which needs the human's box-and-name
+      // step first -- it isn't a headless per-page pass this loop could
+      // call the way pass-tr-schedule.js is. Skip cleanly rather than fall
+      // through into pass-batch's scale gate, which would 422 every time.
+      if (pageRole === 'tr_room' || pageRole === 'rack_detail') {
+        if (!pageCache[pageNum]) pageCache[pageNum] = {};
+        pageCache[pageNum].status     = 'skipped';
+        pageCache[pageNum].status_msg = pageRole === 'tr_room'
+          ? 'tr_room page — use TR Room Device Review, not Batch Run'
+          : 'rack_detail page — reference only, nothing to detect or route';
+        updateThumbStatusBadge(pageNum);
+        if (!quiet) {
+          log.innerHTML += `<div style="color:#f0c040">pg${pageNum}: skipped — ${pageCache[pageNum].status_msg}</div>`;
+          log.scrollTop = log.scrollHeight;
+        }
+        done++;
+        bar.classList.remove('indeterminate');
+        bar.style.width = `${Math.round((done / sortedPages.length) * 100)}%`;
+        continue;
+      }
+
       // Cross-sheet TR reference (coded-note text, e.g. "...PATCH PANELS IN TR
       // H335-1") — registers the served-page relationship only, never writes a
       // pin. See wireTrReference's own header for why this is safe to run
@@ -6133,6 +6180,22 @@ async function loadProjectCard(pid) {
     const meta = [p.project_number, p.client].filter(Boolean).join(' · ');
     document.getElementById('project-card-meta').textContent = meta || `ID: ${pid}`;
 
+    // take_off_type is set once at project creation (projects.html) and not
+    // meant to change after -- see the migration's own header for why a
+    // project is always fully one path or the other. Branch the UI here,
+    // not scattered checks throughout: floor_plan gets the existing
+    // demarc/waypoint/auto-route sections; tr_design gets a single
+    // replacement panel pointing at Batch Run (schedule pages) and TR Room
+    // Device Review (tr_room pages) instead.
+    window.__takeOffType = p.take_off_type ?? 'floor_plan';
+    const isTrDesign = window.__takeOffType === 'tr_design';
+    const step2b = document.getElementById('step-2b-section');
+    const step3  = document.getElementById('step-3-section');
+    const stepA  = document.getElementById('step-patha-section');
+    if (step2b) step2b.style.display = isTrDesign ? 'none' : '';
+    if (step3)  step3.style.display  = isTrDesign ? 'none' : '';
+    if (stepA)  stepA.style.display  = isTrDesign ? '' : 'none';
+
     // Accepted-final-run lock — a manual sign-off bookmark on the current
     // state (not a run history). While set, pass-batch/pass-extract/
     // pass-visual-augment/set-page-role's count-clearing path refuse writes,
@@ -6160,6 +6223,13 @@ async function loadProjectCard(pid) {
     }
   } catch(e) { console.warn('loadProjectCard:', e); }
 }
+
+function openTrRoomReview() {
+  const p = projectId || pid();
+  if (!p) { alert('load a project first'); return; }
+  window.open(`tr-room-review.html?project_id=${p}&netlify_url=${encodeURIComponent(base())}`, '_blank');
+}
+window.openTrRoomReview = openTrRoomReview;
 
 
 // ── Merge layer ───────────────────────────────────────────────────

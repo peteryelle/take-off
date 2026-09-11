@@ -146,6 +146,13 @@ label { color: #888; font-size: 12px; display: block; margin-bottom: 3px; }
       <label>Client</label>
       <input type="text" id="new-client" placeholder="U.S. Dept. of Veterans Affairs">
     </div>
+    <div class="field">
+      <label>Take-off Type *</label>
+      <select id="new-take-off-type">
+        <option value="floor_plan">Floor plan (device stamps routed to a TR)</option>
+        <option value="tr_design">TR design (schedule + rack elevations + TR room plans)</option>
+      </select>
+    </div>
 
     <button onclick="createProject()" style="width:100%;">+ Create Project</button>
     <div class="status" id="create-status">—</div>
@@ -431,13 +438,14 @@ async function createProject() {
   const name   = document.getElementById('new-name').value.trim();
   const number = document.getElementById('new-number').value.trim();
   const client = document.getElementById('new-client').value.trim();
+  const take_off_type = document.getElementById('new-take-off-type').value;
   if (!name) { setStatus('create-status', 'Project name is required', 'err'); return; }
 
   setStatus('create-status', 'Creating…', 'running');
   try {
     const r = await fetch(`${base()}/api/projects`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, project_number: number, client })
+      body: JSON.stringify({ name, project_number: number, client, take_off_type })
     });
     const j = await r.json();
     if (!r.ok) { setStatus('create-status', 'Error: ' + j.error, 'err'); return; }

@@ -141,6 +141,20 @@ let cropRect = null;       // { x0, y0, x1, y1 } normalized to the FULL PAGE
 let devices = [];          // tr_room_devices for the current (page_id, tr_number)
 let dragStart = null;
 
+// ── Auto-fill from URL (opened from multi-page.html's "Open TR Room Device
+// Review" button) — without this, the link only opens the page; the human
+// still has to retype the project id and click Load Project by hand. ── --
+(function initFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const urlProjectId = params.get('project_id');
+  const urlNetlifyUrl = params.get('netlify_url');
+  if (urlNetlifyUrl) document.getElementById('netlify-url').value = urlNetlifyUrl;
+  if (urlProjectId) {
+    document.getElementById('project-id').value = urlProjectId;
+    window.addEventListener('DOMContentLoaded', () => loadTrRooms());
+  }
+})();
+
 // ── Project / TR room list ──────────────────────────────────────
 async function loadTrRooms() {
   projectId = parseInt(document.getElementById('project-id').value, 10);

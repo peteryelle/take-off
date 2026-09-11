@@ -28,7 +28,7 @@ export default async function handler(req) {
     // Fallback: base table
     const { data, error } = await supabase
       .from("projects")
-      .select("id, name, project_number, client, pdf_filename, pdf_page_count, pdf_storage_path, created_at, updated_at, last_run_at, catalog_id, default_length_multiplier, accepted_final_run_at")
+      .select("id, name, project_number, client, pdf_filename, pdf_page_count, pdf_storage_path, created_at, updated_at, last_run_at, catalog_id, default_length_multiplier, accepted_final_run_at, take_off_type")
       .eq("org_id", orgId)
       .order("updated_at", { ascending: false });
 
@@ -454,12 +454,14 @@ export default async function handler(req) {
     }
 
     // ── Default: create project (stamped to caller's org) ──────
-    const { name, number, client, pdf_filename } = body;
+    const { name, number, client, pdf_filename, take_off_type } = body;
     if (!name) return err("name required");
+    if (take_off_type && !["tr_design", "floor_plan"].includes(take_off_type))
+      return err(`invalid take_off_type: ${take_off_type}`);
 
     const { data, error } = await supabase
       .from("projects")
-      .insert({ name, number, client, pdf_filename, org_id: orgId })
+      .insert({ name, number, client, pdf_filename, org_id: orgId, take_off_type: take_off_type || "floor_plan" })
       .select("*")
       .single();
 
