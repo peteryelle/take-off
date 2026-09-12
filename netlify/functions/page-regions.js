@@ -60,7 +60,7 @@ export default async function handler(req) {
       label:   label ?? null,
       polygon,
       x0: x0 ?? null, y0: y0 ?? null, x1: x1 ?? null, y1: y1 ?? null,
-      kind: kind === 'exclude' ? 'exclude' : 'schematic'   // default preserves existing callers
+      kind: ['exclude', 'tr_room'].includes(kind) ? kind : 'schematic'   // default preserves existing callers
     };
     const { data, error } = await supabase
       .from("page_regions")

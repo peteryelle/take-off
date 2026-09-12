@@ -44,7 +44,7 @@ button.danger { background:#3a1e1e; border-color:#7a3a3a; color:#f07a7a; }
 .status.err { color:#f07a7a; }
 .status.run { color:#f0c040; }
 .body { display:flex; gap:16px; padding:16px 20px; }
-.canvas-pane { position:relative; border:1px solid #2a2a2a; background:#000; flex:1; min-width:0; }
+.canvas-pane { position:relative; border:1px solid #2a2a2a; background:#000; flex:1; min-width:0; overflow:auto; max-height:85vh; }
 .canvas-pane canvas { display:block; max-width:100%; cursor:crosshair; }
 .marker { position:absolute; width:14px; height:14px; margin:-7px 0 0 -7px;
           border-radius:50%; border:2px solid #f0c040; background:rgba(240,192,64,0.25);
@@ -86,6 +86,11 @@ button.danger { background:#3a1e1e; border-color:#7a3a3a; color:#f07a7a; }
   <input type="number" id="page-num" value="1" min="1" size="3" onchange="loadPage()">
   <label>TR Room</label>
   <select id="tr-select" onchange="onTrRoomChosen()"><option value="">— load project first —</option></select>
+  <label>Zoom</label>
+  <button onclick="adjustZoom(-0.25)" style="padding:2px 10px;">−</button>
+  <span id="zoom-level" style="min-width:44px; display:inline-block; text-align:center;">100%</span>
+  <button onclick="adjustZoom(0.25)" style="padding:2px 10px;">+</button>
+  <button onclick="resetZoom()" style="padding:2px 10px; font-size:11px;">reset</button>
   <span id="status" class="status"></span>
 </div>
 
@@ -140,6 +145,30 @@ let codedNotes = [];       // parsed from the current page's text
 let cropRect = null;       // { x0, y0, x1, y1 } normalized to the FULL PAGE
 let devices = [];          // tr_room_devices for the current (page_id, tr_number)
 let dragStart = null;
+let zoomLevel = 1;
+let savedTrRegions = [];   // this page's persisted page_regions rows, kind='tr_room'
+
+// ── Zoom (CSS size only -- canvas.width/height stay at the pdf.js render
+// resolution, so every existing coordinate calc that reads
+// canvas.clientWidth/clientHeight via getBoundingClientRect already adapts
+// automatically; nothing about marker/region math needed to change). ── --
+function applyZoom() {
+  const canvas = document.getElementById('page-canvas');
+  if (!canvas.width) return;
+  canvas.style.width  = (canvas.width  * zoomLevel) + 'px';
+  canvas.style.height = (canvas.height * zoomLevel) + 'px';
+  document.getElementById('zoom-level').textContent = Math.round(zoomLevel * 100) + '%';
+  renderMarkers();
+  renderSavedRegions();
+}
+function adjustZoom(delta) {
+  zoomLevel = Math.min(4, Math.max(0.25, zoomLevel + delta));
+  applyZoom();
+}
+function resetZoom() { zoomLevel = 1; applyZoom(); }
+window.adjustZoom = adjustZoom;
+window.resetZoom = resetZoom;
+
 
 // ── Auto-fill from URL (opened from multi-page.html's "Open TR Room Device
 // Review" button) — without this, the link only opens the page; the human
@@ -314,7 +343,65 @@ async function loadPage() {
   renderMarkers();
   document.getElementById('current-room-label').style.display = 'none';
   document.getElementById('vision-btn').disabled = true;
+  applyZoom();
+
+  // Resolve this page's id and load any previously-confirmed room boxes for
+  // it -- separate from confirmCrop()'s own lookup (that one only runs once
+  // a room is actively being reviewed; this runs on every page load so
+  // saved boxes are visible immediately, before anyone draws or selects
+  // anything).
+  const { data: pageRow } = await window.TakeoffAuth.client
+    .from('pages').select('id').eq('project_id', projectId).eq('pdf_page_number', currentPageNum).maybeSingle();
+  savedTrRegions = [];
+  if (pageRow) {
+    const r = await fetch(`${base()}/api/page-regions?page_id=${pageRow.id}`);
+    if (r.ok) savedTrRegions = (await r.json()).filter((rg) => rg.kind === 'tr_room');
+  }
+  renderSavedRegions();
 }
+
+// ── Saved TR room boxes (persisted page_regions, kind='tr_room') ────────
+// Drawn as a distinct, always-visible overlay -- separate from
+// drawCropOverlay's single amber box, which is only the box currently being
+// dragged/named. A page can hold several confirmed rooms at once (this
+// project's own T-401-style sheets routinely have 5-9); all of them need to
+// stay visible together, not just the most recently drawn one.
+function renderSavedRegions() {
+  document.querySelectorAll('.saved-region').forEach((el) => el.remove());
+  const canvas = document.getElementById('page-canvas');
+  const pane = document.getElementById('canvas-pane');
+  if (!canvas.width) return;
+  const scaleX = canvas.clientWidth / canvas.width || 1;
+  const scaleY = canvas.clientHeight / canvas.height || 1;
+  for (const rg of savedTrRegions) {
+    if (rg.x0 == null) continue;
+    const el = document.createElement('div');
+    el.className = 'saved-region';
+    const active = rg.label === currentTrNumber;
+    el.style.cssText = `position:absolute; border:2px solid ${active ? '#7af07a' : '#4a7ac0'};
+      left:${rg.x0 * canvas.width * scaleX}px; top:${rg.y0 * canvas.height * scaleY}px;
+      width:${(rg.x1 - rg.x0) * canvas.width * scaleX}px; height:${(rg.y1 - rg.y0) * canvas.height * scaleY}px;
+      cursor:${active ? 'default' : 'pointer'}; pointer-events:${active ? 'none' : 'auto'};`;
+    el.title = `${rg.label} — click to review`;
+    const tag = document.createElement('div');
+    tag.textContent = rg.label;
+    tag.style.cssText = `position:absolute; top:-18px; left:0; font-size:11px; color:${active ? '#7af07a' : '#4a7ac0'};
+      background:#000; padding:0 4px;`;
+    el.appendChild(tag);
+    el.onclick = (e) => { e.stopPropagation(); selectSavedRegion(rg); };
+    pane.appendChild(el);
+  }
+}
+
+async function selectSavedRegion(rg) {
+  cropRect = { x0: rg.x0, y0: rg.y0, x1: rg.x1, y1: rg.y1 };
+  currentTrNumber = rg.label;
+  document.getElementById('tr-select').value =
+    scheduleRows.some((r) => r.tr_number === rg.label) ? rg.label : '';
+  await confirmCrop();
+  renderSavedRegions();   // re-render so the newly-active box highlights green
+}
+
 
 // ── Crop-box drag ────────────────────────────────────────────────
 function wireCropDrag(canvas) {
@@ -443,6 +530,23 @@ async function confirmCrop() {
   }
   currentPageId = pageRow.id;
   document.getElementById('vision-btn').disabled = false;
+
+  // Persist the box the first time this room is confirmed on this page --
+  // guarded so re-selecting an already-saved region (selectSavedRegion)
+  // never re-POSTs and creates a duplicate row for the same room.
+  if (!savedTrRegions.some((rg) => rg.label === currentTrNumber)) {
+    const { x0, y0, x1, y1 } = cropRect;
+    const polygon = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+    try {
+      const r = await fetch(`${base()}/api/page-regions`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: projectId, page_id: currentPageId, label: currentTrNumber, polygon, x0, y0, x1, y1, kind: 'tr_room' }),
+      });
+      if (r.ok) { savedTrRegions.push(await r.json()); renderSavedRegions(); }
+      else console.warn('[tr_room region save]', (await r.json()).error);
+    } catch (e) { console.warn('[tr_room region save]', e.message); }
+  }
+
   await loadDevices();
 }
 
