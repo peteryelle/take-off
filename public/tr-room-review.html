@@ -83,27 +83,50 @@ button.danger { background:#3a1e1e; border-color:#7a3a3a; color:#f07a7a; }
   <label>PDF</label>
   <input type="file" id="pdf-file" accept="application/pdf" onchange="onPdfChosen(event)">
   <label>Page</label>
+  <button onclick="prevPage()" style="padding:2px 10px;">◀ Prev</button>
   <input type="number" id="page-num" value="1" min="1" size="3" onchange="loadPage()">
+  <button onclick="nextPage()" style="padding:2px 10px;">Next ▶</button>
   <label>TR Room</label>
   <select id="tr-select" onchange="onTrRoomChosen()"><option value="">— load project first —</option></select>
-  <label>Zoom</label>
-  <button onclick="adjustZoom(-0.25)" style="padding:2px 10px;">−</button>
-  <span id="zoom-level" style="min-width:44px; display:inline-block; text-align:center;">100%</span>
-  <button onclick="adjustZoom(0.25)" style="padding:2px 10px;">+</button>
-  <button onclick="resetZoom()" style="padding:2px 10px; font-size:11px;">reset</button>
+  <button onclick="regZoom(1.15)" style="padding:2px 10px;">＋</button>
+  <button onclick="regZoom(1/1.15)" style="padding:2px 10px;">－</button>
+  <button onclick="regResetZoom()" style="padding:2px 10px; font-size:11px;">reset</button>
   <span id="status" class="status"></span>
 </div>
 
 <div class="body">
   <div class="canvas-pane" id="canvas-pane">
-    <canvas id="page-canvas"></canvas>
+    <div id="tr-wrap" style="position:relative; overflow:hidden; width:100%; height:80vh; cursor:crosshair; background:#000;">
+      <div id="tr-layer" style="position:absolute; top:0; left:0; transform-origin:0 0;">
+        <canvas id="page-canvas" style="display:block;"></canvas>
+      </div>
+    </div>
   </div>
 
   <div class="side-panel">
     <div class="card">
       <h2>Current Room</h2>
-      <div class="hint">Drag a box on the drawing to mark a room's boundary — you'll be prompted for its name right after. Auto-detecting room boundaries from text position was tried on a real 9-room sheet and found too fragile (grid layouts, inconsistent spacing between rows); a human-drawn box per room is simpler and reliable.</div>
+      <div class="hint">Scroll to zoom, drag to pan. Click "Draw New Room", then click two opposite corners on the drawing to box a room's boundary. Auto-detecting room boundaries from text position was tried on a real 9-room sheet and found too fragile (grid layouts, inconsistent spacing between rows); a human-drawn box per room is simpler and reliable.</div>
+      <button onclick="startDrawingBox()" id="draw-room-btn" style="margin-top:8px;" disabled>+ Draw New Room</button>
       <div id="current-room-label" class="resolve-note" style="margin-top:8px; display:none;"></div>
+
+      <!-- Naming/confirm panel -- appears once two corners are picked. A
+           fixed panel here rather than a popup anchored to canvas
+           coordinates: with pan/zoom now in play, a floating popup's screen
+           position would need to track the layer transform on every
+           frame -- fragile for no real benefit over a panel that's always
+           in the same place. -->
+      <div id="name-crop-panel" style="display:none; margin-top:10px; padding:8px; background:#111; border:1px solid #333; border-radius:3px;">
+        <select id="tr-name-select" onchange="document.getElementById('tr-name-input').value=this.value" style="width:100%; margin-bottom:6px;">
+          <option value="">— or pick from schedule —</option>
+        </select>
+        <input type="text" id="tr-name-input" placeholder="type the room name as shown on the drawing (e.g. EB51A-1)" style="width:100%;">
+        <div id="tr-resolve-feedback" style="margin-top:4px;"></div>
+        <div class="btn-row" style="margin-top:6px;">
+          <button onclick="resolveAndConfirmCrop()">✓ Confirm crop + name</button>
+          <button class="danger" onclick="cancelCropNaming()">✗ Cancel</button>
+        </div>
+      </div>
     </div>
 
     <div class="card">
@@ -144,30 +167,64 @@ let scheduleRows = [];     // tr_schedule_rows for this project — populated on
 let codedNotes = [];       // parsed from the current page's text
 let cropRect = null;       // { x0, y0, x1, y1 } normalized to the FULL PAGE
 let devices = [];          // tr_room_devices for the current (page_id, tr_number)
-let dragStart = null;
-let zoomLevel = 1;
 let savedTrRegions = [];   // this page's persisted page_regions rows, kind='tr_room'
 
-// ── Zoom (CSS size only -- canvas.width/height stay at the pdf.js render
-// resolution, so every existing coordinate calc that reads
-// canvas.clientWidth/clientHeight via getBoundingClientRect already adapts
-// automatically; nothing about marker/region math needed to change). ── --
-function applyZoom() {
-  const canvas = document.getElementById('page-canvas');
-  if (!canvas.width) return;
-  canvas.style.width  = (canvas.width  * zoomLevel) + 'px';
-  canvas.style.height = (canvas.height * zoomLevel) + 'px';
-  document.getElementById('zoom-level').textContent = Math.round(zoomLevel * 100) + '%';
-  renderMarkers();
-  renderSavedRegions();
+// ── Pan/zoom — same transform pattern as multi-page.html's "Add schematic"
+// region modal (regZoom/regResetZoom/applyRegionTransform): translate+scale
+// on a layer div, not CSS size on the canvas itself. Children of the layer
+// (markers, saved-region boxes, the in-progress crop box) are positioned in
+// raw canvas-native pixels and the layer's own transform scales all of them
+// together -- one transform instead of every child recomputing its own
+// scale factor. ── --
+let trZoomLevel = 1.0, trPanX = 0, trPanY = 0;
+let trDragStart = null;
+let trCanvasNativeW = 0, trCanvasNativeH = 0;
+let drawingBox = false;         // armed by "+ Draw New Room" -- only then do
+                                 // canvas clicks capture box corners rather
+                                 // than add a device or pan
+let pendingCorners = [];        // 0, 1, or 2 {x,y} in normalized [0,1] page space
+
+function applyTrTransform() {
+  document.getElementById('tr-layer').style.transform =
+    `translate(${trPanX}px, ${trPanY}px) scale(${trZoomLevel})`;
 }
-function adjustZoom(delta) {
-  zoomLevel = Math.min(4, Math.max(0.25, zoomLevel + delta));
-  applyZoom();
+function regZoom(factor) {
+  const wrap = document.getElementById('tr-wrap');
+  const wRect = wrap.getBoundingClientRect();
+  const cx = wRect.width / 2, cy = wRect.height / 2;
+  trPanX = cx - (cx - trPanX) * factor;
+  trPanY = cy - (cy - trPanY) * factor;
+  trZoomLevel = Math.min(10, Math.max(0.05, trZoomLevel * factor));
+  applyTrTransform();
 }
-function resetZoom() { zoomLevel = 1; applyZoom(); }
-window.adjustZoom = adjustZoom;
-window.resetZoom = resetZoom;
+function regResetZoom() {
+  const wrap = document.getElementById('tr-wrap');
+  const wrapW = wrap.offsetWidth  || window.innerWidth  * 0.6;
+  const wrapH = wrap.offsetHeight || window.innerHeight * 0.7;
+  trZoomLevel = trCanvasNativeW ? Math.min(wrapW / trCanvasNativeW, wrapH / trCanvasNativeH) : 1.0;
+  trPanX = 0; trPanY = 0;
+  applyTrTransform();
+}
+window.regZoom = regZoom;
+window.regResetZoom = regResetZoom;
+
+// ── Prev/Next paging ──────────────────────────────────────────────
+function prevPage() {
+  const input = document.getElementById('page-num');
+  const n = Math.max(1, (parseInt(input.value, 10) || 1) - 1);
+  input.value = n;
+  loadPage();
+}
+function nextPage() {
+  const input = document.getElementById('page-num');
+  const max = pdfDoc?.numPages || Infinity;
+  const n = Math.min(max, (parseInt(input.value, 10) || 1) + 1);
+  input.value = n;
+  loadPage();
+}
+window.prevPage = prevPage;
+window.nextPage = nextPage;
+
 
 
 // ── Auto-fill from URL (opened from multi-page.html's "Open TR Room Device
@@ -285,7 +342,7 @@ async function loadPage() {
   const page = await pdfDoc.getPage(currentPageNum);
   currentPdfPage = page;
   pageSegments = null; // invalidate any cached segments from a previous page
-  const viewport = page.getViewport({ scale: 1.5 });
+  const viewport = page.getViewport({ scale: 2.5 });
   const canvas = document.getElementById('page-canvas');
   canvas.width = viewport.width;
   canvas.height = viewport.height;
@@ -337,13 +394,18 @@ async function loadPage() {
   codedNotes = window.TakeoffVec.parseCodedNotes(stitchedItems);
   setStatus(`page ${currentPageNum} loaded — ${codedNotes.length} coded notes found`, 'ok');
 
-  wireCropDrag(canvas);
+  wireTrCanvas();
   cropRect = null;
   devices = [];
+  drawingBox = false;
+  pendingCorners = [];
+  document.getElementById('name-crop-panel').style.display = 'none';
+  document.getElementById('draw-room-btn').disabled = false;
   renderMarkers();
   document.getElementById('current-room-label').style.display = 'none';
   document.getElementById('vision-btn').disabled = true;
-  applyZoom();
+  trCanvasNativeW = canvas.width; trCanvasNativeH = canvas.height;
+  regResetZoom();
 
   // Resolve this page's id and load any previously-confirmed room boxes for
   // it -- separate from confirmCrop()'s own lookup (that one only runs once
@@ -361,35 +423,33 @@ async function loadPage() {
 }
 
 // ── Saved TR room boxes (persisted page_regions, kind='tr_room') ────────
-// Drawn as a distinct, always-visible overlay -- separate from
-// drawCropOverlay's single amber box, which is only the box currently being
-// dragged/named. A page can hold several confirmed rooms at once (this
-// project's own T-401-style sheets routinely have 5-9); all of them need to
-// stay visible together, not just the most recently drawn one.
+// Positioned in raw canvas-native pixels as children of #tr-layer, so the
+// layer's own translate+scale transform moves and scales them together with
+// the page render -- no per-element scale factor to recompute here. A page
+// can hold several confirmed rooms at once (this project's own T-401-style
+// sheets routinely have 5-9); all of them stay visible together, not just
+// the most recently drawn one.
 function renderSavedRegions() {
   document.querySelectorAll('.saved-region').forEach((el) => el.remove());
-  const canvas = document.getElementById('page-canvas');
-  const pane = document.getElementById('canvas-pane');
-  if (!canvas.width) return;
-  const scaleX = canvas.clientWidth / canvas.width || 1;
-  const scaleY = canvas.clientHeight / canvas.height || 1;
+  const layer = document.getElementById('tr-layer');
+  if (!trCanvasNativeW) return;
   for (const rg of savedTrRegions) {
     if (rg.x0 == null) continue;
     const el = document.createElement('div');
     el.className = 'saved-region';
     const active = rg.label === currentTrNumber;
     el.style.cssText = `position:absolute; border:2px solid ${active ? '#7af07a' : '#4a7ac0'};
-      left:${rg.x0 * canvas.width * scaleX}px; top:${rg.y0 * canvas.height * scaleY}px;
-      width:${(rg.x1 - rg.x0) * canvas.width * scaleX}px; height:${(rg.y1 - rg.y0) * canvas.height * scaleY}px;
+      left:${rg.x0 * trCanvasNativeW}px; top:${rg.y0 * trCanvasNativeH}px;
+      width:${(rg.x1 - rg.x0) * trCanvasNativeW}px; height:${(rg.y1 - rg.y0) * trCanvasNativeH}px;
       cursor:${active ? 'default' : 'pointer'}; pointer-events:${active ? 'none' : 'auto'};`;
     el.title = `${rg.label} — click to review`;
     const tag = document.createElement('div');
     tag.textContent = rg.label;
     tag.style.cssText = `position:absolute; top:-18px; left:0; font-size:11px; color:${active ? '#7af07a' : '#4a7ac0'};
-      background:#000; padding:0 4px;`;
+      background:#000; padding:0 4px; transform:scale(${1 / trZoomLevel}); transform-origin:0 100%;`;
     el.appendChild(tag);
     el.onclick = (e) => { e.stopPropagation(); selectSavedRegion(rg); };
-    pane.appendChild(el);
+    layer.appendChild(el);
   }
 }
 
@@ -402,79 +462,131 @@ async function selectSavedRegion(rg) {
   renderSavedRegions();   // re-render so the newly-active box highlights green
 }
 
+// ── Draw New Room — arm click-to-corner mode ─────────────────────
+function startDrawingBox() {
+  drawingBox = true;
+  pendingCorners = [];
+  redrawPendingBox();
+  document.getElementById('name-crop-panel').style.display = 'none';
+  setStatus('click the first corner of the room boundary', '');
+}
+window.startDrawingBox = startDrawingBox;
 
-// ── Crop-box drag ────────────────────────────────────────────────
-function wireCropDrag(canvas) {
-  canvas.onmousedown = (e) => {
-    const r = canvas.getBoundingClientRect();
-    dragStart = { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
+function redrawPendingBox() {
+  document.querySelectorAll('.pending-corner, .pending-box').forEach((el) => el.remove());
+  const layer = document.getElementById('tr-layer');
+  if (pendingCorners.length === 1) {
+    const a = pendingCorners[0];
+    const dot = document.createElement('div');
+    dot.className = 'pending-corner';
+    dot.style.cssText = `position:absolute; left:${a.x * trCanvasNativeW}px; top:${a.y * trCanvasNativeH}px;
+      width:8px; height:8px; margin:-4px 0 0 -4px; background:#f0c040; border-radius:50%;
+      pointer-events:none; transform:scale(${1 / trZoomLevel}); transform-origin:center;`;
+    layer.appendChild(dot);
+  } else if (pendingCorners.length === 2) {
+    const [a, b] = pendingCorners;
+    const x0 = Math.min(a.x, b.x), y0 = Math.min(a.y, b.y);
+    const x1 = Math.max(a.x, b.x), y1 = Math.max(a.y, b.y);
+    const box = document.createElement('div');
+    box.className = 'pending-box';
+    box.style.cssText = `position:absolute; left:${x0 * trCanvasNativeW}px; top:${y0 * trCanvasNativeH}px;
+      width:${(x1 - x0) * trCanvasNativeW}px; height:${(y1 - y0) * trCanvasNativeH}px;
+      border:2px solid #f0c040; background:rgba(240,192,64,0.12); pointer-events:none;`;
+    layer.appendChild(box);
+  }
+}
+
+// ── Canvas interaction: wheel-zoom, drag-to-pan, click-to-corner ────────
+// Same pattern as multi-page.html's region modal (openRegionModal), ported
+// here rather than the old single mousedown-drag box: scroll to zoom
+// (centered on the cursor), drag to pan, two clicks to place opposite
+// corners of a room boundary. Clicks only capture corners while drawingBox
+// is armed (via "+ Draw New Room") -- otherwise a click either adds a
+// device inside the currently-reviewed room (unchanged behavior) or is
+// absorbed as the release of a pan drag.
+function wireTrCanvas() {
+  const wrap  = document.getElementById('tr-wrap');
+  const layer = document.getElementById('tr-layer');
+
+  wrap.onwheel = (e) => {
+    e.preventDefault();
+    const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+    const wRect = wrap.getBoundingClientRect();
+    const mx = e.clientX - wRect.left, my = e.clientY - wRect.top;
+    trPanX = mx - (mx - trPanX) * factor;
+    trPanY = my - (my - trPanY) * factor;
+    trZoomLevel = Math.min(10, Math.max(0.05, trZoomLevel * factor));
+    applyTrTransform();
+    renderMarkers();
+    renderSavedRegions();
+    redrawPendingBox();
   };
-  canvas.onmouseup = (e) => {
-    if (!dragStart) return;
-    const r = canvas.getBoundingClientRect();
-    const end = { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
-    const dx = Math.abs(end.x - dragStart.x), dy = Math.abs(end.y - dragStart.y);
-    if (dx < 0.01 && dy < 0.01) {
-      // A click, not a drag -> if a room is already confirmed, treat as "add device here".
-      if (cropRect && currentTrNumber) onCanvasClick(end);
-      dragStart = null;
+
+  let pressX = null, pressY = null;
+  wrap.onmousedown = (e) => {
+    pressX = e.clientX; pressY = e.clientY;
+    trDragStart = { x: e.clientX, y: e.clientY, panX: trPanX, panY: trPanY, moved: false };
+    wrap.style.cursor = 'grabbing';
+  };
+  wrap.onmousemove = (e) => {
+    if (!trDragStart || e.buttons !== 1) return;
+    const dx = e.clientX - trDragStart.x, dy = e.clientY - trDragStart.y;
+    if (Math.abs(dx) + Math.abs(dy) > 5) trDragStart.moved = true;
+    if (trDragStart.moved) { trPanX = trDragStart.panX + dx; trPanY = trDragStart.panY + dy; applyTrTransform(); }
+  };
+  wrap.onmouseup = (e) => {
+    wrap.style.cursor = drawingBox ? 'crosshair' : 'default';
+    const wasDrag = trDragStart?.moved;
+    trDragStart = null;
+    if (wasDrag) return;   // a real pan, not a click -- nothing more to do
+
+    const layerRect = layer.getBoundingClientRect();
+    const xN = Math.min(1, Math.max(0, (e.clientX - layerRect.left) / (trCanvasNativeW * trZoomLevel)));
+    const yN = Math.min(1, Math.max(0, (e.clientY - layerRect.top)  / (trCanvasNativeH * trZoomLevel)));
+
+    if (drawingBox) {
+      if (pendingCorners.length >= 2) pendingCorners = [];
+      pendingCorners.push({ x: xN, y: yN });
+      redrawPendingBox();
+      if (pendingCorners.length === 1) {
+        setStatus('click the opposite corner', '');
+      } else {
+        setStatus('✓ box set — name it and confirm', 'ok');
+        openNamingPanel();
+      }
       return;
     }
-    const pendingCrop = {
-      x0: Math.min(dragStart.x, end.x), y0: Math.min(dragStart.y, end.y),
-      x1: Math.max(dragStart.x, end.x), y1: Math.max(dragStart.y, end.y),
-    };
-    dragStart = null;
-    drawCropOverlay(pendingCrop);
-    showTrNamePopup(pendingCrop);
+
+    // Not drawing a new box -- fall through to the existing "click empty
+    // space inside a confirmed room to add a device" behavior.
+    if (cropRect && currentTrNumber) onCanvasClick({ x: xN, y: yN });
   };
 }
 
-function drawCropOverlay(rect) {
-  const box = rect || cropRect;
-  if (!box) return;
-  const canvas = document.getElementById('page-canvas');
-  const ctx = canvas.getContext('2d');
-  ctx.save();
-  ctx.strokeStyle = '#f0c040'; ctx.lineWidth = 2;
-  ctx.strokeRect(box.x0 * canvas.width, box.y0 * canvas.height,
-                 (box.x1 - box.x0) * canvas.width, (box.y1 - box.y0) * canvas.height);
-  ctx.restore();
-}
-
-// ── Name the room right after drawing its crop box ───────────────
+// ── Name the room once its two corners are set ───────────────────
 // Deliberately crop-first, name-second: the natural workflow on a 9-room
 // sheet is draw a box around one room, name it, move to the next box — not
 // pre-picking a name up top before knowing which box goes with it.
-function showTrNamePopup(pendingCrop) {
-  document.querySelectorAll('.add-popup').forEach((el) => el.remove());
-  const canvas = document.getElementById('page-canvas');
-  const popup = document.createElement('div');
-  popup.className = 'add-popup';
-  popup.style.left = (pendingCrop.x1 * canvas.clientWidth + 8) + 'px';
-  popup.style.top  = (pendingCrop.y0 * canvas.clientHeight) + 'px';
-  popup.innerHTML = `
-    <select id="tr-name-select" onchange="document.getElementById('tr-name-input').value=this.value">
-      <option value="">— or pick from schedule —</option>
-      ${scheduleRows.map((r) => `<option value="${r.tr_number}">${r.tr_number}</option>`).join('')}
-    </select>
-    <input type="text" id="tr-name-input" placeholder="type the room name as shown on the drawing (e.g. EB51A-1)">
-    <div id="tr-resolve-feedback"></div>
-    <div class="btn-row">
-      <button onclick="resolveAndConfirmCrop()">Confirm room name</button>
-      <button class="danger" onclick="cancelCropNaming()">Cancel</button>
-    </div>`;
-  document.getElementById('canvas-pane').appendChild(popup);
-  window._pendingCrop = pendingCrop;
+function openNamingPanel() {
+  const sel = document.getElementById('tr-name-select');
+  sel.innerHTML = '<option value="">— or pick from schedule —</option>' +
+    scheduleRows.map((r) => `<option value="${r.tr_number}">${r.tr_number}</option>`).join('');
+  document.getElementById('tr-name-input').value = '';
+  document.getElementById('tr-resolve-feedback').innerHTML = '';
+  document.getElementById('name-crop-panel').style.display = 'block';
   document.getElementById('tr-name-input').focus();
 }
 
 function cancelCropNaming() {
-  document.querySelectorAll('.add-popup').forEach((el) => el.remove());
-  window._pendingCrop = null;
-  // Redraw the page to clear the abandoned crop overlay.
-  loadPage();
+  drawingBox = false;
+  pendingCorners = [];
+  redrawPendingBox();
+  document.getElementById('name-crop-panel').style.display = 'none';
+  setStatus('cancelled', '');
 }
+window.cancelCropNaming = cancelCropNaming;
+
+
 
 async function resolveAndConfirmCrop() {
   const typed = document.getElementById('tr-name-input').value.trim();
@@ -503,12 +615,17 @@ async function resolveAndConfirmCrop() {
   }
 
   const finalName = result.match || typed;
-  cropRect = window._pendingCrop;
+  const [a, b] = pendingCorners;
+  cropRect = { x0: Math.min(a.x, b.x), y0: Math.min(a.y, b.y), x1: Math.max(a.x, b.x), y1: Math.max(a.y, b.y) };
   currentTrNumber = finalName;
   document.getElementById('tr-select').value = scheduleRows.some((r) => r.tr_number === finalName) ? finalName : '';
-  document.querySelectorAll('.add-popup').forEach((el) => el.remove());
+  drawingBox = false;
+  pendingCorners = [];
+  redrawPendingBox();
+  document.getElementById('name-crop-panel').style.display = 'none';
   await confirmCrop();
 }
+window.resolveAndConfirmCrop = resolveAndConfirmCrop;
 
 // ── Confirm crop → load existing devices ────────────────────────
 async function confirmCrop() {
@@ -566,19 +683,19 @@ async function loadDevices() {
 // ── Markers (page-normalized coords → pixel position on the canvas) ──
 function renderMarkers() {
   document.querySelectorAll('.marker').forEach((el) => el.remove());
-  const canvas = document.getElementById('page-canvas');
-  const pane = document.getElementById('canvas-pane');
-  const scaleX = canvas.clientWidth / canvas.width || 1;
-  const scaleY = canvas.clientHeight / canvas.height || 1;
+  const layer = document.getElementById('tr-layer');
+  if (!trCanvasNativeW) return;
   for (const d of devices) {
     const el = document.createElement('div');
     el.className = 'marker' + (d.source === 'manual' ? ' manual' : '');
-    el.style.left = (d.x_norm * canvas.width * scaleX) + 'px';
-    el.style.top  = (d.y_norm * canvas.height * scaleY) + 'px';
+    el.style.left = (d.x_norm * trCanvasNativeW) + 'px';
+    el.style.top  = (d.y_norm * trCanvasNativeH) + 'px';
+    el.style.transform = `scale(${1 / trZoomLevel})`;
+    el.style.transformOrigin = 'center';
     el.title = `${d.coded_note_number != null ? '#' + d.coded_note_number + ' ' : ''}${d.category || 'uncategorized'} (${d.source}) — click to remove`;
     el.textContent = d.coded_note_number ?? '?';
     el.onclick = (e) => { e.stopPropagation(); removeDevice(d.id); };
-    pane.appendChild(el);
+    layer.appendChild(el);
   }
 }
 
@@ -600,11 +717,15 @@ function onCanvasClick(normPos) {
 
 function showAddPopup(normPos) {
   document.querySelectorAll('.add-popup').forEach((el) => el.remove());
-  const canvas = document.getElementById('page-canvas');
   const popup = document.createElement('div');
   popup.className = 'add-popup';
-  popup.style.left = (normPos.x * canvas.clientWidth) + 'px';
-  popup.style.top  = (normPos.y * canvas.clientHeight) + 'px';
+  // Positioned against #tr-wrap (unscaled) at the on-screen pixel the click
+  // landed at, computed through the current pan/zoom transform -- NOT a
+  // child of #tr-layer, or the popup's own text/buttons would visually
+  // scale with the page instead of staying a fixed, readable size.
+  popup.style.position = 'absolute';
+  popup.style.left = (trPanX + normPos.x * trCanvasNativeW * trZoomLevel) + 'px';
+  popup.style.top  = (trPanY + normPos.y * trCanvasNativeH * trZoomLevel) + 'px';
   popup.innerHTML = `
     <select id="add-note-select">
       ${codedNotes.map((n) => `<option value="${n.number}">#${n.number} — ${n.text.slice(0, 60)}${n.text.length > 60 ? '…' : ''}</option>`).join('')}
@@ -614,7 +735,7 @@ function showAddPopup(normPos) {
       <button onclick="submitAdd(${normPos.x}, ${normPos.y})">Add</button>
       <button class="danger" onclick="this.closest('.add-popup').remove()">Cancel</button>
     </div>`;
-  document.getElementById('canvas-pane').appendChild(popup);
+  document.getElementById('tr-wrap').appendChild(popup);
 }
 
 async function submitAdd(x_norm, y_norm) {
