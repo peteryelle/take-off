@@ -14,11 +14,21 @@
 // POST /api/pass-tr-schedule
 // Body: { project_id, page_id, text_items }
 //
-// read text_items -> parseTrSchedule (public/lib/tr-schedule.js) -> replace
-// this page's rows in tr_schedule_rows. That's the whole pass.
+// read text_items -> parseTrSchedule (public/lib/tr-schedule.js) -> return
+// the proposed rows. That's the whole pass now.
+//
+// HITL note: this endpoint used to delete+insert tr_schedule_rows directly,
+// with no human ever seeing a row before it landed. It no longer writes
+// anything -- it only proposes. tr-schedule-review.html calls this to get
+// the parse, lets a human edit/confirm each row, then POSTs the (possibly
+// edited) rows to confirm-tr-schedule.js, which does the actual write and
+// sets confirmed = true. This mirrors tr-room-review.html's existing
+// propose -> human review -> confirm pattern for rack counts -- T-500 was
+// the one step in this pipeline skipping that pattern entirely, silently
+// overwriting tr_schedule_rows on every batch re-run.
 
-import { getSupabase, ok, err, CORS } from "./utils/clients.js";
-import { requireOrg, assertProjectInOrg, assertPageInOrg, assertProjectUnlocked } from "./utils/auth.js";
+import { ok, err, CORS } from "./utils/clients.js";
+import { requireOrg, assertProjectInOrg, assertPageInOrg } from "./utils/auth.js";
 import { parseTrSchedule } from "../../public/lib/tr-schedule.js";
 
 export default async function handler(req) {
@@ -38,8 +48,9 @@ export default async function handler(req) {
 
   if (!(await assertProjectInOrg(supabase, project_id, orgId))) return err("Project not found in your organization", 404);
   if (!(await assertPageInOrg(supabase, page_id, orgId))) return err("Page not found in your organization", 404);
-  if (!(await assertProjectUnlocked(supabase, project_id)))
-    return err("Project is locked (accepted final run) — unlock it from the Report page before re-running.", 423);
+  // No lock check here — a lock guards writes that change counts, and this
+  // endpoint no longer writes anything. Re-proposing a parse for review is
+  // always safe, locked project or not.
 
   await supabase.from("pages").update({ status: "running", status_msg: null }).eq("id", page_id);
 
@@ -56,29 +67,10 @@ export default async function handler(req) {
 
     const rows = parseTrSchedule(text_items, page.tr_schedule);
 
-    // Always-overwrite semantics for this page — same convention as the
-    // device-library sync (legend_id-keyed), not an append. A re-run after a
-    // config fix should replace, not accumulate duplicate TR rows.
-    const { error: delErr } = await supabase.from("tr_schedule_rows").delete().eq("page_id", page_id);
-    if (delErr) throw new Error(`tr_schedule_rows delete failed: ${delErr.message}`);
-
-    if (rows.length) {
-      const { error: insErr } = await supabase.from("tr_schedule_rows").insert(
-        rows.map((r) => ({
-          org_id: orgId,
-          project_id,
-          page_id,
-          tr_number: r.tr_number,
-          building: r.building,
-          level: r.level,
-          total_terminations: r.total_terminations,
-          min_patch_panels: r.min_patch_panels,
-        }))
-      );
-      if (insErr) throw new Error(`tr_schedule_rows insert failed: ${insErr.message}`);
-    }
-
-    await supabase.from("pages").update({ status: "done", status_msg: null }).eq("id", page_id);
+    // Nothing is written to tr_schedule_rows here — see file header. Status
+    // settles on pending_review, not done: a human hasn't looked at this
+    // parse yet, and confirm-tr-schedule.js is what advances it to done.
+    await supabase.from("pages").update({ status: "pending_review", status_msg: null }).eq("id", page_id);
     return ok({ tr_count: rows.length, rows });
 
   } catch (e) {

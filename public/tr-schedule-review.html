@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>T-500 Schedule Review — Take-off</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="auth.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>pdfjsLib.GlobalWorkerOptions.workerSrc =
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
+<script type="module">
+  // Same reuse-not-reimplement convention as tr-room-review.html — one real
+  // stitching module, not a second copy of the merge logic.
+  import { stitchRuns } from './lib/stitch-runs.js';
+  window.TakeoffVec = { stitchRuns };
+</script>
+<style>
+* { box-sizing:border-box; margin:0; padding:0; }
+body { font-family:monospace; background:#0d0d0d; color:#e0e0e0; font-size:13px; }
+h1 { color:#f0c040; font-size:16px; letter-spacing:2px; text-transform:uppercase; }
+.top-bar { padding:16px 20px 8px; border-bottom:1px solid #1e1e1e; }
+.subtitle { color:#555; font-size:11px; margin-top:3px; }
+.config-bar { display:flex; gap:10px; align-items:center; padding:8px 20px;
+              background:#0a0a0a; border-bottom:1px solid #1e1e1e; flex-wrap:wrap; }
+.config-bar label { color:#666; font-size:11px; }
+input[type="text"], input[type="number"], select { background:#111; border:1px solid #2a2a2a;
+  color:#e0e0e0; padding:4px 8px; border-radius:3px; font-family:monospace; font-size:12px; }
+button { background:#1e3a1e; border:1px solid #3a7a3a; color:#7af07a; padding:5px 12px;
+         border-radius:3px; cursor:pointer; font-family:monospace; font-size:12px; }
+button:hover { background:#2a4a2a; }
+button:disabled { opacity:0.3; cursor:not-allowed; }
+button.amber { background:#2a2000; border-color:#6a5000; color:#f0c040; }
+button.amber:hover { background:#332800; }
+button.danger { background:#3a1e1e; border-color:#7a3a3a; color:#f07a7a; padding:3px 8px; }
+.status { font-size:11px; color:#666; }
+.status.ok  { color:#7af07a; }
+.status.err { color:#f07a7a; }
+.status.run { color:#f0c040; }
+.body { display:flex; gap:16px; padding:16px 20px; }
+.canvas-pane { border:1px solid #2a2a2a; background:#000; flex:1; min-width:0; overflow:auto; max-height:85vh; }
+.canvas-pane canvas { display:block; max-width:100%; }
+.side-panel { width:640px; flex-shrink:0; }
+.card { background:#111; border:1px solid #2a2a2a; border-radius:4px; padding:14px; margin-bottom:12px; }
+h2 { color:#f0c040; font-size:11px; letter-spacing:1px; text-transform:uppercase; margin-bottom:10px; }
+table { width:100%; border-collapse:collapse; font-size:12px; }
+th { text-align:left; color:#888; font-weight:normal; padding:4px 6px; border-bottom:1px solid #2a2a2a; }
+td { padding:2px 4px; border-bottom:1px solid #1a1a1a; }
+td input { width:100%; background:#0a0a0a; border:1px solid #222; color:#e0e0e0;
+           padding:3px 5px; font-family:monospace; font-size:12px; border-radius:2px; }
+td input.bad { border-color:#7a3a3a; background:#1a0f0f; }
+tr.review-row:hover td { background:#151515; }
+.hint { color:#555; font-size:11px; margin-top:6px; line-height:1.5; }
+.pending-badge { display:inline-block; background:#2a2000; color:#f0c040; font-size:10px;
+                 padding:1px 6px; border-radius:8px; margin-left:8px; letter-spacing:0.5px; }
+.confirmed-badge { display:inline-block; background:#0f2a0f; color:#7af07a; font-size:10px;
+                   padding:1px 6px; border-radius:8px; margin-left:8px; letter-spacing:0.5px; }
+</style>
+</head>
+<body>
+
+<div class="top-bar">
+  <h1>T-500 Schedule Review<span id="state-badge"></span></h1>
+  <div class="subtitle">Human-reviewed T-500 parse — proposed by pass-tr-schedule, confirmed here before it ever reaches tr_schedule_rows.</div>
+</div>
+
+<div class="config-bar">
+  <label>Netlify URL</label>
+  <input type="text" id="netlify-url" value="https://winquest-take-off.netlify.app" size="34">
+  <label>Project ID</label>
+  <input type="number" id="project-id" size="4">
+  <button onclick="loadPages()">Load Project</button>
+  <label>PDF</label>
+  <input type="file" id="pdf-file" accept="application/pdf" onchange="onPdfChosen(event)">
+  <label>Schedule Page</label>
+  <select id="page-select" onchange="onPageChosen()"><option value="">— load project first —</option></select>
+  <button onclick="runParse()" id="parse-btn" disabled>Parse T-500</button>
+  <span class="status" id="status"></span>
+</div>
+
+<div class="body">
+  <div class="canvas-pane" id="canvas-wrap">
+    <canvas id="pdf-canvas"></canvas>
+  </div>
+
+  <div class="side-panel">
+    <div class="card">
+      <h2>Proposed Rows <span id="row-count-label"></span></h2>
+      <table id="rows-table">
+        <thead>
+          <tr>
+            <th style="width:60px;">Bldg</th>
+            <th style="width:50px;">Level</th>
+            <th>TR Number</th>
+            <th style="width:70px;">Term.</th>
+            <th style="width:60px;">Patch</th>
+            <th style="width:24px;"></th>
+          </tr>
+        </thead>
+        <tbody id="rows-tbody">
+          <tr><td colspan="6" style="color:#555; padding:10px 6px;">Load a project, pick the T-500 page, and Parse.</td></tr>
+        </tbody>
+      </table>
+      <button onclick="addRow()" style="margin-top:10px;">+ Add Row</button>
+      <div class="hint">
+        Every cell is editable before confirming — fix a misread TR number, a swapped digit,
+        or fill in a row the parser couldn't find at all (e.g. a locator/column-count
+        mismatch case). Nothing is written to <code>tr_schedule_rows</code> until Confirm.
+      </div>
+    </div>
+
+    <div class="card">
+      <button class="amber" onclick="confirmRows()" id="confirm-btn" disabled style="width:100%; padding:8px;">
+        Confirm &amp; Write to tr_schedule_rows
+      </button>
+      <div class="hint" id="confirm-hint">
+        Confirming replaces this page's existing tr_schedule_rows entirely (same
+        overwrite-per-page semantics as before) and marks every row <code>confirmed = true</code>.
+        Downstream steps (TR-name join, assembly expansion, bom.js) should only read confirmed rows.
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function base() { return document.getElementById('netlify-url').value.replace(/\/$/, ''); }
+function setStatus(msg, cls) { const s = document.getElementById('status'); s.textContent = msg; s.className = 'status ' + (cls || ''); }
+
+let projectId = null;
+let pdfDoc = null;
+let schedulePages = [];   // pages rows with tr_schedule config, for this project
+let currentPageId = null;
+let currentPdfPageNum = null;
+let rows = [];            // in-memory editable proposal: [{tr_number,building,level,total_terminations,min_patch_panels}]
+let pageAlreadyConfirmed = false;
+
+// ── Auto-fill from URL (opened from multi-page.html) ──────────────────
+(function initFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const urlProjectId  = params.get('project_id');
+  const urlNetlifyUrl = params.get('netlify_url');
+  const urlPageId     = params.get('page_id');
+  if (urlNetlifyUrl) document.getElementById('netlify-url').value = urlNetlifyUrl;
+  if (urlProjectId) {
+    document.getElementById('project-id').value = urlProjectId;
+    window.addEventListener('DOMContentLoaded', async () => {
+      await loadPages();
+      if (urlPageId) {
+        const sel = document.getElementById('page-select');
+        sel.value = urlPageId;
+        await onPageChosen();
+      }
+    });
+  }
+})();
+
+// ── Project / schedule-page list ───────────────────────────────────────
+async function loadPages() {
+  projectId = parseInt(document.getElementById('project-id').value, 10);
+  if (!projectId) { setStatus('enter a project id', 'err'); return; }
+  setStatus('loading pages…', 'run');
+
+  const { data, error } = await window.TakeoffAuth.client
+    .from('pages')
+    .select('id, pdf_page_number, drawing_number, sheet_title, tr_schedule')
+    .eq('project_id', projectId)
+    .not('tr_schedule', 'is', null)
+    .order('pdf_page_number');
+  if (error) { setStatus('error: ' + error.message, 'err'); return; }
+
+  schedulePages = (data || []).filter(p => p.tr_schedule && p.tr_schedule.present !== false);
+  const sel = document.getElementById('page-select');
+  if (!schedulePages.length) {
+    sel.innerHTML = '<option value="">— no pages have a tr_schedule config —</option>';
+    setStatus('0 tr_schedule pages found — set pages.tr_schedule on the T-500 page first', 'err');
+    return;
+  }
+  sel.innerHTML = '<option value="">— select a page —</option>' +
+    schedulePages.map(p => `<option value="${p.id}">${p.drawing_number || ('pg ' + p.pdf_page_number)} — ${p.sheet_title || ''}</option>`).join('');
+  setStatus(`${schedulePages.length} tr_schedule page(s) loaded`, 'ok');
+
+  await attemptAutoLoadPdf(projectId);
+}
+
+// Mirrors tr-room-review.html's attemptAutoLoadPdf exactly — same endpoint,
+// same signed-URL download, same graceful no-op if nothing's persisted yet.
+async function attemptAutoLoadPdf(pid) {
+  if (pdfDoc) return true;
+  try {
+    const r = await fetch(`${base()}/api/pdf-storage-url`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: pid, mode: 'download' }),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.url) return false;
+    setStatus('loading persisted drawing set…', 'run');
+    const resp = await fetch(j.url);
+    if (!resp.ok) throw new Error(`Storage fetch failed: ${resp.status}`);
+    const ab = await resp.arrayBuffer();
+    pdfDoc = await pdfjsLib.getDocument({ data: ab }).promise;
+    setStatus(`✓ ${pdfDoc.numPages} pages loaded (persisted)`, 'ok');
+    return true;
+  } catch (e) {
+    console.warn('[attemptAutoLoadPdf]', e.message);
+    setStatus(`could not auto-load the persisted PDF (${e.message}) — please browse for it below`, 'err');
+    return false;
+  }
+}
+
+async function onPdfChosen(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const ab = await file.arrayBuffer();
+  pdfDoc = await pdfjsLib.getDocument({ data: ab }).promise;
+  setStatus(`✓ ${pdfDoc.numPages} pages loaded (manual)`, 'ok');
+  if (currentPdfPageNum) await renderCurrentPage();
+}
+window.onPdfChosen = onPdfChosen;
+
+async function onPageChosen() {
+  const sel = document.getElementById('page-select');
+  currentPageId = sel.value ? parseInt(sel.value, 10) : null;
+  document.getElementById('parse-btn').disabled = !currentPageId || !pdfDoc;
+  if (!currentPageId) return;
+
+  const pageRow = schedulePages.find(p => p.id === currentPageId);
+  currentPdfPageNum = pageRow?.pdf_page_number || null;
+
+  // Check whether this page already has confirmed rows, and load them
+  // in-place for editing rather than forcing a re-parse from scratch.
+  const { data: existing, error } = await window.TakeoffAuth.client
+    .from('tr_schedule_rows')
+    .select('tr_number, building, level, total_terminations, min_patch_panels, confirmed')
+    .eq('page_id', currentPageId)
+    .order('tr_number');
+  if (!error && existing && existing.length) {
+    rows = existing.map(r => ({ ...r }));
+    pageAlreadyConfirmed = existing.every(r => r.confirmed);
+    renderRowsTable();
+    updateStateBadge();
+    setStatus(`${existing.length} existing row(s) loaded from tr_schedule_rows`, 'ok');
+  } else {
+    rows = [];
+    pageAlreadyConfirmed = false;
+    renderRowsTable();
+    updateStateBadge();
+  }
+
+  if (pdfDoc && currentPdfPageNum) await renderCurrentPage();
+}
+window.onPageChosen = onPageChosen;
+
+function updateStateBadge() {
+  const badge = document.getElementById('state-badge');
+  if (!currentPageId) { badge.innerHTML = ''; return; }
+  badge.innerHTML = pageAlreadyConfirmed
+    ? '<span class="confirmed-badge">CONFIRMED</span>'
+    : (rows.length ? '<span class="pending-badge">PENDING REVIEW</span>' : '');
+}
+
+async function renderCurrentPage() {
+  const page = await pdfDoc.getPage(currentPdfPageNum);
+  const wrap = document.getElementById('canvas-wrap');
+  const targetW = wrap.clientWidth || 700;
+  const unscaled = page.getViewport({ scale: 1.0 });
+  const scale = targetW / unscaled.width;
+  const viewport = page.getViewport({ scale });
+  const canvas = document.getElementById('pdf-canvas');
+  canvas.width = viewport.width; canvas.height = viewport.height;
+  await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+}
+
+// ── Parse (propose) ─────────────────────────────────────────────────────
+async function runParse() {
+  if (!currentPageId || !pdfDoc || !currentPdfPageNum) return;
+  setStatus('extracting text…', 'run');
+  document.getElementById('parse-btn').disabled = true;
+
+  try {
+    const pdfPage  = await pdfDoc.getPage(currentPdfPageNum);
+    const viewport = pdfPage.getViewport({ scale: 1.0 });
+    const tContent = await pdfPage.getTextContent({ includeMarkedContent: false });
+    const W = viewport.width, H = viewport.height;
+
+    // Same raw-extraction + content-bbox-normalize approach as
+    // multi-page.html's batch runner — see that file's tr_schedule branch
+    // for why (title text on T-500 is 40-60+ chars, well past the
+    // short-anchor length cap used on ordinary device-anchor pages, so
+    // nothing here filters by string length the way that page does).
+    const allRaw = [];
+    for (const item of tContent.items) {
+      const raw = item.str?.trim();
+      if (!raw) continue;
+      const s = raw.replace(/[^\x20-\x7E]/g, '').trim();
+      if (!s) continue;
+      const tx = item.transform[4], ty = item.transform[5];
+      const fs = Math.abs(item.transform[3]);
+      const tw = item.width ?? 0, th = item.height ?? fs;
+      allRaw.push({ s, cx: tx + tw / 2, cy: ty + th / 2, left: tx, right: tx + tw, fs });
+    }
+
+    const xVals = allRaw.map(i => i.cx);
+    const yVals = allRaw.map(i => i.cy);
+    const xMin = xVals.length ? Math.min(...xVals) : 0;
+    const xMax = xVals.length ? Math.max(...xVals) : W;
+    const yMin = yVals.length ? Math.min(...yVals) : 0;
+    const yMax = yVals.length ? Math.max(...yVals) : H;
+    const cW = Math.max(xMax - xMin, W);
+    const cH = Math.max(yMax - yMin, H);
+
+    const stitchedItems = window.TakeoffVec.stitchRuns(allRaw).map((it) => ({
+      str:     it.s,
+      cx_norm: parseFloat(((it.cx - xMin) / cW).toFixed(4)),
+      cy_norm: parseFloat((1 - (it.cy - yMin) / cH).toFixed(4)),
+    }));
+
+    setStatus('parsing T-500…', 'run');
+    const r = await fetch(`${base()}/api/pass-tr-schedule`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: projectId, page_id: currentPageId, text_items: stitchedItems }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+
+    rows = j.rows.map(r => ({ ...r }));
+    pageAlreadyConfirmed = false;
+    renderRowsTable();
+    updateStateBadge();
+    setStatus(`✓ ${j.tr_count} row(s) proposed — review before confirming`, j.tr_count ? 'ok' : 'err');
+
+  } catch (e) {
+    setStatus('parse failed: ' + e.message, 'err');
+  } finally {
+    document.getElementById('parse-btn').disabled = false;
+  }
+}
+window.runParse = runParse;
+
+// ── Editable rows table ──────────────────────────────────────────────
+function renderRowsTable() {
+  const tbody = document.getElementById('rows-tbody');
+  document.getElementById('row-count-label').textContent = rows.length ? `(${rows.length})` : '';
+  document.getElementById('confirm-btn').disabled = rows.length === 0;
+
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="color:#555; padding:10px 6px;">No rows yet — Parse the page, or Add Row manually.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = rows.map((r, i) => `
+    <tr class="review-row">
+      <td><input type="text"   value="${esc(r.building ?? '')}"           onchange="editRow(${i},'building',this.value)"></td>
+      <td><input type="text"   value="${esc(r.level ?? '')}"              onchange="editRow(${i},'level',this.value)"></td>
+      <td><input type="text"   value="${esc(r.tr_number ?? '')}"          onchange="editRow(${i},'tr_number',this.value)" class="${r.tr_number ? '' : 'bad'}"></td>
+      <td><input type="number" value="${r.total_terminations ?? ''}"      onchange="editRow(${i},'total_terminations',this.value)" class="${r.total_terminations != null ? '' : 'bad'}"></td>
+      <td><input type="number" value="${r.min_patch_panels ?? ''}"        onchange="editRow(${i},'min_patch_panels',this.value)" class="${r.min_patch_panels != null ? '' : 'bad'}"></td>
+      <td><button class="danger" onclick="removeRow(${i})" title="Remove row">×</button></td>
+    </tr>
+  `).join('');
+}
+
+function esc(v) { return String(v).replace(/"/g, '&quot;'); }
+
+function editRow(i, key, value) {
+  if (key === 'total_terminations' || key === 'min_patch_panels') {
+    rows[i][key] = value === '' ? null : Number(value);
+  } else {
+    rows[i][key] = value === '' ? null : value;
+  }
+  pageAlreadyConfirmed = false;
+  updateStateBadge();
+  renderRowsTable();
+}
+window.editRow = editRow;
+
+function addRow() {
+  rows.push({ tr_number: '', building: null, level: null, total_terminations: null, min_patch_panels: null });
+  pageAlreadyConfirmed = false;
+  renderRowsTable();
+  updateStateBadge();
+}
+window.addRow = addRow;
+
+function removeRow(i) {
+  rows.splice(i, 1);
+  pageAlreadyConfirmed = false;
+  renderRowsTable();
+  updateStateBadge();
+}
+window.removeRow = removeRow;
+
+// ── Confirm (commit) ─────────────────────────────────────────────────
+async function confirmRows() {
+  if (!currentPageId || !rows.length) return;
+  const bad = rows.find(r => !r.tr_number || r.total_terminations == null || r.min_patch_panels == null);
+  if (bad) { setStatus('every row needs a TR number, terminations and patch panels before confirming', 'err'); renderRowsTable(); return; }
+
+  if (!confirm(`Write ${rows.length} row(s) to tr_schedule_rows for this page? This replaces any existing rows for this page.`)) return;
+
+  setStatus('confirming…', 'run');
+  document.getElementById('confirm-btn').disabled = true;
+  try {
+    const r = await fetch(`${base()}/api/confirm-tr-schedule`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: projectId, page_id: currentPageId, rows }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    pageAlreadyConfirmed = true;
+    updateStateBadge();
+    setStatus(`✓ confirmed — ${j.confirmed_count} row(s) written to tr_schedule_rows`, 'ok');
+  } catch (e) {
+    setStatus('confirm failed: ' + e.message, 'err');
+  } finally {
+    document.getElementById('confirm-btn').disabled = rows.length === 0;
+  }
+}
+window.confirmRows = confirmRows;
+</script>
+</body>
+</html>
