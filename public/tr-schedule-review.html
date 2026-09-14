@@ -295,11 +295,14 @@ window.zoomIn = zoomIn;
 window.zoomOut = zoomOut;
 window.zoomReset = zoomReset;
 
-// Scroll-wheel zoom over the canvas, centered roughly on the cursor via the
-// browser's own scroll-position preservation (overflow:auto container) —
-// simplest option that still feels natural, no custom pan-transform math.
+// Zoom only on ctrlKey+wheel (trackpad pinch, or explicit ctrl+scroll) —
+// plain wheel is left alone entirely so the browser's native overflow:auto
+// scroll handles panning. Capturing plain wheel for zoom (the previous
+// version) left no way to pan at all once zoomed in past the visible
+// width — exactly what made the table unreachable after zooming in.
 document.getElementById('canvas-wrap').addEventListener('wheel', (e) => {
   if (!pdfDoc || !currentPdfPageNum) return;
+  if (!e.ctrlKey) return;   // let the browser handle plain scroll as pan
   e.preventDefault();
   if (e.deltaY < 0) zoomIn(); else zoomOut();
 }, { passive: false });
