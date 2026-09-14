@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TR Device Counts — Take-off</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="auth.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>pdfjsLib.GlobalWorkerOptions.workerSrc =
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
+<style>
+* { box-sizing:border-box; margin:0; padding:0; }
+body { font-family:monospace; background:#0d0d0d; color:#e0e0e0; font-size:13px; }
+h1 { color:#f0c040; font-size:16px; letter-spacing:2px; text-transform:uppercase; }
+h2 { color:#f0c040; font-size:11px; letter-spacing:1px; text-transform:uppercase; margin-bottom:10px; }
+.top-bar { padding:16px 20px 8px; border-bottom:1px solid #1e1e1e; }
+.subtitle { color:#555; font-size:11px; margin-top:3px; }
+.config-bar { display:flex; gap:10px; align-items:center; padding:8px 20px;
+              background:#0a0a0a; border-bottom:1px solid #1e1e1e; flex-wrap:wrap; }
+.config-bar label { color:#666; font-size:11px; }
+input[type="text"], input[type="number"], select { background:#111; border:1px solid #2a2a2a;
+  color:#e0e0e0; padding:4px 6px; border-radius:3px; font-family:monospace; font-size:12px; }
+button { background:#1e3a1e; border:1px solid #3a7a3a; color:#7af07a; padding:5px 12px;
+         border-radius:3px; cursor:pointer; font-family:monospace; font-size:12px; }
+button:hover { background:#2a4a2a; }
+button:disabled { opacity:0.3; cursor:not-allowed; }
+button.amber { background:#2a2000; border-color:#6a5000; color:#f0c040; padding:3px 10px; font-size:11px; }
+button.amber:hover { background:#332800; }
+.status { font-size:11px; color:#666; }
+.status.ok  { color:#7af07a; }
+.status.err { color:#f07a7a; }
+.status.run { color:#f0c040; }
+.zoom-controls { display:flex; gap:4px; align-items:center; }
+.zoom-controls button { padding:3px 10px; }
+.zoom-controls span { color:#999; font-size:11px; min-width:38px; text-align:center; }
+.body { display:flex; gap:16px; padding:16px 20px; }
+.canvas-pane { border:1px solid #2a2a2a; background:#000; flex:1; min-width:0; overflow:auto; max-height:85vh; }
+.canvas-pane canvas { display:block; }
+.side-panel { width:900px; flex-shrink:0; max-height:85vh; overflow-y:auto; }
+.card { background:#111; border:1px solid #2a2a2a; border-radius:4px; padding:14px; }
+table { width:100%; border-collapse:collapse; font-size:11px; }
+th { text-align:center; color:#888; font-weight:normal; padding:3px 2px; border-bottom:1px solid #2a2a2a;
+     writing-mode:vertical-rl; text-orientation:mixed; height:70px; white-space:nowrap; }
+th.tr-col { writing-mode:horizontal-tb; text-align:left; height:auto; }
+td { padding:2px 2px; border-bottom:1px solid #1a1a1a; text-align:center; }
+td.tr-num { text-align:left; padding-left:6px; white-space:nowrap; color:#ddd; }
+td input { width:38px; background:#0a0a0a; border:1px solid #222; color:#e0e0e0;
+           padding:2px; font-family:monospace; font-size:11px; border-radius:2px; text-align:center; }
+tr.dirty td.tr-num { color:#f0c040; }
+tr:hover td { background:#151515; }
+.hint { color:#555; font-size:11px; margin-top:10px; line-height:1.5; }
+</style>
+</head>
+<body>
+
+<div class="top-bar">
+  <h1>TR Device Counts</h1>
+  <div class="subtitle">Manual per-category device counts, one row per confirmed TR room — no detection, just look and enter.</div>
+</div>
+
+<div class="config-bar">
+  <label>Netlify URL</label>
+  <input type="text" id="netlify-url" value="https://winquest-take-off.netlify.app" size="34">
+  <label>Project ID</label>
+  <input type="number" id="project-id" size="4">
+  <button onclick="loadAll()">Load Project</button>
+  <label>PDF</label>
+  <input type="file" id="pdf-file" accept="application/pdf" onchange="onPdfChosen(event)">
+  <label>Sheet</label>
+  <select id="sheet-select" onchange="onSheetChosen()"><option value="">— load project first —</option></select>
+  <button onclick="prevPage()" style="padding:2px 10px;">◀ Prev</button>
+  <input type="number" id="page-num" value="1" min="1" size="3" onchange="loadPage()">
+  <button onclick="nextPage()" style="padding:2px 10px;">Next ▶</button>
+  <div class="zoom-controls">
+    <button onclick="zoomOut()">−</button>
+    <span id="zoom-pct">fit</span>
+    <button onclick="zoomIn()">+</button>
+    <button onclick="zoomReset()">Fit</button>
+  </div>
+  <span class="status" id="status"></span>
+</div>
+
+<div class="body">
+  <div class="canvas-pane" id="canvas-wrap">
+    <canvas id="pdf-canvas"></canvas>
+  </div>
+
+  <div class="side-panel">
+    <div class="card">
+      <h2>TR Rooms <span id="row-count-label"></span></h2>
+      <table>
+        <thead>
+          <tr>
+            <th class="tr-col">TR Number</th>
+            <th>Rack (new)</th>
+            <th>Rack (exist)</th>
+            <th>Backboard</th>
+            <th>Ground busbar</th>
+            <th>Cable tray</th>
+            <th>Wire manager</th>
+            <th>Camera conn.</th>
+            <th>Access ctrl</th>
+            <th>Motion sensor</th>
+            <th>Sleeves</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="rows-tbody">
+          <tr><td colspan="12" style="text-align:left; color:#555; padding:10px 6px;">Load a project first.</td></tr>
+        </tbody>
+      </table>
+      <div class="hint">
+        Every field is a plain count — enter what you see on the sheet for that TR room. Save writes
+        the whole row's <code>device_counts</code> at once (and keeps <code>rack_count</code> in sync
+        with "Rack (new)" for the existing leader-fan tool). Rows highlight amber when edited and unsaved.
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const CATEGORIES = ['rack_new','rack_existing','backboard','ground_busbar','cable_tray','wire_manager','camera_connection','access_control','motion_sensor','sleeves'];
+
+function base() { return document.getElementById('netlify-url').value.replace(/\/$/, ''); }
+function setStatus(msg, cls) { const s = document.getElementById('status'); s.textContent = msg; s.className = 'status ' + (cls || ''); }
+
+let projectId = null;
+let pdfDoc = null;
+let rows = [];   // [{ id, tr_number, device_counts, dirty }]
+let currentPageNum = 1;
+
+(function initFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const urlProjectId  = params.get('project_id');
+  const urlNetlifyUrl = params.get('netlify_url');
+  if (urlNetlifyUrl) document.getElementById('netlify-url').value = urlNetlifyUrl;
+  if (urlProjectId) {
+    document.getElementById('project-id').value = urlProjectId;
+    window.addEventListener('DOMContentLoaded', () => loadAll());
+  }
+})();
+
+// ── Load project: rows + sheet list ─────────────────────────────────────
+async function loadAll() {
+  projectId = parseInt(document.getElementById('project-id').value, 10);
+  if (!projectId) { setStatus('enter a project id', 'err'); return; }
+  setStatus('loading TR rooms…', 'run');
+
+  const { data, error } = await window.TakeoffAuth.client
+    .from('tr_schedule_rows')
+    .select('id, tr_number, rack_count, device_counts')
+    .eq('project_id', projectId)
+    .order('tr_number');
+  if (error) { setStatus('error: ' + error.message, 'err'); return; }
+
+  rows = (data || []).map((r) => ({
+    id: r.id, tr_number: r.tr_number, dirty: false,
+    counts: { ...Object.fromEntries(CATEGORIES.map((c) => [c, null])), ...(r.device_counts || {}) },
+  }));
+  renderTable();
+  setStatus(`${rows.length} TR room(s) loaded`, 'ok');
+
+  const { data: pageRows, error: pageErr } = await window.TakeoffAuth.client
+    .from('pages')
+    .select('pdf_page_number, drawing_number, sheet_title')
+    .eq('project_id', projectId)
+    .order('pdf_page_number');
+  const sheetSel = document.getElementById('sheet-select');
+  if (pageErr || !pageRows?.length) {
+    sheetSel.innerHTML = '<option value="">— no pages found —</option>';
+  } else {
+    sheetSel.innerHTML = pageRows.map((p) =>
+      `<option value="${p.pdf_page_number}">pg ${p.pdf_page_number} — ${p.drawing_number || '(no dwg#)'}${p.sheet_title ? ' — ' + p.sheet_title : ''}</option>`
+    ).join('');
+  }
+
+  await attemptAutoLoadPdf(projectId);
+}
+window.loadAll = loadAll;
+
+async function attemptAutoLoadPdf(pid) {
+  if (pdfDoc) return true;
+  try {
+    const r = await fetch(`${base()}/api/pdf-storage-url`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: pid, mode: 'download' }),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.url) return false;
+    setStatus('loading persisted drawing set…', 'run');
+    const resp = await fetch(j.url);
+    if (!resp.ok) throw new Error(`Storage fetch failed: ${resp.status}`);
+    const ab = await resp.arrayBuffer();
+    pdfDoc = await pdfjsLib.getDocument({ data: ab }).promise;
+    setStatus(`✓ ${pdfDoc.numPages} pages loaded (persisted)`, 'ok');
+    await loadPage();
+    return true;
+  } catch (e) {
+    console.warn('[attemptAutoLoadPdf]', e.message);
+    setStatus(`could not auto-load the persisted PDF (${e.message}) — please browse for it below`, 'err');
+    return false;
+  }
+}
+
+async function onPdfChosen(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const ab = await file.arrayBuffer();
+  pdfDoc = await pdfjsLib.getDocument({ data: ab }).promise;
+  setStatus(`✓ ${pdfDoc.numPages} pages loaded (manual)`, 'ok');
+  await loadPage();
+}
+window.onPdfChosen = onPdfChosen;
+
+function onSheetChosen() {
+  const v = document.getElementById('sheet-select').value;
+  if (!v) return;
+  document.getElementById('page-num').value = v;
+  loadPage();
+}
+window.onSheetChosen = onSheetChosen;
+
+function prevPage() {
+  const input = document.getElementById('page-num');
+  input.value = Math.max(1, (parseInt(input.value, 10) || 1) - 1);
+  loadPage();
+}
+window.prevPage = prevPage;
+
+function nextPage() {
+  const input = document.getElementById('page-num');
+  const max = pdfDoc?.numPages || Infinity;
+  input.value = Math.min(max, (parseInt(input.value, 10) || 1) + 1);
+  loadPage();
+}
+window.nextPage = nextPage;
+
+// ── PDF render with real zoom (fit-scale × user multiplier, re-rendered
+// at resolution rather than a stretched bitmap) and pan reserved for plain
+// scroll -- both fixes proven out on the other two review tools; built in
+// here from the start instead of discovered as a bug again. ──
+let fitScale = 1.0, zoomMult = 1.0;
+
+async function loadPage() {
+  if (!pdfDoc) return;
+  currentPageNum = parseInt(document.getElementById('page-num').value, 10) || 1;
+  const sheetSel = document.getElementById('sheet-select');
+  if (sheetSel) sheetSel.value = String(currentPageNum);
+  await renderCurrentPage(true);
+}
+window.loadPage = loadPage;
+
+async function renderCurrentPage(recomputeFit) {
+  const page = await pdfDoc.getPage(currentPageNum);
+  const wrap = document.getElementById('canvas-wrap');
+  const unscaled = page.getViewport({ scale: 1.0 });
+  if (recomputeFit) {
+    fitScale = (wrap.clientWidth || 700) / unscaled.width;
+    zoomMult = 1.0;
+  }
+  const viewport = page.getViewport({ scale: fitScale * zoomMult });
+  const canvas = document.getElementById('pdf-canvas');
+  canvas.width = viewport.width; canvas.height = viewport.height;
+  await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+  document.getElementById('zoom-pct').textContent = Math.round(zoomMult * 100) + '%';
+}
+
+function zoomIn()    { zoomMult = Math.min(6, zoomMult * 1.4); renderCurrentPage(false); }
+function zoomOut()   { zoomMult = Math.max(0.2, zoomMult / 1.4); renderCurrentPage(false); }
+function zoomReset() { renderCurrentPage(true); }
+window.zoomIn = zoomIn; window.zoomOut = zoomOut; window.zoomReset = zoomReset;
+
+document.getElementById('canvas-wrap').addEventListener('wheel', (e) => {
+  if (!pdfDoc) return;
+  if (!e.ctrlKey) return;   // plain scroll = native pan
+  e.preventDefault();
+  if (e.deltaY < 0) zoomIn(); else zoomOut();
+}, { passive: false });
+
+// ── Table ────────────────────────────────────────────────────────────
+function renderTable() {
+  const tbody = document.getElementById('rows-tbody');
+  document.getElementById('row-count-label').textContent = rows.length ? `(${rows.length})` : '';
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="12" style="text-align:left; color:#555; padding:10px 6px;">No confirmed TR rooms yet — confirm the T-500 schedule first.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map((r, i) => `
+    <tr class="${r.dirty ? 'dirty' : ''}">
+      <td class="tr-num">${esc(r.tr_number)}</td>
+      ${CATEGORIES.map((c) => `<td><input type="number" min="0" value="${r.counts[c] ?? ''}" onchange="editCount(${i},'${c}',this.value)"></td>`).join('')}
+      <td><button class="amber" onclick="saveRow(${i})">Save</button></td>
+    </tr>
+  `).join('');
+}
+
+function esc(v) { return String(v).replace(/"/g, '&quot;'); }
+
+function editCount(i, cat, value) {
+  rows[i].counts[cat] = value === '' ? null : Math.max(0, parseInt(value, 10) || 0);
+  rows[i].dirty = true;
+  renderTable();
+}
+window.editCount = editCount;
+
+async function saveRow(i) {
+  const r = rows[i];
+  const cleanCounts = Object.fromEntries(
+    Object.entries(r.counts).filter(([, v]) => v != null)
+  );
+  setStatus(`saving ${r.tr_number}…`, 'run');
+  const { error } = await window.TakeoffAuth.client
+    .from('tr_schedule_rows')
+    .update({ device_counts: cleanCounts, rack_count: cleanCounts.rack_new ?? null })
+    .eq('id', r.id);
+  if (error) { setStatus('save error: ' + error.message, 'err'); return; }
+  r.dirty = false;
+  renderTable();
+  setStatus(`✓ saved ${r.tr_number}`, 'ok');
+}
+window.saveRow = saveRow;
+</script>
+</body>
+</html>
