@@ -39,7 +39,10 @@ button.danger { background:#3a1e1e; border-color:#7a3a3a; color:#f07a7a; padding
 .status.run { color:#f0c040; }
 .body { display:flex; gap:16px; padding:16px 20px; }
 .canvas-pane { border:1px solid #2a2a2a; background:#000; flex:1; min-width:0; overflow:auto; max-height:85vh; }
-.canvas-pane canvas { display:block; max-width:100%; }
+.canvas-pane canvas { display:block; }
+.zoom-controls { display:flex; gap:4px; align-items:center; }
+.zoom-controls button { padding:3px 10px; }
+.zoom-controls span { color:#999; font-size:11px; min-width:38px; text-align:center; }
 .side-panel { width:640px; flex-shrink:0; }
 .card { background:#111; border:1px solid #2a2a2a; border-radius:4px; padding:14px; margin-bottom:12px; }
 h2 { color:#f0c040; font-size:11px; letter-spacing:1px; text-transform:uppercase; margin-bottom:10px; }
@@ -75,6 +78,12 @@ tr.review-row:hover td { background:#151515; }
   <label>Schedule Page</label>
   <select id="page-select" onchange="onPageChosen()"><option value="">— load project first —</option></select>
   <button onclick="runParse()" id="parse-btn" disabled>Parse T-500</button>
+  <div class="zoom-controls">
+    <button onclick="zoomOut()">−</button>
+    <span id="zoom-pct">fit</span>
+    <button onclick="zoomIn()">+</button>
+    <button onclick="zoomReset()">Fit</button>
+  </div>
   <span class="status" id="status"></span>
 </div>
 
@@ -258,17 +267,42 @@ function updateStateBadge() {
     : (rows.length ? '<span class="pending-badge">PENDING REVIEW</span>' : '');
 }
 
-async function renderCurrentPage() {
+let fitScale = 1.0;   // scale that fits the page to the container width, recomputed per page
+let zoomMult = 1.0;   // user-controlled multiplier on top of fitScale — this is what +/-/Fit change
+
+async function renderCurrentPage(recomputeFit = true) {
   const page = await pdfDoc.getPage(currentPdfPageNum);
   const wrap = document.getElementById('canvas-wrap');
-  const targetW = wrap.clientWidth || 700;
   const unscaled = page.getViewport({ scale: 1.0 });
-  const scale = targetW / unscaled.width;
-  const viewport = page.getViewport({ scale });
+
+  if (recomputeFit) {
+    const targetW = wrap.clientWidth || 700;
+    fitScale = targetW / unscaled.width;
+    zoomMult = 1.0;
+  }
+
+  const viewport = page.getViewport({ scale: fitScale * zoomMult });
   const canvas = document.getElementById('pdf-canvas');
   canvas.width = viewport.width; canvas.height = viewport.height;
   await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+  document.getElementById('zoom-pct').textContent = Math.round(zoomMult * 100) + '%';
 }
+
+function zoomIn()    { zoomMult = Math.min(6, zoomMult * 1.4); renderCurrentPage(false); }
+function zoomOut()   { zoomMult = Math.max(0.2, zoomMult / 1.4); renderCurrentPage(false); }
+function zoomReset() { renderCurrentPage(true); document.getElementById('zoom-pct').textContent = '100%'; }
+window.zoomIn = zoomIn;
+window.zoomOut = zoomOut;
+window.zoomReset = zoomReset;
+
+// Scroll-wheel zoom over the canvas, centered roughly on the cursor via the
+// browser's own scroll-position preservation (overflow:auto container) —
+// simplest option that still feels natural, no custom pan-transform math.
+document.getElementById('canvas-wrap').addEventListener('wheel', (e) => {
+  if (!pdfDoc || !currentPdfPageNum) return;
+  e.preventDefault();
+  if (e.deltaY < 0) zoomIn(); else zoomOut();
+}, { passive: false });
 
 // ── Parse (propose) ─────────────────────────────────────────────────────
 async function runParse() {
