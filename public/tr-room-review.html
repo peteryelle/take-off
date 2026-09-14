@@ -45,7 +45,7 @@ button.danger { background:#3a1e1e; border-color:#7a3a3a; color:#f07a7a; }
 .status.run { color:#f0c040; }
 .body { display:flex; gap:16px; padding:16px 20px; }
 .canvas-pane { position:relative; border:1px solid #2a2a2a; background:#000; flex:1; min-width:0; overflow:auto; max-height:85vh; }
-.canvas-pane canvas { display:block; max-width:100%; cursor:crosshair; }
+.canvas-pane canvas { display:block; cursor:crosshair; }
 .marker { position:absolute; width:14px; height:14px; margin:-7px 0 0 -7px;
           border-radius:50%; border:2px solid #f0c040; background:rgba(240,192,64,0.25);
           cursor:pointer; font-size:9px; color:#f0c040; display:flex; align-items:center; justify-content:center; }
@@ -82,7 +82,8 @@ button.danger { background:#3a1e1e; border-color:#7a3a3a; color:#f07a7a; }
   <button onclick="loadTrRooms()">Load Project</button>
   <label>PDF</label>
   <input type="file" id="pdf-file" accept="application/pdf" onchange="onPdfChosen(event)">
-  <label>Page</label>
+  <label>Sheet</label>
+  <select id="sheet-select" onchange="onSheetChosen()"><option value="">— load project first —</option></select>
   <button onclick="prevPage()" style="padding:2px 10px;">◀ Prev</button>
   <input type="number" id="page-num" value="1" min="1" size="3" onchange="loadPage()">
   <button onclick="nextPage()" style="padding:2px 10px;">Next ▶</button>
@@ -258,6 +259,28 @@ async function loadTrRooms() {
     scheduleRows.map((r) => `<option value="${r.tr_number}">${r.tr_number}${r.rack_count != null ? ` (rack_count: ${r.rack_count})` : ''}</option>`).join('');
   setStatus(`${scheduleRows.length} TR rooms loaded`, 'ok');
 
+  // Sheet dropdown -- built from drawing_number/sheet_title, not page_role.
+  // page_role never actually persisted for this project's pages (still
+  // null for every T-40x sheet despite the role UI in multi-page.html
+  // showing them as tagged), so a role filter here would silently show
+  // nothing, the same dead-end tr-schedule-review.html hit before its
+  // config got set directly. Listing every page by its real sheet name
+  // sidesteps that dependency entirely and is what actually answers "which
+  // page number was I on" -- the number alone never did.
+  const { data: pageRows, error: pageErr } = await window.TakeoffAuth.client
+    .from('pages')
+    .select('pdf_page_number, drawing_number, sheet_title')
+    .eq('project_id', projectId)
+    .order('pdf_page_number');
+  const sheetSel = document.getElementById('sheet-select');
+  if (pageErr || !pageRows?.length) {
+    sheetSel.innerHTML = '<option value="">— no pages found —</option>';
+  } else {
+    sheetSel.innerHTML = pageRows.map((p) =>
+      `<option value="${p.pdf_page_number}">pg ${p.pdf_page_number} — ${p.drawing_number || '(no dwg#)'}${p.sheet_title ? ' — ' + p.sheet_title : ''}</option>`
+    ).join('');
+  }
+
   // Same persisted-drawing-set mechanism multi-page.html already uses --
   // this page was built with only a manual file-browse, an inconsistency
   // rather than an intentional difference. If this project already has a
@@ -266,6 +289,14 @@ async function loadTrRooms() {
   // the person doesn't need to re-browse a file they already attached once.
   await attemptAutoLoadPdf(projectId);
 }
+
+function onSheetChosen() {
+  const v = document.getElementById('sheet-select').value;
+  if (!v) return;
+  document.getElementById('page-num').value = v;
+  loadPage();
+}
+window.onSheetChosen = onSheetChosen;
 
 // Mirrors multi-page.html's attemptAutoLoadPdf exactly -- same endpoint,
 // same signed-URL download, same graceful no-op if nothing's persisted yet
@@ -339,6 +370,8 @@ async function persistPdfToStorage(file) {
 async function loadPage() {
   if (!pdfDoc) return;
   currentPageNum = parseInt(document.getElementById('page-num').value, 10) || 1;
+  const sheetSel = document.getElementById('sheet-select');
+  if (sheetSel) sheetSel.value = String(currentPageNum);
   const page = await pdfDoc.getPage(currentPageNum);
   currentPdfPage = page;
   pageSegments = null; // invalidate any cached segments from a previous page
