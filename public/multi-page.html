@@ -344,22 +344,29 @@ button.danger { background: #3a1e1e; border-color: #7a3a3a; color: #f07a7a; }
 <!-- ── STEP 2B (tr_design projects only): the demarc/waypoint/exclusion-zone
      setup above is floor-plan-only (device stamps routed to a TR pin) — a
      tr_design project's schedule/rack_detail/tr_room pages have none of
-     that to set up. Schedule-page routing already happens inside Batch
-     Run's own loop (cache.tr_schedule branch); tr_room pages route to
-     TR Room Device Review, a separate page built specifically for the
+     that to set up. The T-500 schedule step is now an explicit HITL
+     review (tr-schedule-review.html), not a silent Batch Run side-effect —
+     pass-tr-schedule.js only proposes a parse now; nothing lands in
+     tr_schedule_rows until a human confirms it there. tr_room pages route
+     to TR Room Device Review, a separate page built specifically for the
      leader-fan scan + confidence-map review — not duplicated here. ── -->
 <div class="section" id="step-patha-section" style="display:none;">
   <div class="section-title">2B · TR Design Take-off</div>
   <div style="font-size:13px; color:#aaa; margin-bottom:10px;">
     No demarc pins or routing here — a TR design take-off has one length capture only (manual cable-tray
-    trace, in TR Room Device Review). Schedule pages are read when you run Batch Run below; TR room pages
-    are scanned and reviewed on their own page.
+    trace, in TR Room Device Review). Three steps, in order: confirm the T-500 schedule first, then TR
+    Room Device Review can offer TR names to select (it reads from the confirmed <code>tr_schedule_rows</code>).
   </div>
-  <button onclick="openTrRoomReview()">↗ Open TR Room Device Review</button>
+  <div style="display:flex; gap:10px; flex-wrap:wrap;">
+    <button onclick="openTrScheduleReview()">↗ Open T-500 Schedule Review</button>
+    <button onclick="openTrRoomReview()">↗ Open TR Room Device Review</button>
+  </div>
   <div style="font-size:11px; color:#666; margin-top:8px;">
-    Opens with this project's id — crop each TR room, assign it against the parsed schedule, and confirm
-    its rack count there. Once schedule pages are tagged <code>schedule</code> and TR room pages are
-    tagged <code>tr_room</code> (done in step 2 above), Batch Run picks up the schedule pages on its own.
+    T-500 Schedule Review: parse the schedule page, edit any misread cell, then Confirm — this is what
+    actually writes <code>tr_schedule_rows</code> now. TR Room Device Review: crop each TR room on the
+    T-401–407 pages, run rack-count detection, and save each room's rack count back onto its confirmed
+    schedule row. Page roles (<code>schedule</code> / <code>tr_room</code>, set in step 2 above) are what
+    each tool uses to find its own pages.
   </div>
 </div>
 
@@ -6247,6 +6254,13 @@ function openTrRoomReview() {
   window.open(`tr-room-review.html?project_id=${p}&netlify_url=${encodeURIComponent(base())}`, '_blank');
 }
 window.openTrRoomReview = openTrRoomReview;
+
+function openTrScheduleReview() {
+  const p = projectId || pid();
+  if (!p) { alert('load a project first'); return; }
+  window.open(`tr-schedule-review.html?project_id=${p}&netlify_url=${encodeURIComponent(base())}`, '_blank');
+}
+window.openTrScheduleReview = openTrScheduleReview;
 
 
 // ── Merge layer ───────────────────────────────────────────────────

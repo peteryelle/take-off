@@ -504,18 +504,38 @@ function redrawPendingBox() {
 // is armed (via "+ Draw New Room") -- otherwise a click either adds a
 // device inside the currently-reviewed room (unchanged behavior) or is
 // absorbed as the release of a pan drag.
+//
+// deltaY-on-plain-scroll is NOT safe to use for zoom direction: macOS's
+// System Settings > "natural scrolling" toggle (on by default) flips the
+// sign of deltaY for a two-finger trackpad scroll depending on that
+// setting, so "scroll up to zoom in" is backwards for roughly half of
+// users and there's no reliable way to detect which convention is active
+// from JS. Trackpad *pinch* gestures are a different, unambiguous signal
+// browsers report as wheel+ctrlKey with a magnification-consistent sign
+// regardless of natural-scrolling -- that's the only wheel-family signal
+// safe to map to zoom. So: ctrlKey+wheel (pinch, or literal ctrl+scroll on
+// a mouse) zooms; plain wheel pans instead of guessing zoom direction. The
+// +/-/reset buttons in the top bar remain the always-safe zoom fallback.
 function wireTrCanvas() {
   const wrap  = document.getElementById('tr-wrap');
   const layer = document.getElementById('tr-layer');
 
   wrap.onwheel = (e) => {
     e.preventDefault();
-    const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
-    const wRect = wrap.getBoundingClientRect();
-    const mx = e.clientX - wRect.left, my = e.clientY - wRect.top;
-    trPanX = mx - (mx - trPanX) * factor;
-    trPanY = my - (my - trPanY) * factor;
-    trZoomLevel = Math.min(10, Math.max(0.05, trZoomLevel * factor));
+
+    if (e.ctrlKey) {
+      const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+      const wRect = wrap.getBoundingClientRect();
+      const mx = e.clientX - wRect.left, my = e.clientY - wRect.top;
+      trPanX = mx - (mx - trPanX) * factor;
+      trPanY = my - (my - trPanY) * factor;
+      trZoomLevel = Math.min(10, Math.max(0.05, trZoomLevel * factor));
+    } else {
+      // Plain scroll = pan. deltaX/deltaY here are just scroll distance,
+      // not a direction judgment call, so there's nothing to get backwards.
+      trPanX -= e.deltaX;
+      trPanY -= e.deltaY;
+    }
     applyTrTransform();
     renderMarkers();
     renderSavedRegions();
