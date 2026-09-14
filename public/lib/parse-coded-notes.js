@@ -10,7 +10,11 @@
 // the same meaning at the same number as a different enlarged-room sheet.
 // Never assume "note 2 = rack" beyond the one sheet it was read from.
 //
-// Verified against a real sheet (T-401, Gainesville EHRM, 12 notes).
+// Verified against two real sheets (Gainesville EHRM): T-401 and T-407,
+// both now parsing to 7 legible notes each. T-401's own bare-digit case is
+// what the module originally targeted; T-407 needed the merged-number case
+// added below (its numbers sit close enough to their own body text to get
+// stitched together, so no standalone digit token exists for it to find).
 
 const norm = (s) => String(s).trim().replace(/\s+/g, ' ');
 
@@ -56,16 +60,27 @@ export function parseCodedNotes(textItems = [], opts = {}) {
   const maxColWidth = opts.maxColWidth ?? 0.10;
   const legendRegion = region.filter((it) => it.cx_norm <= leftEdge + maxColWidth);
 
-  // A real note-number is a bare 1-2 digit token sitting near the region's
-  // own left edge. Numbers embedded in prose ("45RU", "18\"W") are never
-  // standalone tokens matching this, so they're not candidates at all --
-  // the digit-only regex already excludes them without needing the position
-  // check, but the position check is what stops a genuine standalone number
-  // elsewhere in the note body (rare, but possible) from being read as a
-  // second note-start.
-  const numberCandidates = legendRegion.filter(
-    (it) => /^\d{1,2}$/.test(it.str.trim()) && it.cx_norm <= leftEdge + numberColTol
-  );
+  // A real note-number is either (a) a bare 1-2 digit token sitting near
+  // the region's own left edge (T-401: numbers sit far enough from their
+  // body text that stitchRuns keeps them separate), or (b) a 1-2 digit
+  // prefix merged directly onto the start of its own note's body text
+  // (T-407: confirmed real case -- "2 PROVIDE 24\" X 30\" 45RU 4-POST
+  // EQUIPMENT RACK..." comes through stitchRuns as ONE item, because this
+  // sheet's number-to-body gap is small enough to merge). Case (b) can't
+  // rely on cx_norm proximity to leftEdge -- the merged item's center sits
+  // wherever its full sentence centers, often far right of leftEdge -- so
+  // it's identified by pattern alone, safely, because it's already
+  // constrained to legendRegion (the coded-notes column) by this point.
+  // remainderOf tracks, for case (b) matches, the body text still owed
+  // from that same item after its leading number is stripped off.
+  const remainderOf = new Map();
+  const numberCandidates = legendRegion.filter((it) => {
+    const s = it.str.trim();
+    if (/^\d{1,2}$/.test(s) && it.cx_norm <= leftEdge + numberColTol) return true;
+    const m = /^(\d{1,2})\s+(\S.*)$/.exec(s);
+    if (m) { remainderOf.set(it, m[2]); return true; }
+    return false;
+  });
   if (!numberCandidates.length) return [];
 
   const starts = [...numberCandidates].sort((a, b) => a.cy_norm - b.cy_norm);
@@ -110,8 +125,11 @@ export function parseCodedNotes(textItems = [], opts = {}) {
     const bodyItems = legendRegion.filter(
       (it) => it.cy_norm >= yStart && it.cy_norm < yEnd && it !== validStarts[i]
     );
+    const pieces = bodyItems.map((it) => ({ cy_norm: it.cy_norm, cx_norm: it.cx_norm, str: it.str }));
+    const ownRemainder = remainderOf.get(validStarts[i]);
+    if (ownRemainder) pieces.push({ cy_norm: validStarts[i].cy_norm, cx_norm: validStarts[i].cx_norm, str: ownRemainder });
     const text = norm(
-      [...bodyItems].sort((a, b) => a.cy_norm - b.cy_norm || a.cx_norm - b.cx_norm)
+      pieces.sort((a, b) => a.cy_norm - b.cy_norm || a.cx_norm - b.cx_norm)
         .map((it) => it.str).join(' ')
     );
     if (text) notes.push({ number: num, text });
