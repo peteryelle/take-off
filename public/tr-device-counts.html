@@ -117,7 +117,7 @@ tr:hover td { background:#151515; }
   <div class="canvas-pane" id="canvas-wrap">
     <div id="canvas-stack" style="position:relative; display:inline-block;">
       <canvas id="pdf-canvas"></canvas>
-      <canvas id="done-marks-overlay" style="position:absolute; top:0; left:0; pointer-events:none;"></canvas>
+      <canvas id="done-marks-overlay" style="position:absolute; top:0; left:0; pointer-events:auto; cursor:copy;"></canvas>
       <canvas id="measure-overlay" style="position:absolute; top:0; left:0; pointer-events:none;"></canvas>
     </div>
   </div>
@@ -399,15 +399,12 @@ function toggleMeasure() {
   overlay.style.cursor = measureMode ? 'crosshair' : 'default';
   document.getElementById('measure-toggle').textContent = measureMode ? '📏 Measuring… (click to add points)' : '📏 Measure';
   document.getElementById('measure-toggle').classList.toggle('amber', measureMode);
-  // Mutually exclusive with the done-mark tool: it sits below this overlay
-  // in the stack, so an armed Measure silently swallows every click meant
-  // for placing a mark, with no visible sign anything is wrong.
-  if (measureMode && pendingMarkRowIndex != null) {
-    pendingMarkRowIndex = null;
-    const marksOverlay = document.getElementById('done-marks-overlay');
-    marksOverlay.style.pointerEvents = 'none';
-    marksOverlay.style.cursor = 'default';
-  }
+  // The two click-tools share the same drawing surface -- only one should
+  // ever be listening at a time, or Measure silently eats clicks meant for
+  // the mark tool underneath it.
+  const marksOverlay = document.getElementById('done-marks-overlay');
+  marksOverlay.style.pointerEvents = measureMode ? 'none' : 'auto';
+  marksOverlay.style.cursor = measureMode ? 'default' : 'copy';
 }
 window.toggleMeasure = toggleMeasure;
 
@@ -478,8 +475,6 @@ document.getElementById('measure-overlay').addEventListener('click', (e) => {
 // CLICK TIME, which is resolution/zoom-independent: multiplying back out
 // by the CURRENT canvas.width/height at redraw time repositions it
 // correctly at any zoom level, on any later visit to the page.
-let pendingMarkRowIndex = null;
-
 function drawSmiley(ctx, cx, cy, r) {
   ctx.lineWidth = 3;
   ctx.strokeStyle = '#22c55e';
@@ -501,38 +496,24 @@ function redrawDoneMarks() {
   }
 }
 
-function armDoneMark(i) {
-  pendingMarkRowIndex = i;
-  const overlay = document.getElementById('done-marks-overlay');
-  overlay.style.pointerEvents = 'auto';
-  overlay.style.cursor = 'crosshair';
-  // Same mutual-exclusivity fix as toggleMeasure(): if Measure was left
-  // armed (it doesn't auto-off after use), it sits above this overlay and
-  // would silently intercept the very click this is arming for.
-  if (measureMode) {
-    measureMode = false;
-    const measureOverlay = document.getElementById('measure-overlay');
-    measureOverlay.style.pointerEvents = 'none';
-    measureOverlay.style.cursor = 'default';
-    document.getElementById('measure-toggle').textContent = '📏 Measure';
-    document.getElementById('measure-toggle').classList.remove('amber');
-  }
-  setStatus(`click on the drawing near ${rows[i].tr_number}'s title to stamp it done`, 'run');
-}
-window.armDoneMark = armDoneMark;
-
+// One click, no arming step: check the room's box in the table (which you
+// were already doing to bracket the row anyway), then click its title on
+// the drawing. Whichever single row is checked is the target -- if none or
+// more than one is checked, this just tells you so instead of guessing.
 document.getElementById('done-marks-overlay').addEventListener('click', async (e) => {
-  if (pendingMarkRowIndex == null) return;
+  if (measureMode) return;
+  const checked = rows.filter((r) => r.checked);
+  if (checked.length !== 1) {
+    setStatus(checked.length === 0
+      ? 'check the box for the room you just finished, then click the drawing'
+      : 'more than one room is checked — check only the one you want to mark', 'err');
+    return;
+  }
+  const r = checked[0];
   const rect = e.target.getBoundingClientRect();
   const overlay = e.target;
-  const x_norm = (e.clientX - rect.left) / overlay.width;
-  const y_norm = (e.clientY - rect.top) / overlay.height;
-  const r = rows[pendingMarkRowIndex];
-  r.done_mark = { page: currentPageNum, x_norm, y_norm };
+  r.done_mark = { page: currentPageNum, x_norm: (e.clientX - rect.left) / overlay.width, y_norm: (e.clientY - rect.top) / overlay.height };
 
-  overlay.style.pointerEvents = 'none';
-  overlay.style.cursor = 'default';
-  pendingMarkRowIndex = null;
   redrawDoneMarks();
   renderTable();
 
@@ -559,7 +540,7 @@ function renderTable() {
       <td class="tr-num">${esc(r.tr_number)}</td>
       ${CATEGORIES.map((c) => `<td><input type="number" min="0" ${CATEGORY_UNIT[c] === 'ft' ? 'step="0.5"' : ''} value="${r.counts[c] ?? ''}" onchange="editCount(${i},'${c}',this.value)"></td>`).join('')}
       <td><button class="amber" onclick="saveRow(${i})">Save</button></td>
-      <td><button onclick="armDoneMark(${i})" title="Click, then click the room's title on the drawing to stamp a done-marker">${r.done_mark ? '😊' : '⬡'}</button></td>
+      <td style="text-align:center; font-size:16px;" title="${r.done_mark ? 'Marked done on pg ' + r.done_mark.page : 'Not marked yet'}">${r.done_mark ? '😊' : '—'}</td>
     </tr>
   `).join('');
 }
