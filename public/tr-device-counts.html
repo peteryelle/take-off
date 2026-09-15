@@ -42,9 +42,10 @@ button.amber:hover { background:#332800; }
 .rows-scroll thead th { position:sticky; top:0; background:#111; z-index:1; }
 .card { background:#111; border:1px solid #2a2a2a; border-radius:4px; padding:14px; }
 table { width:100%; border-collapse:collapse; font-size:11px; }
-th { text-align:center; color:#888; font-weight:normal; padding:3px 2px; border-bottom:1px solid #2a2a2a;
-     writing-mode:vertical-rl; text-orientation:mixed; height:70px; white-space:nowrap; }
-th.tr-col { writing-mode:horizontal-tb; text-align:left; height:auto; }
+th { text-align:left; color:#999; font-weight:normal; font-size:13px; padding:0; border-bottom:1px solid #2a2a2a;
+     height:90px; vertical-align:bottom; white-space:nowrap; position:relative; }
+th.tr-col { text-align:left; height:auto; vertical-align:bottom; padding:3px 2px; font-size:11px; }
+th span.rot { display:inline-block; transform:rotate(-40deg); transform-origin:left bottom; white-space:nowrap; padding-left:6px; }
 td { padding:2px 2px; border-bottom:1px solid #1a1a1a; text-align:center; }
 td.tr-num { text-align:left; padding-left:6px; white-space:nowrap; color:#ddd; }
 td input { width:38px; background:#0a0a0a; border:1px solid #222; color:#e0e0e0;
@@ -57,6 +58,7 @@ td input[type=number]::-webkit-outer-spin-button,
 td input[type=number]::-webkit-inner-spin-button { -webkit-appearance:none; margin:0; }
 td input[type=number] { -moz-appearance:textfield; }
 tr.dirty td.tr-num { color:#f0c040; }
+.row-checked td { border-top:2px solid #f0c040; border-bottom:2px solid #f0c040; }
 tr:hover td { background:#151515; }
 .hint { color:#555; font-size:11px; margin-top:10px; line-height:1.5; }
 </style>
@@ -154,16 +156,16 @@ tr:hover td { background:#151515; }
           <tr>
             <th style="writing-mode:horizontal-tb; height:auto;"><input type="checkbox" id="header-check" onchange="selectAll(this.checked)"></th>
             <th class="tr-col">TR Number</th>
-            <th>Rack (new)</th>
-            <th>Rack (exist)</th>
-            <th>Wire manager</th>
-            <th>Access ctrl</th>
-            <th>Backboard</th>
-            <th>Cable tray (ft)</th>
-            <th>Camera conn.</th>
-            <th>Ground busbar</th>
-            <th>Motion sensor</th>
-            <th>Sleeves</th>
+            <th><span class="rot">Rack (new)</span></th>
+            <th><span class="rot">Rack (exist)</span></th>
+            <th><span class="rot">Wire manager</span></th>
+            <th><span class="rot">Access ctrl</span></th>
+            <th><span class="rot">Backboard</span></th>
+            <th><span class="rot">Cable tray (ft)</span></th>
+            <th><span class="rot">Camera conn.</span></th>
+            <th><span class="rot">Ground busbar</span></th>
+            <th><span class="rot">Motion sensor</span></th>
+            <th><span class="rot">Sleeves</span></th>
             <th></th>
           </tr>
         </thead>
@@ -462,7 +464,7 @@ function renderTable() {
     return;
   }
   tbody.innerHTML = rows.map((r, i) => `
-    <tr class="${r.dirty ? 'dirty' : ''}">
+    <tr class="${r.dirty ? 'dirty' : ''} ${r.checked ? 'row-checked' : ''}">
       <td><input type="checkbox" ${r.checked ? 'checked' : ''} onchange="toggleCheck(${i},this.checked)"></td>
       <td class="tr-num">${esc(r.tr_number)}</td>
       ${CATEGORIES.map((c) => `<td><input type="number" min="0" ${CATEGORY_UNIT[c] === 'ft' ? 'step="0.5"' : ''} value="${r.counts[c] ?? ''}" onchange="editCount(${i},'${c}',this.value)"></td>`).join('')}
