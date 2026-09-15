@@ -29,8 +29,8 @@
 import { getSupabase, ok, err, CORS } from "./utils/clients.js";
 
 import { requireOrg, assertProjectInOrg, assertPageInOrg, assertProjectUnlocked } from "./utils/auth.js";
-const ROLES        = new Set(["plan", "schedule", "legend", "detail", "skip"]);
-const NON_COUNTING = new Set(["legend", "schedule", "detail", "skip"]);
+const ROLES        = new Set(["plan", "schedule", "legend", "detail", "skip", "tr_room", "rack_detail", "fiber_riser"]);
+const NON_COUNTING = new Set(["legend", "schedule", "detail", "skip", "tr_room", "rack_detail", "fiber_riser"]);
 
 export default async function handler(req) {
   if (req.method === "OPTIONS") return new Response("", { headers: CORS });
