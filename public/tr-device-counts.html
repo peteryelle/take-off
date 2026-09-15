@@ -47,6 +47,13 @@ td { padding:2px 2px; border-bottom:1px solid #1a1a1a; text-align:center; }
 td.tr-num { text-align:left; padding-left:6px; white-space:nowrap; color:#ddd; }
 td input { width:38px; background:#0a0a0a; border:1px solid #222; color:#e0e0e0;
            padding:2px; font-family:monospace; font-size:11px; border-radius:2px; text-align:center; }
+/* Drop the spinner arrows on every count field in the table -- this table
+   is meant for type-a-number, Tab, type-a-number, and the increment
+   buttons are just extra clicks (and stolen horizontal space) in the way
+   of that. */
+td input[type=number]::-webkit-outer-spin-button,
+td input[type=number]::-webkit-inner-spin-button { -webkit-appearance:none; margin:0; }
+td input[type=number] { -moz-appearance:textfield; }
 tr.dirty td.tr-num { color:#f0c040; }
 tr:hover td { background:#151515; }
 .hint { color:#555; font-size:11px; margin-top:10px; line-height:1.5; }
@@ -92,15 +99,15 @@ tr:hover td { background:#151515; }
 
       <div style="display:flex; gap:8px; align-items:center; margin-bottom:12px; padding:10px; background:#0a0a0a; border:1px solid #2a2a2a; border-radius:4px; flex-wrap:wrap;">
         <label style="color:#f0c040; font-size:11px;">BULK SET:</label>
-        <select id="bulk-category" style="padding:4px 6px;">
+        <select id="bulk-category" style="padding:4px 6px;" onchange="onBulkCategoryChanged()">
           <option value="rack_new">Rack (new)</option>
           <option value="rack_existing">Rack (exist)</option>
-          <option value="backboard">Backboard</option>
-          <option value="ground_busbar">Ground busbar</option>
-          <option value="cable_tray">Cable tray</option>
           <option value="wire_manager">Wire manager</option>
-          <option value="camera_connection">Camera conn.</option>
           <option value="access_control">Access ctrl</option>
+          <option value="backboard">Backboard</option>
+          <option value="cable_tray">Cable tray (ft)</option>
+          <option value="camera_connection">Camera conn.</option>
+          <option value="ground_busbar">Ground busbar</option>
           <option value="motion_sensor">Motion sensor</option>
           <option value="sleeves">Sleeves</option>
         </select>
@@ -122,12 +129,12 @@ tr:hover td { background:#151515; }
             <th class="tr-col">TR Number</th>
             <th>Rack (new)</th>
             <th>Rack (exist)</th>
-            <th>Backboard</th>
-            <th>Ground busbar</th>
-            <th>Cable tray</th>
             <th>Wire manager</th>
-            <th>Camera conn.</th>
             <th>Access ctrl</th>
+            <th>Backboard</th>
+            <th>Cable tray (ft)</th>
+            <th>Camera conn.</th>
+            <th>Ground busbar</th>
             <th>Motion sensor</th>
             <th>Sleeves</th>
             <th></th>
@@ -148,7 +155,17 @@ tr:hover td { background:#151515; }
 </div>
 
 <script>
-const CATEGORIES = ['rack_new','rack_existing','backboard','ground_busbar','cable_tray','wire_manager','camera_connection','access_control','motion_sensor','sleeves'];
+const CATEGORIES = ['rack_new','rack_existing','wire_manager','access_control','backboard','cable_tray','camera_connection','ground_busbar','motion_sensor','sleeves'];
+// Everything here is a unit count except cable_tray, which is a length in
+// feet -- different enough (decimal, not integer; "how many feet" not "how
+// many") that it needs its own parsing and step, not just a label change.
+const CATEGORY_UNIT = { cable_tray: 'ft' };
+function parseCategoryValue(cat, raw) {
+  if (raw === '' || raw == null) return null;
+  if (CATEGORY_UNIT[cat] === 'ft') { const n = parseFloat(raw); return Number.isFinite(n) ? Math.max(0, Math.round(n * 10) / 10) : null; }
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) ? Math.max(0, n) : null;
+}
 
 function base() { return document.getElementById('netlify-url').value.replace(/\/$/, ''); }
 function setStatus(msg, cls) { const s = document.getElementById('status'); s.textContent = msg; s.className = 'status ' + (cls || ''); }
@@ -319,7 +336,7 @@ function renderTable() {
     <tr class="${r.dirty ? 'dirty' : ''}">
       <td><input type="checkbox" ${r.checked ? 'checked' : ''} onchange="toggleCheck(${i},this.checked)"></td>
       <td class="tr-num">${esc(r.tr_number)}</td>
-      ${CATEGORIES.map((c) => `<td><input type="number" min="0" value="${r.counts[c] ?? ''}" onchange="editCount(${i},'${c}',this.value)"></td>`).join('')}
+      ${CATEGORIES.map((c) => `<td><input type="number" min="0" ${CATEGORY_UNIT[c] === 'ft' ? 'step="0.5"' : ''} value="${r.counts[c] ?? ''}" onchange="editCount(${i},'${c}',this.value)"></td>`).join('')}
       <td><button class="amber" onclick="saveRow(${i})">Save</button></td>
     </tr>
   `).join('');
@@ -328,7 +345,7 @@ function renderTable() {
 function esc(v) { return String(v).replace(/"/g, '&quot;'); }
 
 function editCount(i, cat, value) {
-  rows[i].counts[cat] = value === '' ? null : Math.max(0, parseInt(value, 10) || 0);
+  rows[i].counts[cat] = parseCategoryValue(cat, value);
   rows[i].dirty = true;
   renderTable();
 }
@@ -348,8 +365,13 @@ function selectAll(checked) {
 }
 window.selectAll = selectAll;
 
-function updateBulkTargetLabel() {
-  const allMode = document.getElementById('bulk-all').checked;
+function onBulkCategoryChanged() {
+  const cat = document.getElementById('bulk-category').value;
+  document.getElementById('bulk-value').step = CATEGORY_UNIT[cat] === 'ft' ? '0.5' : '1';
+}
+window.onBulkCategoryChanged = onBulkCategoryChanged;
+
+function updateBulkTargetLabel() {  const allMode = document.getElementById('bulk-all').checked;
   const n = allMode ? rows.length : rows.filter((r) => r.checked).length;
   document.getElementById('bulk-target-label').textContent = allMode ? `all ${rows.length} rooms` : `${n} checked row(s)`;
 }
@@ -363,7 +385,7 @@ window.updateBulkTargetLabel = updateBulkTargetLabel;
 function applyBulk() {
   const cat = document.getElementById('bulk-category').value;
   const raw = document.getElementById('bulk-value').value;
-  const val = raw === '' ? null : Math.max(0, parseInt(raw, 10) || 0);
+  const val = parseCategoryValue(cat, raw);
   const allMode = document.getElementById('bulk-all').checked;
   const targets = allMode ? rows : rows.filter((r) => r.checked);
   if (!targets.length) { setStatus('nothing selected to apply to', 'err'); return; }
