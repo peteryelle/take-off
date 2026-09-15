@@ -399,6 +399,15 @@ function toggleMeasure() {
   overlay.style.cursor = measureMode ? 'crosshair' : 'default';
   document.getElementById('measure-toggle').textContent = measureMode ? '📏 Measuring… (click to add points)' : '📏 Measure';
   document.getElementById('measure-toggle').classList.toggle('amber', measureMode);
+  // Mutually exclusive with the done-mark tool: it sits below this overlay
+  // in the stack, so an armed Measure silently swallows every click meant
+  // for placing a mark, with no visible sign anything is wrong.
+  if (measureMode && pendingMarkRowIndex != null) {
+    pendingMarkRowIndex = null;
+    const marksOverlay = document.getElementById('done-marks-overlay');
+    marksOverlay.style.pointerEvents = 'none';
+    marksOverlay.style.cursor = 'default';
+  }
 }
 window.toggleMeasure = toggleMeasure;
 
@@ -497,6 +506,17 @@ function armDoneMark(i) {
   const overlay = document.getElementById('done-marks-overlay');
   overlay.style.pointerEvents = 'auto';
   overlay.style.cursor = 'crosshair';
+  // Same mutual-exclusivity fix as toggleMeasure(): if Measure was left
+  // armed (it doesn't auto-off after use), it sits above this overlay and
+  // would silently intercept the very click this is arming for.
+  if (measureMode) {
+    measureMode = false;
+    const measureOverlay = document.getElementById('measure-overlay');
+    measureOverlay.style.pointerEvents = 'none';
+    measureOverlay.style.cursor = 'default';
+    document.getElementById('measure-toggle').textContent = '📏 Measure';
+    document.getElementById('measure-toggle').classList.remove('amber');
+  }
   setStatus(`click on the drawing near ${rows[i].tr_number}'s title to stamp it done`, 'run');
 }
 window.armDoneMark = armDoneMark;
