@@ -34,10 +34,12 @@ button.amber:hover { background:#332800; }
 .zoom-controls { display:flex; gap:4px; align-items:center; }
 .zoom-controls button { padding:3px 10px; }
 .zoom-controls span { color:#999; font-size:11px; min-width:38px; text-align:center; }
-.body { display:flex; gap:16px; padding:16px 20px; }
-.canvas-pane { border:1px solid #2a2a2a; background:#000; flex:1; min-width:0; overflow:auto; max-height:85vh; }
+.body { display:flex; flex-direction:column; gap:16px; padding:16px 20px; }
+.canvas-pane { border:1px solid #2a2a2a; background:#000; width:100%; overflow:auto; height:70vh; }
 .canvas-pane canvas { display:block; }
-.side-panel { width:900px; flex-shrink:0; max-height:85vh; overflow-y:auto; }
+.side-panel { width:100%; }
+.rows-scroll { max-height:180px; overflow-y:auto; }
+.rows-scroll thead th { position:sticky; top:0; background:#111; z-index:1; }
 .card { background:#111; border:1px solid #2a2a2a; border-radius:4px; padding:14px; }
 table { width:100%; border-collapse:collapse; font-size:11px; }
 th { text-align:center; color:#888; font-weight:normal; padding:3px 2px; border-bottom:1px solid #2a2a2a;
@@ -122,6 +124,7 @@ tr:hover td { background:#151515; }
           <button onclick="selectAll(false)" style="padding:3px 8px;">Check none</button>
         </span>
       </div>
+      <div class="rows-scroll">
       <table>
         <thead>
           <tr>
@@ -144,6 +147,7 @@ tr:hover td { background:#151515; }
           <tr><td colspan="13" style="text-align:left; color:#555; padding:10px 6px;">Load a project first.</td></tr>
         </tbody>
       </table>
+      </div>
       <button onclick="saveAllDirty()" class="amber" style="margin-top:10px; padding:6px 14px;">Save all changed rows (<span id="dirty-count">0</span>)</button>
       <div class="hint">
         Every field is a plain count — enter what you see on the sheet for that TR room. Save writes
