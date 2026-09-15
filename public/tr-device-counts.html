@@ -90,9 +90,33 @@ tr:hover td { background:#151515; }
   <span class="status" id="status"></span>
 </div>
 
+<div class="config-bar" style="border-top:none;">
+  <label>Scale</label>
+  <select id="measure-scale" onchange="onScaleChanged()">
+    <option value="96">1/8" = 1'-0"</option>
+    <option value="64">3/16" = 1'-0"</option>
+    <option value="48">1/4" = 1'-0"</option>
+    <option value="32">3/8" = 1'-0"</option>
+    <option value="24" selected>1/2" = 1'-0"</option>
+    <option value="16">3/4" = 1'-0"</option>
+    <option value="12">1" = 1'-0"</option>
+    <option value="8">1-1/2" = 1'-0"</option>
+    <option value="4">3" = 1'-0"</option>
+    <option value="custom">Custom…</option>
+  </select>
+  <input type="number" id="measure-scale-custom" placeholder="ft per paper-inch" style="width:110px; display:none;" onchange="onScaleChanged()">
+  <button onclick="toggleMeasure()" id="measure-toggle">📏 Measure</button>
+  <button onclick="clearMeasurement()" style="padding:4px 10px;">Clear</button>
+  <span class="status ok" id="measure-readout" style="font-size:13px;"></span>
+  <span class="hint" style="margin:0;">Click two or more points along the run on the drawing — matches the sheet's own printed scale. Set the scale here to whatever's printed on the current sheet's title block first.</span>
+</div>
+
 <div class="body">
   <div class="canvas-pane" id="canvas-wrap">
-    <canvas id="pdf-canvas"></canvas>
+    <div id="canvas-stack" style="position:relative; display:inline-block;">
+      <canvas id="pdf-canvas"></canvas>
+      <canvas id="measure-overlay" style="position:absolute; top:0; left:0; pointer-events:none;"></canvas>
+    </div>
   </div>
 
   <div class="side-panel">
@@ -313,6 +337,15 @@ async function renderCurrentPage(recomputeFit) {
   canvas.width = viewport.width; canvas.height = viewport.height;
   await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
   document.getElementById('zoom-pct').textContent = Math.round(zoomMult * 100) + '%';
+
+  // Overlay must match the PDF canvas's pixel buffer exactly, and any
+  // measurement in progress is only valid at the scale it was clicked at --
+  // a zoom or page change here means the old pixel coordinates no longer
+  // correspond to the same real-world points, so clear rather than
+  // silently misalign.
+  const overlay = document.getElementById('measure-overlay');
+  overlay.width = canvas.width; overlay.height = canvas.height;
+  clearMeasurement();
 }
 
 function zoomIn()    { zoomMult = Math.min(6, zoomMult * 1.4); renderCurrentPage(false); }
@@ -326,6 +359,98 @@ document.getElementById('canvas-wrap').addEventListener('wheel', (e) => {
   e.preventDefault();
   if (e.deltaY < 0) zoomIn(); else zoomOut();
 }, { passive: false });
+
+// ── Measure tool ─────────────────────────────────────────────────────
+// feetPerPaperInch: real-world feet represented by one inch on the printed
+// sheet -- e.g. 1/2" = 1'-0" means one paper-inch is 2 real feet. This is
+// exactly what the scale note printed in each sheet's title block says
+// (see the "1/2\" = 1'-0\"" label under each TR room diagram); the dropdown
+// just saves typing that ratio out by hand.
+let feetPerPaperInch = 2;    // default: 1/2" = 1'-0"
+let measureMode = false;
+let measurePoints = [];      // canvas-pixel coords, in the pdf-canvas's own pixel space
+
+function onScaleChanged() {
+  const sel = document.getElementById('measure-scale');
+  const customInput = document.getElementById('measure-scale-custom');
+  if (sel.value === 'custom') {
+    customInput.style.display = '';
+    feetPerPaperInch = parseFloat(customInput.value) || 2;
+  } else {
+    customInput.style.display = 'none';
+    feetPerPaperInch = parseFloat(sel.value);
+  }
+  redrawMeasureOverlay();
+}
+window.onScaleChanged = onScaleChanged;
+
+function toggleMeasure() {
+  measureMode = !measureMode;
+  const overlay = document.getElementById('measure-overlay');
+  overlay.style.pointerEvents = measureMode ? 'auto' : 'none';
+  overlay.style.cursor = measureMode ? 'crosshair' : 'default';
+  document.getElementById('measure-toggle').textContent = measureMode ? '📏 Measuring… (click to add points)' : '📏 Measure';
+  document.getElementById('measure-toggle').classList.toggle('amber', measureMode);
+}
+window.toggleMeasure = toggleMeasure;
+
+function clearMeasurement() {
+  measurePoints = [];
+  redrawMeasureOverlay();
+}
+window.clearMeasurement = clearMeasurement;
+
+// Canvas-pixel distance -> real feet, via the current render scale (px per
+// PDF point) -> PDF points -> paper inches (72 pt/in) -> real feet.
+function pxDistanceToFeet(dxPx, dyPx) {
+  const renderScale = fitScale * zoomMult;        // canvas px per PDF point
+  const dxPt = dxPx / renderScale, dyPt = dyPx / renderScale;
+  const distPt = Math.hypot(dxPt, dyPt);
+  const paperInches = distPt / 72;
+  return paperInches * feetPerPaperInch;
+}
+
+function redrawMeasureOverlay() {
+  const overlay = document.getElementById('measure-overlay');
+  const ctx = overlay.getContext('2d');
+  ctx.clearRect(0, 0, overlay.width, overlay.height);
+  const readout = document.getElementById('measure-readout');
+
+  if (!measurePoints.length) { readout.textContent = ''; return; }
+
+  ctx.strokeStyle = '#ff4d4d'; ctx.fillStyle = '#ff4d4d'; ctx.lineWidth = 2;
+  ctx.beginPath();
+  measurePoints.forEach((p, i) => { i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y); });
+  ctx.stroke();
+  measurePoints.forEach((p) => {
+    ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, Math.PI * 2); ctx.fill();
+  });
+
+  let totalFt = 0;
+  for (let i = 1; i < measurePoints.length; i++) {
+    totalFt += pxDistanceToFeet(measurePoints[i].x - measurePoints[i - 1].x, measurePoints[i].y - measurePoints[i - 1].y);
+  }
+  const last = measurePoints[measurePoints.length - 1];
+  ctx.font = 'bold 13px monospace';
+  ctx.fillStyle = '#000'; ctx.fillRect(last.x + 8, last.y - 20, 90, 18);
+  ctx.fillStyle = '#7af07a'; ctx.fillText(`${totalFt.toFixed(1)} ft`, last.x + 12, last.y - 6);
+
+  readout.textContent = measurePoints.length > 1
+    ? `Total: ${totalFt.toFixed(1)} ft over ${measurePoints.length - 1} segment(s) — type this into a Cable tray field`
+    : `1 point placed — click again to measure a segment`;
+}
+
+document.getElementById('measure-overlay').addEventListener('click', (e) => {
+  if (!measureMode) return;
+  const rect = e.target.getBoundingClientRect();
+  // getBoundingClientRect gives the element's CSS (display) size, which
+  // equals its pixel-buffer size here since neither canvas is ever CSS-
+  // scaled (no max-width cap, no transform) -- so this maps 1:1 to the
+  // same canvas-pixel space pxDistanceToFeet expects, with no separate
+  // devicePixelRatio correction needed.
+  measurePoints.push({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+  redrawMeasureOverlay();
+});
 
 // ── Table ────────────────────────────────────────────────────────────
 function renderTable() {
