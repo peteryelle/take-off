@@ -117,6 +117,7 @@ tr:hover td { background:#151515; }
   <div class="canvas-pane" id="canvas-wrap">
     <div id="canvas-stack" style="position:relative; display:inline-block;">
       <canvas id="pdf-canvas"></canvas>
+      <canvas id="done-marks-overlay" style="position:absolute; top:0; left:0; pointer-events:none;"></canvas>
       <canvas id="measure-overlay" style="position:absolute; top:0; left:0; pointer-events:none;"></canvas>
     </div>
   </div>
@@ -167,6 +168,7 @@ tr:hover td { background:#151515; }
             <th><span class="rot">Motion sensor</span></th>
             <th><span class="rot">Sleeves</span></th>
             <th></th>
+            <th style="writing-mode:horizontal-tb; height:auto;">Mark</th>
           </tr>
         </thead>
         <tbody id="rows-tbody">
@@ -224,13 +226,13 @@ async function loadAll() {
 
   const { data, error } = await window.TakeoffAuth.client
     .from('tr_schedule_rows')
-    .select('id, tr_number, rack_count, device_counts')
+    .select('id, tr_number, rack_count, device_counts, done_mark')
     .eq('project_id', projectId)
     .order('tr_number');
   if (error) { setStatus('error: ' + error.message, 'err'); return; }
 
   rows = (data || []).map((r) => ({
-    id: r.id, tr_number: r.tr_number, dirty: false, checked: false,
+    id: r.id, tr_number: r.tr_number, dirty: false, checked: false, done_mark: r.done_mark || null,
     counts: { ...Object.fromEntries(CATEGORIES.map((c) => [c, null])), ...(r.device_counts || {}) },
   }));
   renderTable();
@@ -348,6 +350,10 @@ async function renderCurrentPage(recomputeFit) {
   const overlay = document.getElementById('measure-overlay');
   overlay.width = canvas.width; overlay.height = canvas.height;
   clearMeasurement();
+
+  const marksOverlay = document.getElementById('done-marks-overlay');
+  marksOverlay.width = canvas.width; marksOverlay.height = canvas.height;
+  redrawDoneMarks();
 }
 
 function zoomIn()    { zoomMult = Math.min(6, zoomMult * 1.4); renderCurrentPage(false); }
@@ -454,13 +460,77 @@ document.getElementById('measure-overlay').addEventListener('click', (e) => {
   redrawMeasureOverlay();
 });
 
+// ── Done-mark tool ───────────────────────────────────────────────────
+// A big custom-drawn (not emoji-glyph, so the color is actually ours to
+// set) green smiley stamped wherever the user clicks -- purely a "have I
+// already done this room" visual, most useful on sheets with 4+ room
+// diagrams where the table below can't show which one you're looking at.
+// x_norm/y_norm are fractions of the canvas's own pixel dimensions AT
+// CLICK TIME, which is resolution/zoom-independent: multiplying back out
+// by the CURRENT canvas.width/height at redraw time repositions it
+// correctly at any zoom level, on any later visit to the page.
+let pendingMarkRowIndex = null;
+
+function drawSmiley(ctx, cx, cy, r) {
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = '#22c55e';
+  ctx.fillStyle = 'rgba(34,197,94,0.25)';
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#22c55e';
+  ctx.beginPath(); ctx.arc(cx - r * 0.32, cy - r * 0.2, r * 0.1, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx + r * 0.32, cy - r * 0.2, r * 0.1, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx, cy + r * 0.05, r * 0.55, 0.12 * Math.PI, 0.88 * Math.PI); ctx.stroke();
+}
+
+function redrawDoneMarks() {
+  const overlay = document.getElementById('done-marks-overlay');
+  const ctx = overlay.getContext('2d');
+  ctx.clearRect(0, 0, overlay.width, overlay.height);
+  for (const r of rows) {
+    if (!r.done_mark || r.done_mark.page !== currentPageNum) continue;
+    drawSmiley(ctx, r.done_mark.x_norm * overlay.width, r.done_mark.y_norm * overlay.height, 26);
+  }
+}
+
+function armDoneMark(i) {
+  pendingMarkRowIndex = i;
+  const overlay = document.getElementById('done-marks-overlay');
+  overlay.style.pointerEvents = 'auto';
+  overlay.style.cursor = 'crosshair';
+  setStatus(`click on the drawing near ${rows[i].tr_number}'s title to stamp it done`, 'run');
+}
+window.armDoneMark = armDoneMark;
+
+document.getElementById('done-marks-overlay').addEventListener('click', async (e) => {
+  if (pendingMarkRowIndex == null) return;
+  const rect = e.target.getBoundingClientRect();
+  const overlay = e.target;
+  const x_norm = (e.clientX - rect.left) / overlay.width;
+  const y_norm = (e.clientY - rect.top) / overlay.height;
+  const r = rows[pendingMarkRowIndex];
+  r.done_mark = { page: currentPageNum, x_norm, y_norm };
+
+  overlay.style.pointerEvents = 'none';
+  overlay.style.cursor = 'default';
+  pendingMarkRowIndex = null;
+  redrawDoneMarks();
+  renderTable();
+
+  // Auto-persists immediately -- this is a placement action, not a data
+  // value someone needs to review before it's written, unlike every count
+  // field in the table (which all wait for an explicit Save).
+  const { error } = await window.TakeoffAuth.client
+    .from('tr_schedule_rows').update({ done_mark: r.done_mark }).eq('id', r.id);
+  setStatus(error ? 'mark save error: ' + error.message : `✓ marked ${r.tr_number} done`, error ? 'err' : 'ok');
+});
+
 // ── Table ────────────────────────────────────────────────────────────
 function renderTable() {
   const tbody = document.getElementById('rows-tbody');
   document.getElementById('row-count-label').textContent = rows.length ? `(${rows.length})` : '';
   document.getElementById('dirty-count').textContent = rows.filter((r) => r.dirty).length;
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="13" style="text-align:left; color:#555; padding:10px 6px;">No confirmed TR rooms yet — confirm the T-500 schedule first.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="14" style="text-align:left; color:#555; padding:10px 6px;">No confirmed TR rooms yet — confirm the T-500 schedule first.</td></tr>';
     return;
   }
   tbody.innerHTML = rows.map((r, i) => `
@@ -469,6 +539,7 @@ function renderTable() {
       <td class="tr-num">${esc(r.tr_number)}</td>
       ${CATEGORIES.map((c) => `<td><input type="number" min="0" ${CATEGORY_UNIT[c] === 'ft' ? 'step="0.5"' : ''} value="${r.counts[c] ?? ''}" onchange="editCount(${i},'${c}',this.value)"></td>`).join('')}
       <td><button class="amber" onclick="saveRow(${i})">Save</button></td>
+      <td><button onclick="armDoneMark(${i})" title="Click, then click the room's title on the drawing to stamp a done-marker">${r.done_mark ? '😊' : '⬡'}</button></td>
     </tr>
   `).join('');
 }
