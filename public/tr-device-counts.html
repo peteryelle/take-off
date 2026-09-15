@@ -117,7 +117,7 @@ tr:hover td { background:#151515; }
   <div class="canvas-pane" id="canvas-wrap">
     <div id="canvas-stack" style="position:relative; display:inline-block;">
       <canvas id="pdf-canvas"></canvas>
-      <canvas id="done-marks-overlay" style="position:absolute; top:0; left:0; pointer-events:auto; cursor:copy;"></canvas>
+      <canvas id="done-marks-overlay" style="position:absolute; top:0; left:0; pointer-events:none;"></canvas>
       <canvas id="measure-overlay" style="position:absolute; top:0; left:0; pointer-events:none;"></canvas>
     </div>
   </div>
@@ -399,12 +399,6 @@ function toggleMeasure() {
   overlay.style.cursor = measureMode ? 'crosshair' : 'default';
   document.getElementById('measure-toggle').textContent = measureMode ? '📏 Measuring… (click to add points)' : '📏 Measure';
   document.getElementById('measure-toggle').classList.toggle('amber', measureMode);
-  // The two click-tools share the same drawing surface -- only one should
-  // ever be listening at a time, or Measure silently eats clicks meant for
-  // the mark tool underneath it.
-  const marksOverlay = document.getElementById('done-marks-overlay');
-  marksOverlay.style.pointerEvents = measureMode ? 'none' : 'auto';
-  marksOverlay.style.cursor = measureMode ? 'default' : 'copy';
 }
 window.toggleMeasure = toggleMeasure;
 
@@ -486,44 +480,35 @@ function drawSmiley(ctx, cx, cy, r) {
   ctx.beginPath(); ctx.arc(cx, cy + r * 0.05, r * 0.55, 0.12 * Math.PI, 0.88 * Math.PI); ctx.stroke();
 }
 
+// No location, no click, no checkbox needed -- done_mark is just
+// {page: N}. Every room marked done on the CURRENT page stacks as a small
+// green tag in the corner, so a sheet with several room diagrams shows at
+// a glance which ones are finished without needing to click anywhere on
+// the drawing itself.
 function redrawDoneMarks() {
   const overlay = document.getElementById('done-marks-overlay');
   const ctx = overlay.getContext('2d');
   ctx.clearRect(0, 0, overlay.width, overlay.height);
-  for (const r of rows) {
-    if (!r.done_mark || r.done_mark.page !== currentPageNum) continue;
-    drawSmiley(ctx, r.done_mark.x_norm * overlay.width, r.done_mark.y_norm * overlay.height, 26);
-  }
+  const doneOnThisPage = rows.filter((r) => r.done_mark && r.done_mark.page === currentPageNum);
+  doneOnThisPage.forEach((r, i) => {
+    const y = 26 + i * 40;
+    drawSmiley(ctx, 26, y, 16);
+    ctx.font = 'bold 14px monospace';
+    ctx.fillStyle = '#000'; ctx.fillRect(46, y - 10, ctx.measureText(r.tr_number).width + 12, 20);
+    ctx.fillStyle = '#7af07a'; ctx.fillText(r.tr_number, 52, y + 5);
+  });
 }
 
-// One click, no arming step: check the room's box in the table (which you
-// were already doing to bracket the row anyway), then click its title on
-// the drawing. Whichever single row is checked is the target -- if none or
-// more than one is checked, this just tells you so instead of guessing.
-document.getElementById('done-marks-overlay').addEventListener('click', async (e) => {
-  if (measureMode) return;
-  const checked = rows.filter((r) => r.checked);
-  if (checked.length !== 1) {
-    setStatus(checked.length === 0
-      ? 'check the box for the room you just finished, then click the drawing'
-      : 'more than one room is checked — check only the one you want to mark', 'err');
-    return;
-  }
-  const r = checked[0];
-  const rect = e.target.getBoundingClientRect();
-  const overlay = e.target;
-  r.done_mark = { page: currentPageNum, x_norm: (e.clientX - rect.left) / overlay.width, y_norm: (e.clientY - rect.top) / overlay.height };
-
+async function toggleDone(i) {
+  const r = rows[i];
+  r.done_mark = r.done_mark ? null : { page: currentPageNum };
   redrawDoneMarks();
   renderTable();
-
-  // Auto-persists immediately -- this is a placement action, not a data
-  // value someone needs to review before it's written, unlike every count
-  // field in the table (which all wait for an explicit Save).
   const { error } = await window.TakeoffAuth.client
     .from('tr_schedule_rows').update({ done_mark: r.done_mark }).eq('id', r.id);
-  setStatus(error ? 'mark save error: ' + error.message : `✓ marked ${r.tr_number} done`, error ? 'err' : 'ok');
-});
+  setStatus(error ? 'mark save error: ' + error.message : (r.done_mark ? `✓ marked ${r.tr_number} done` : `unmarked ${r.tr_number}`), error ? 'err' : 'ok');
+}
+window.toggleDone = toggleDone;
 
 // ── Table ────────────────────────────────────────────────────────────
 function renderTable() {
@@ -540,7 +525,7 @@ function renderTable() {
       <td class="tr-num">${esc(r.tr_number)}</td>
       ${CATEGORIES.map((c) => `<td><input type="number" min="0" ${CATEGORY_UNIT[c] === 'ft' ? 'step="0.5"' : ''} value="${r.counts[c] ?? ''}" onchange="editCount(${i},'${c}',this.value)"></td>`).join('')}
       <td><button class="amber" onclick="saveRow(${i})">Save</button></td>
-      <td style="text-align:center; font-size:16px;" title="${r.done_mark ? 'Marked done on pg ' + r.done_mark.page : 'Not marked yet'}">${r.done_mark ? '😊' : '—'}</td>
+      <td><button onclick="toggleDone(${i})" class="${r.done_mark ? '' : 'amber'}" style="${r.done_mark ? 'background:#0f2a0f; border-color:#2a7a2a; color:#7af07a;' : ''}">${r.done_mark ? '😊 Done' : 'Mark Done'}</button></td>
     </tr>
   `).join('');
 }
