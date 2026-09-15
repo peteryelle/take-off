@@ -89,9 +89,36 @@ tr:hover td { background:#151515; }
   <div class="side-panel">
     <div class="card">
       <h2>TR Rooms <span id="row-count-label"></span></h2>
+
+      <div style="display:flex; gap:8px; align-items:center; margin-bottom:12px; padding:10px; background:#0a0a0a; border:1px solid #2a2a2a; border-radius:4px; flex-wrap:wrap;">
+        <label style="color:#f0c040; font-size:11px;">BULK SET:</label>
+        <select id="bulk-category" style="padding:4px 6px;">
+          <option value="rack_new">Rack (new)</option>
+          <option value="rack_existing">Rack (exist)</option>
+          <option value="backboard">Backboard</option>
+          <option value="ground_busbar">Ground busbar</option>
+          <option value="cable_tray">Cable tray</option>
+          <option value="wire_manager">Wire manager</option>
+          <option value="camera_connection">Camera conn.</option>
+          <option value="access_control">Access ctrl</option>
+          <option value="motion_sensor">Motion sensor</option>
+          <option value="sleeves">Sleeves</option>
+        </select>
+        <label style="color:#666;">=</label>
+        <input type="number" id="bulk-value" min="0" value="1" style="width:50px;">
+        <button onclick="applyBulk()">Apply to <span id="bulk-target-label">checked rows</span></button>
+        <label style="color:#666; margin-left:8px;">
+          <input type="checkbox" id="bulk-all" onchange="updateBulkTargetLabel()"> all 45 rooms instead of just checked
+        </label>
+        <span style="color:#555; margin-left:auto;">
+          <button onclick="selectAll(true)" style="padding:3px 8px;">Check all</button>
+          <button onclick="selectAll(false)" style="padding:3px 8px;">Check none</button>
+        </span>
+      </div>
       <table>
         <thead>
           <tr>
+            <th style="writing-mode:horizontal-tb; height:auto;"><input type="checkbox" id="header-check" onchange="selectAll(this.checked)"></th>
             <th class="tr-col">TR Number</th>
             <th>Rack (new)</th>
             <th>Rack (exist)</th>
@@ -107,9 +134,10 @@ tr:hover td { background:#151515; }
           </tr>
         </thead>
         <tbody id="rows-tbody">
-          <tr><td colspan="12" style="text-align:left; color:#555; padding:10px 6px;">Load a project first.</td></tr>
+          <tr><td colspan="13" style="text-align:left; color:#555; padding:10px 6px;">Load a project first.</td></tr>
         </tbody>
       </table>
+      <button onclick="saveAllDirty()" class="amber" style="margin-top:10px; padding:6px 14px;">Save all changed rows (<span id="dirty-count">0</span>)</button>
       <div class="hint">
         Every field is a plain count — enter what you see on the sheet for that TR room. Save writes
         the whole row's <code>device_counts</code> at once (and keeps <code>rack_count</code> in sync
@@ -155,7 +183,7 @@ async function loadAll() {
   if (error) { setStatus('error: ' + error.message, 'err'); return; }
 
   rows = (data || []).map((r) => ({
-    id: r.id, tr_number: r.tr_number, dirty: false,
+    id: r.id, tr_number: r.tr_number, dirty: false, checked: false,
     counts: { ...Object.fromEntries(CATEGORIES.map((c) => [c, null])), ...(r.device_counts || {}) },
   }));
   renderTable();
@@ -282,12 +310,14 @@ document.getElementById('canvas-wrap').addEventListener('wheel', (e) => {
 function renderTable() {
   const tbody = document.getElementById('rows-tbody');
   document.getElementById('row-count-label').textContent = rows.length ? `(${rows.length})` : '';
+  document.getElementById('dirty-count').textContent = rows.filter((r) => r.dirty).length;
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="12" style="text-align:left; color:#555; padding:10px 6px;">No confirmed TR rooms yet — confirm the T-500 schedule first.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="13" style="text-align:left; color:#555; padding:10px 6px;">No confirmed TR rooms yet — confirm the T-500 schedule first.</td></tr>';
     return;
   }
   tbody.innerHTML = rows.map((r, i) => `
     <tr class="${r.dirty ? 'dirty' : ''}">
+      <td><input type="checkbox" ${r.checked ? 'checked' : ''} onchange="toggleCheck(${i},this.checked)"></td>
       <td class="tr-num">${esc(r.tr_number)}</td>
       ${CATEGORIES.map((c) => `<td><input type="number" min="0" value="${r.counts[c] ?? ''}" onchange="editCount(${i},'${c}',this.value)"></td>`).join('')}
       <td><button class="amber" onclick="saveRow(${i})">Save</button></td>
@@ -303,6 +333,64 @@ function editCount(i, cat, value) {
   renderTable();
 }
 window.editCount = editCount;
+
+function toggleCheck(i, checked) {
+  rows[i].checked = checked;
+  updateBulkTargetLabel();
+}
+window.toggleCheck = toggleCheck;
+
+function selectAll(checked) {
+  rows.forEach((r) => (r.checked = checked));
+  document.getElementById('header-check').checked = checked;
+  renderTable();
+  updateBulkTargetLabel();
+}
+window.selectAll = selectAll;
+
+function updateBulkTargetLabel() {
+  const allMode = document.getElementById('bulk-all').checked;
+  const n = allMode ? rows.length : rows.filter((r) => r.checked).length;
+  document.getElementById('bulk-target-label').textContent = allMode ? `all ${rows.length} rooms` : `${n} checked row(s)`;
+}
+window.updateBulkTargetLabel = updateBulkTargetLabel;
+
+// Sets one category's value across a target set of rows without saving --
+// same reasoning as everywhere else in this pipeline: the human applies,
+// looks at what changed (rows highlight amber), THEN saves. A bulk action
+// that also silently writes to the database on click would skip the one
+// review step this whole tool exists to provide.
+function applyBulk() {
+  const cat = document.getElementById('bulk-category').value;
+  const raw = document.getElementById('bulk-value').value;
+  const val = raw === '' ? null : Math.max(0, parseInt(raw, 10) || 0);
+  const allMode = document.getElementById('bulk-all').checked;
+  const targets = allMode ? rows : rows.filter((r) => r.checked);
+  if (!targets.length) { setStatus('nothing selected to apply to', 'err'); return; }
+  targets.forEach((r) => { r.counts[cat] = val; r.dirty = true; });
+  renderTable();
+  setStatus(`applied ${cat} = ${val ?? '(blank)'} to ${targets.length} row(s) — review, then Save`, 'ok');
+}
+window.applyBulk = applyBulk;
+
+async function saveAllDirty() {
+  const dirty = rows.filter((r) => r.dirty);
+  if (!dirty.length) { setStatus('nothing to save', 'err'); return; }
+  setStatus(`saving ${dirty.length} row(s)…`, 'run');
+  let failed = 0;
+  for (const r of dirty) {
+    const cleanCounts = Object.fromEntries(Object.entries(r.counts).filter(([, v]) => v != null));
+    const { error } = await window.TakeoffAuth.client
+      .from('tr_schedule_rows')
+      .update({ device_counts: cleanCounts, rack_count: cleanCounts.rack_new ?? null })
+      .eq('id', r.id);
+    if (error) { failed++; console.error(r.tr_number, error.message); continue; }
+    r.dirty = false;
+  }
+  renderTable();
+  setStatus(failed ? `saved ${dirty.length - failed}, ${failed} failed — see console` : `✓ saved ${dirty.length} row(s)`, failed ? 'err' : 'ok');
+}
+window.saveAllDirty = saveAllDirty;
 
 async function saveRow(i) {
   const r = rows[i];
