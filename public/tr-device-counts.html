@@ -399,6 +399,12 @@ function toggleMeasure() {
   overlay.style.cursor = measureMode ? 'crosshair' : 'default';
   document.getElementById('measure-toggle').textContent = measureMode ? '📏 Measuring… (click to add points)' : '📏 Measure';
   document.getElementById('measure-toggle').classList.toggle('amber', measureMode);
+  if (measureMode && pendingMarkRowIndex != null) {
+    pendingMarkRowIndex = null;
+    const marksOverlay = document.getElementById('done-marks-overlay');
+    marksOverlay.style.pointerEvents = 'none';
+    marksOverlay.style.cursor = 'default';
+  }
 }
 window.toggleMeasure = toggleMeasure;
 
@@ -480,35 +486,73 @@ function drawSmiley(ctx, cx, cy, r) {
   ctx.beginPath(); ctx.arc(cx, cy + r * 0.05, r * 0.55, 0.12 * Math.PI, 0.88 * Math.PI); ctx.stroke();
 }
 
-// No location, no click, no checkbox needed -- done_mark is just
-// {page: N}. Every room marked done on the CURRENT page stacks as a small
-// green tag in the corner, so a sheet with several room diagrams shows at
-// a glance which ones are finished without needing to click anywhere on
-// the drawing itself.
+// done_mark is {page, x_norm, y_norm} -- placed exactly where the user
+// clicks on the drawing, so it sits right on the room's own title instead
+// of stacking in a corner disconnected from the actual diagram.
 function redrawDoneMarks() {
   const overlay = document.getElementById('done-marks-overlay');
   const ctx = overlay.getContext('2d');
   ctx.clearRect(0, 0, overlay.width, overlay.height);
-  const doneOnThisPage = rows.filter((r) => r.done_mark && r.done_mark.page === currentPageNum);
-  doneOnThisPage.forEach((r, i) => {
-    const y = 26 + i * 40;
-    drawSmiley(ctx, 26, y, 16);
+  for (const r of rows) {
+    if (!r.done_mark || r.done_mark.page !== currentPageNum) continue;
+    const cx = r.done_mark.x_norm * overlay.width, cy = r.done_mark.y_norm * overlay.height;
+    drawSmiley(ctx, cx, cy, 20);
     ctx.font = 'bold 14px monospace';
-    ctx.fillStyle = '#000'; ctx.fillRect(46, y - 10, ctx.measureText(r.tr_number).width + 12, 20);
-    ctx.fillStyle = '#7af07a'; ctx.fillText(r.tr_number, 52, y + 5);
-  });
+    const w = ctx.measureText(r.tr_number).width + 12;
+    ctx.fillStyle = '#000'; ctx.fillRect(cx + 24, cy - 10, w, 20);
+    ctx.fillStyle = '#7af07a'; ctx.fillText(r.tr_number, cx + 30, cy + 5);
+  }
 }
 
+let pendingMarkRowIndex = null;
+
+// Click the button: if already marked, unmark right away (no second click
+// needed to remove one). If not marked yet, arm placement -- the very next
+// click anywhere on the drawing is where the mark lands.
 async function toggleDone(i) {
   const r = rows[i];
-  r.done_mark = r.done_mark ? null : { page: currentPageNum };
-  redrawDoneMarks();
-  renderTable();
-  const { error } = await window.TakeoffAuth.client
-    .from('tr_schedule_rows').update({ done_mark: r.done_mark }).eq('id', r.id);
-  setStatus(error ? 'mark save error: ' + error.message : (r.done_mark ? `✓ marked ${r.tr_number} done` : `unmarked ${r.tr_number}`), error ? 'err' : 'ok');
+  if (r.done_mark) {
+    r.done_mark = null;
+    redrawDoneMarks();
+    renderTable();
+    const { error } = await window.TakeoffAuth.client.from('tr_schedule_rows').update({ done_mark: null }).eq('id', r.id);
+    setStatus(error ? 'unmark error: ' + error.message : `unmarked ${r.tr_number}`, error ? 'err' : 'ok');
+    return;
+  }
+  pendingMarkRowIndex = i;
+  const overlay = document.getElementById('done-marks-overlay');
+  overlay.style.pointerEvents = 'auto';
+  overlay.style.cursor = 'crosshair';
+  // Reuses the same canvas stack Measure uses -- only one of the two
+  // click-tools should ever be listening at once, or Measure (left armed)
+  // would silently swallow the placement click.
+  if (measureMode) {
+    measureMode = false;
+    const mOverlay = document.getElementById('measure-overlay');
+    mOverlay.style.pointerEvents = 'none'; mOverlay.style.cursor = 'default';
+    document.getElementById('measure-toggle').textContent = '📏 Measure';
+    document.getElementById('measure-toggle').classList.remove('amber');
+  }
+  setStatus(`click ${r.tr_number}'s title on the drawing to place its mark`, 'run');
 }
 window.toggleDone = toggleDone;
+
+document.getElementById('done-marks-overlay').addEventListener('click', async (e) => {
+  if (pendingMarkRowIndex == null) return;
+  const rect = e.target.getBoundingClientRect();
+  const overlay = e.target;
+  const r = rows[pendingMarkRowIndex];
+  r.done_mark = { page: currentPageNum, x_norm: (e.clientX - rect.left) / overlay.width, y_norm: (e.clientY - rect.top) / overlay.height };
+
+  overlay.style.pointerEvents = 'none';
+  overlay.style.cursor = 'default';
+  pendingMarkRowIndex = null;
+  redrawDoneMarks();
+  renderTable();
+
+  const { error } = await window.TakeoffAuth.client.from('tr_schedule_rows').update({ done_mark: r.done_mark }).eq('id', r.id);
+  setStatus(error ? 'mark save error: ' + error.message : `✓ marked ${r.tr_number} done`, error ? 'err' : 'ok');
+});
 
 // ── Table ────────────────────────────────────────────────────────────
 function renderTable() {
