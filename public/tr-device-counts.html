@@ -42,10 +42,9 @@ button.amber:hover { background:#332800; }
 .rows-scroll thead th { position:sticky; top:0; background:#111; z-index:1; }
 .card { background:#111; border:1px solid #2a2a2a; border-radius:4px; padding:14px; }
 table { width:100%; border-collapse:collapse; font-size:11px; }
-th { text-align:left; color:#999; font-weight:normal; font-size:13px; padding:0; border-bottom:1px solid #2a2a2a;
-     height:90px; vertical-align:bottom; white-space:nowrap; position:relative; }
-th.tr-col { text-align:left; height:auto; vertical-align:bottom; padding:3px 2px; font-size:11px; }
-th span.rot { display:inline-block; transform:rotate(-40deg); transform-origin:left bottom; white-space:nowrap; padding-left:6px; }
+th { text-align:center; color:#999; font-weight:normal; font-size:12px; padding:2px 1px; border-bottom:1px solid #2a2a2a;
+     height:44px; vertical-align:bottom; white-space:normal; line-height:1.2; }
+th.tr-col { text-align:left; height:auto; vertical-align:bottom; padding:3px 2px; font-size:11px; white-space:nowrap; }
 td { padding:2px 2px; border-bottom:1px solid #1a1a1a; text-align:center; }
 td.tr-num { text-align:left; padding-left:6px; white-space:nowrap; color:#ddd; }
 td input { width:38px; background:#0a0a0a; border:1px solid #222; color:#e0e0e0;
@@ -157,16 +156,16 @@ tr:hover td { background:#151515; }
           <tr>
             <th style="writing-mode:horizontal-tb; height:auto;"><input type="checkbox" id="header-check" onchange="selectAll(this.checked)"></th>
             <th class="tr-col">TR Number</th>
-            <th><span class="rot">Rack (new)</span></th>
-            <th><span class="rot">Rack (exist)</span></th>
-            <th><span class="rot">Wire manager</span></th>
-            <th><span class="rot">Access ctrl</span></th>
-            <th><span class="rot">Backboard</span></th>
-            <th><span class="rot">Cable tray (ft)</span></th>
-            <th><span class="rot">Camera conn.</span></th>
-            <th><span class="rot">Ground busbar</span></th>
-            <th><span class="rot">Motion sensor</span></th>
-            <th><span class="rot">Sleeves</span></th>
+            <th>Rack (new)</th>
+            <th>Rack (exist)</th>
+            <th>Wire manager</th>
+            <th>Access ctrl</th>
+            <th>Backboard</th>
+            <th>Cable tray (ft)</th>
+            <th>Camera conn.</th>
+            <th>Ground busbar</th>
+            <th>Motion sensor</th>
+            <th>Sleeves</th>
             <th></th>
             <th style="writing-mode:horizontal-tb; height:auto;">Mark</th>
           </tr>
