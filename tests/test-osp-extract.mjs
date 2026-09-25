@@ -4,7 +4,7 @@
 // the Python's own output files, unchanged.
 // One documented difference: toEND-16's note (see buildGraph in osp-extract.js).
 import { readFileSync } from 'node:fs';
-import { runOsp, limitsFromRules } from '../public/lib/osp-extract.js';
+import { runOsp, limitsFromRules, recomputeSegment, sheetTakeoff, combineTakeoffs } from '../public/lib/osp-extract.js';
 
 let pass = 0, fail = 0;
 const ok = (c, msg) => { if (c) { pass++; console.log('  PASS ', msg); } else { fail++; console.log('  FAIL ', msg); } };
@@ -62,6 +62,15 @@ ok(strict.segments.filter((s) => s.flags.includes('PULL LIMIT')).length > r.segm
 // Fails loudly on a sheet it cannot read.
 const blank = runOsp({ draws: [], tcItems: input.tcItems, view: input.view, filename: input.file });
 ok(blank.problems[0].startsWith('No red or blue conduit linework'), 'no conduit linework -> clear problem message');
+
+// Page helpers
+const s04 = r.segments.find((s) => s.segment === 'toS04');
+const fixed = recomputeSegment({ ...s04, cables: 52 }, r.limits);
+ok(fixed.cable_ft_plan === Math.round(52 * s04.total_ft) && fixed.config.includes('52 Core-B'), 'a corrected cable count recomputes cable feet and the config text');
+const again = sheetTakeoff({ segRows: r.segments, nodes: r.nodes, callouts: r.callouts, disc: r.discrepancies });
+ok(JSON.stringify(again) === JSON.stringify(r.takeoff), 'totals rebuilt from saved rows equal the engine totals');
+const two = combineTakeoffs([r.takeoff, r.takeoff]);
+ok(two.find((t) => t.item === 'Core-A cable').quantity === 2 * 26529, 'totals across sheets add item by item');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

@@ -970,3 +970,39 @@ export function runOsp({ draws, tcItems, view, filename = '', rules = [], scaleO
     takeoff,
   };
 }
+
+// ═════════════════════════════ page helpers ═════════════════════════════
+// After a correction: recompute a segment row's derived fields and flags.
+export function recomputeSegment(row, limits = DEFAULT_LIMITS) {
+  const r = { ...row };
+  for (const k of ['total_ft', 'new_ft', 'existing_ft']) r[k] = Number(r[k]) || 0;
+  for (const k of ['cables', 'n_4in', 'n_1in_fa', 'with_cables', 'spare', 'elec']) r[k] = parseInt(r[k], 10) || 0;
+  r.new_4in_conduit_ft = pyRound(r.n_4in * r.new_ft);
+  r.new_1in_conduit_ft = pyRound(r.n_1in_fa * r.new_ft);
+  r.cable_ft_plan = pyRound(r.cables * r.total_ft);
+  r.pull_limit_ft = r.pathway === 'pipe basement' ? limits.interior_pull_ft : limits.osp_pull_ft;
+  const keep = String(r.flags || '').split('; ').filter((f) => f && !/PULL LIMIT|^BENDS|^no callout$/.test(f));
+  const flags = [];
+  if (r.total_ft > r.pull_limit_ft) flags.push(`OVER ${r.pull_limit_ft}' PULL LIMIT`);
+  if (Number(r.bends_deg) > limits.bends_deg) flags.push(`BENDS >${limits.bends_deg}`);
+  if (!r.core) flags.push('no callout');
+  r.flags = [...flags, ...keep].join('; ');
+  r.config = r.core ? `${r.n_4in}x4in (${r.with_cables} cabled/${r.spare} spare${r.elec ? `/${r.elec} elec` : ''})${r.n_1in_fa ? ` + ${r.n_1in_fa}x1in FA` : ''} | ${r.cables} Core-${r.core}${r.demarc ? ' + demarc' : ''}${r.pathway && r.pathway !== 'duct bank' ? ` | ${r.pathway}` : ''}` : '';
+  return r;
+}
+
+// A sheet's totals from its saved rows (nodes/callouts/discrepancies as stored).
+export function sheetTakeoff({ segRows, nodes, callouts, disc }) {
+  return takeoffRows({ segRows, nodes: new Map(nodes.map((n) => [n.id, n])), callouts, disc });
+}
+
+// Totals across sheets: quantities added item by item (overview sheets excluded by the caller).
+export function combineTakeoffs(lists) {
+  const out = new Map();
+  for (const list of lists) for (const t of list) {
+    const k = t.section + '|' + t.item;
+    if (!out.has(k)) out.set(k, { ...t, quantity: typeof t.quantity === 'number' ? 0 : t.quantity, note: /ft of route$/.test(t.note) ? '' : t.note });
+    if (typeof t.quantity === 'number') out.get(k).quantity += t.quantity;
+  }
+  return [...out.values()];
+}

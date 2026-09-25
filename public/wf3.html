@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WF3 · OSP site fiber — Take-off</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="auth.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
+<link rel="stylesheet" href="wf.css">
+<style>
+.wf-page { max-width: 1500px; }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); }
+.tab { font-family: inherit; font-size: 14px; padding: 10px 14px; background: none; border: none; border-bottom: 2px solid transparent; color: var(--muted); cursor: pointer; }
+.tab[aria-selected="true"] { color: var(--green); border-bottom-color: var(--green); font-weight: 700; }
+.chip { font-family: inherit; font-size: 13px; padding: 8px 12px; border-radius: 3px; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; }
+.chip[aria-pressed="true"] { border-color: var(--green-bd); background: var(--green-bg); color: var(--green); font-weight: 700; }
+.chip.muted { color: var(--muted); background: var(--bg); }
+.chip .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-left: 6px; vertical-align: middle; }
+.viewer { position: relative; overflow: auto; border: 1px solid var(--line); border-radius: 4px; background: #f4f2ec; height: 680px; }
+.viewer canvas { position: absolute; left: 0; top: 0; }
+.split { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 20px; }
+.kv { display: flex; justify-content: space-between; gap: 12px; }
+.small { font-size: 12px; }
+td, th { text-align: left; }
+.seg-row { cursor: pointer; }
+.seg-row:hover { background: #1a201d; }
+.seg-row.sel { background: var(--green-bg); }
+.cell { font-family: inherit; font-size: 12px; background: var(--bg); color: var(--text); border: 1px solid #3a443f; border-radius: 3px; padding: 4px 5px; width: 64px; }
+</style>
+</head>
+<body>
+<nav id="to-nav"></nav>
+<script src="nav.js"></script>
+
+<main class="wf-page">
+  <div class="wf-head">
+    <div>
+      <a class="wf-crumb" id="crumb" href="wf-projects.html">← Project</a>
+      <h1 class="wf-title"><span class="code">WF3</span> · OSP site fiber</h1>
+      <div class="wf-sub">Upload the site fiber routing sheets (T-100 overview, T-101…T-108 zones). Measured from the drawing's own linework — no cost.</div>
+    </div>
+    <span class="pill" id="step-pill">…</span>
+  </div>
+
+  <div id="intake"></div>
+
+  <section class="panel">
+    <div class="row" style="flex-wrap: wrap; gap: 8px">
+      <div id="chips" style="display: flex; gap: 8px; flex-wrap: wrap; flex-grow: 1"><span class="muted">No site fiber sheets yet — upload them above.</span></div>
+      <button type="button" class="btn blue small" id="measure-all" hidden>Measure all unmeasured</button>
+    </div>
+  </section>
+
+  <section class="banner orange" id="problems" hidden><div style="flex-grow: 1"><div class="kicker">CHECK THIS SHEET</div><div class="msg" id="problems-msg"></div></div></section>
+
+  <div class="split" id="work" hidden>
+    <section>
+      <div class="row" style="padding: 0 0 10px; border: none; gap: 8px">
+        <span id="sheet-title" style="font-weight: 700; flex-grow: 1"></span>
+        <button type="button" class="btn muted small" data-zoom="fit">Fit</button>
+        <button type="button" class="btn muted small" data-zoom="0.5">50%</button>
+        <button type="button" class="btn muted small" data-zoom="1">100%</button>
+        <button type="button" class="btn blue small" id="measure-one">Measure sheet</button>
+      </div>
+      <div class="viewer" id="viewer"><canvas id="pdf"></canvas><canvas id="ovl"></canvas></div>
+      <div class="small muted" style="margin-top: 6px">Take-off labels (toMH-1, toS05…) in green are generated here, not drawing text. Click a segment in the Segments tab to highlight it.</div>
+    </section>
+
+    <section style="display: flex; flex-direction: column; gap: 12px; min-width: 0">
+      <nav class="tabs" role="tablist">
+        <button type="button" class="tab" role="tab" aria-selected="true" data-tab="take">Take-off</button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-tab="check">To check</button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-tab="segs">Segments</button>
+      </nav>
+
+      <div data-panel="take">
+        <div style="display: flex; gap: 8px; margin-bottom: 10px">
+          <button type="button" class="chip" aria-pressed="true" data-scope="sheet">This sheet</button>
+          <button type="button" class="chip" aria-pressed="false" data-scope="all">All zone sheets</button>
+        </div>
+        <div class="panel" id="take"></div>
+        <div class="small muted" style="margin-top: 6px">Plan length, centre to centre. No slack, vertical rises, or routes not drawn in red/blue. The overview sheet is never added to the totals.</div>
+      </div>
+
+      <div data-panel="check" hidden>
+        <div class="panel" id="check"></div>
+      </div>
+
+      <div data-panel="segs" hidden>
+        <div class="panel" style="overflow-x: auto"><table style="width: 100%; border-collapse: collapse; font-size: 12px" id="segs"></table></div>
+        <div class="small muted" style="margin-top: 6px">Edit corrects a segment the drawing got wrong; you give the reason, and the original stays on record. Re-measuring the sheet replaces edits on it.</div>
+      </div>
+    </section>
+  </div>
+
+  <section class="panel">
+    <div class="row">
+      <span id="footer-msg" style="flex-grow: 1"></span>
+      <button type="button" class="btn muted" id="reopen" hidden>Reopen</button>
+      <button type="button" class="btn green" id="confirm" style="font-weight: 700">Confirm OSP</button>
+    </div>
+  </section>
+  <div class="status-line" id="status" role="status"></div>
+</main>
+
+<script type="module">
+import { mountIntake, api, post } from './lib/wf-intake-ui.js';
+import { extractDraws, runOsp, recomputeSegment, sheetTakeoff, combineTakeoffs, limitsFromRules } from './lib/osp-extract.js';
+
+const projectId = new URLSearchParams(location.search).get('project_id');
+if (!projectId) location.replace('wf-projects.html');
+try { sessionStorage.setItem('to_project_id', projectId); } catch {}
+document.getElementById('crumb').href = 'wf-project.html?project_id=' + projectId;
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const status = (m, c = '') => { $('status').className = 'status-line ' + c; $('status').textContent = m; };
+const fmt = (v) => (typeof v === 'number' ? v.toLocaleString('en-US') : esc(v));
+
+let intake = null, saved = null, rules = [], sheets = [], current = null, zoom = 'fit', scope = 'sheet', selSeg = null;
+const pdfCache = new Map();
+
+document.querySelectorAll('.tab').forEach((t) => t.onclick = () => {
+  document.querySelectorAll('.tab').forEach((x) => x.setAttribute('aria-selected', String(x === t)));
+  document.querySelectorAll('[data-panel]').forEach((p) => p.hidden = p.dataset.panel !== t.dataset.tab);
+});
+document.querySelectorAll('[data-scope]').forEach((b) => b.onclick = () => {
+  scope = b.dataset.scope;
+  document.querySelectorAll('[data-scope]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+  renderTake();
+});
+document.querySelectorAll('[data-zoom]').forEach((b) => b.onclick = () => { zoom = b.dataset.zoom; renderViewer(); });
+
+mountIntake($('intake'), { projectId, stepCode: 'WF3', showLocation: false, onData: (d) => { intake = d; buildSheets(); } });
+
+async function loadSaved() {
+  [saved, { rules }] = await Promise.all([api('/api/wf/wf3?project_id=' + projectId), api('/api/wf/wf1?project_id=' + projectId)]);
+}
+
+function buildSheets() {
+  if (!intake || !saved) return; // runs again once both have loaded
+  sheets = intake.pages
+    .filter((p) => (p.role === 'osp_route' || p.role === 'osp_overview') && !p.is_duplicate && p.revision && p.revision.status === 'accepted' && p.revision.is_current)
+    .sort((a, b) => String(a.sheet_number).localeCompare(String(b.sheet_number), undefined, { numeric: true }));
+  renderChips();
+  if (current && !sheets.some((s) => s.id === current.id)) current = null;
+  if (!current && sheets.length) select(sheets.find((s) => s.role === 'osp_route') || sheets[0]);
+  else if (current) select(current);
+}
+
+const runOf = (pageId) => saved?.runs.find((r) => r.page_id === pageId) || null;
+
+function renderChips() {
+  if (!sheets.length) { $('chips').innerHTML = '<span class="muted">No site fiber sheets yet — upload them above.</span>'; $('measure-all').hidden = true; $('work').hidden = true; return; }
+  $('chips').innerHTML = sheets.map((s) => {
+    const run = runOf(s.id), ov = s.role === 'osp_overview';
+    const dot = ov ? '' : run ? `<span class="dot" style="background: ${run.problems.length ? 'var(--orange)' : 'var(--green)'}"></span>` : '<span class="dot" style="background: #3a443f"></span>';
+    return `<button type="button" class="chip${ov ? ' muted' : ''}" aria-pressed="${current?.id === s.id}" data-page="${s.id}" title="${ov ? 'Overview: shows how zones connect; not measured' : run ? 'Measured' : 'Not measured yet'}">${esc(s.sheet_number || 'page ' + s.page_number)}${ov ? ' overview' : ''}${dot}</button>`;
+  }).join('');
+  document.querySelectorAll('[data-page]').forEach((b) => b.onclick = () => select(sheets.find((s) => s.id === Number(b.dataset.page))));
+  $('measure-all').hidden = !sheets.some((s) => s.role === 'osp_route' && !runOf(s.id));
+}
+
+function select(s) {
+  current = s; selSeg = null;
+  renderChips();
+  $('work').hidden = false;
+  const run = runOf(s.id);
+  const ov = s.role === 'osp_overview';
+  $('sheet-title').textContent = `${s.sheet_number || ''} · ${s.title_text || ''}${run ? ` · measured ${new Date(run.run_at).toLocaleDateString()}` : ''}`;
+  $('measure-one').hidden = ov;
+  $('measure-one').textContent = run ? 'Re-measure sheet' : 'Measure sheet';
+  $('problems').hidden = !(run && run.problems.length) && !ov;
+  $('problems-msg').textContent = ov ? 'Overview sheet: it repeats the zone sheets, so it is shown for reference and never added to the totals.' : (run?.problems || []).join(' ');
+  renderViewer(); renderTake(); renderChecks(); renderSegs();
+}
+
+// ── measuring (in the browser) ──
+async function loadPdf(docId) {
+  if (!pdfCache.has(docId)) {
+    const { url } = await post('/api/wf/documents', { action: 'file_url', document_id: docId });
+    pdfCache.set(docId, await pdfjsLib.getDocument(url).promise);
+  }
+  return pdfCache.get(docId);
+}
+
+async function measure(s) {
+  status(`Measuring ${s.sheet_number}…`);
+  const doc = await loadPdf(s.document_id);
+  const page = await doc.getPage(s.page_number);
+  const draws = await extractDraws(page, pdfjsLib.OPS);
+  const tc = await page.getTextContent();
+  const result = runOsp({ draws, tcItems: tc.items, view: page.view, filename: s.sheet_number || s.filename, rules });
+  const r = await post('/api/wf/wf3', { action: 'save_sheet', project_id: Number(projectId), page_id: s.id, sheet_revision_id: s.revision?.id || null, is_overview: false, result });
+  status(`${s.sheet_number}: ${r.segments} segments, ${r.callouts} callouts, ${r.discrepancies} items to check.${result.problems.length ? ' See the notes above the drawing.' : ''}`, result.problems.length ? '' : 'ok');
+}
+
+$('measure-one').onclick = async () => {
+  if (runOf(current.id) && saved.segments.some((x) => x.page_id === current.id && x.source === 'edited') && !confirm('Re-measuring replaces the corrections made on this sheet. Continue?')) return;
+  $('measure-one').disabled = true;
+  try { await measure(current); await loadSaved(); select(current); loadStep(); }
+  catch (e) { status(e.message, 'err'); }
+  $('measure-one').disabled = false;
+};
+$('measure-all').onclick = async () => {
+  $('measure-all').disabled = true;
+  try { for (const s of sheets.filter((x) => x.role === 'osp_route' && !runOf(x.id))) await measure(s); await loadSaved(); buildSheets(); loadStep(); }
+  catch (e) { status(e.message, 'err'); }
+  $('measure-all').disabled = false;
+};
+
+// ── drawing + overlay ──
+let renderToken = 0;
+async function renderViewer() {
+  const s = current; if (!s) return;
+  const token = ++renderToken;
+  try {
+    const doc = await loadPdf(s.document_id);
+    const page = await doc.getPage(s.page_number);
+    const base = page.getViewport({ scale: 1 });
+    const z = zoom === 'fit' ? ($('viewer').clientWidth - 2) / base.width : Number(zoom);
+    const vp = page.getViewport({ scale: z });
+    const c = $('pdf'), o = $('ovl');
+    c.width = o.width = Math.floor(vp.width); c.height = o.height = Math.floor(vp.height);
+    await page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+    if (token !== renderToken) return;
+    drawOverlay(o.getContext('2d'), z);
+  } catch (e) { status('Could not show the drawing: ' + e.message, 'err'); }
+}
+
+function drawOverlay(g, z) {
+  g.clearRect(0, 0, g.canvas.width, g.canvas.height);
+  const pid = current.id;
+  const segs = saved.segments.filter((x) => x.page_id === pid);
+  g.lineCap = 'round'; g.lineJoin = 'round';
+  for (const sgm of segs) {
+    const d = sgm.data, sel = selSeg === sgm.id;
+    g.strokeStyle = sel ? 'rgba(240,192,64,0.95)' : d.route === 'existing' ? 'rgba(40,100,220,0.45)' : d.route === 'mixed' ? 'rgba(150,60,200,0.45)' : 'rgba(220,40,40,0.45)';
+    g.lineWidth = Math.max(3, (sel ? 10 : 6) * z);
+    g.beginPath(); d.pts.forEach(([x, y], i) => (i ? g.lineTo(x * z, y * z) : g.moveTo(x * z, y * z))); g.stroke();
+    const m = d.pts[Math.floor(d.pts.length / 2)];
+    label(g, d.segment, m[0] * z, m[1] * z, z, '#0b5a2a');
+  }
+  g.strokeStyle = 'rgba(80,80,80,0.6)'; g.lineWidth = Math.max(1, 1.5 * z); g.setLineDash([4, 3]);
+  for (const co of saved.callouts.filter((x) => x.page_id === pid)) {
+    const b = co.data.bbox, h = co.data.hit; if (!b || !h) continue;
+    g.beginPath(); g.moveTo(((b[0] + b[2]) / 2) * z, ((b[1] + b[3]) / 2) * z); g.lineTo(h[0] * z, h[1] * z); g.stroke();
+  }
+  g.setLineDash([]);
+  for (const n of saved.nodes.filter((x) => x.page_id === pid)) {
+    const d = n.data, vault = d.type === 'MH' || d.type === 'HH';
+    g.fillStyle = vault ? '#0b7a2a' : d.type === 'END' ? '#666' : '#b86a10';
+    g.beginPath(); g.arc(d.x * z, d.y * z, Math.max(3, (vault ? 7 : 5) * z), 0, Math.PI * 2); g.fill();
+    if (d.type !== 'END') label(g, d.id, d.x * z + 8 * z, d.y * z - 8 * z, z, vault ? '#0b5a2a' : '#8a4a0a');
+  }
+}
+function label(g, t, x, y, z, color) {
+  g.font = `700 ${Math.max(10, 13 * z)}px "JetBrains Mono", monospace`;
+  g.lineWidth = 3; g.strokeStyle = 'rgba(255,255,255,0.85)'; g.strokeText(t, x, y);
+  g.fillStyle = color; g.fillText(t, x, y);
+}
+
+// ── take-off ──
+function renderTake() {
+  if (!current || !saved) return;
+  let rows;
+  if (scope === 'all') {
+    const zoneRuns = saved.runs.filter((r) => !r.is_overview && sheets.some((s) => s.id === r.page_id && s.role === 'osp_route'));
+    rows = combineTakeoffs(zoneRuns.map((r) => r.takeoff));
+    if (!zoneRuns.length) { $('take').innerHTML = '<div class="empty">No zone sheets measured yet.</div>'; return; }
+  } else {
+    const run = runOf(current.id);
+    if (current.role === 'osp_overview') { $('take').innerHTML = '<div class="empty">Overview sheet — not measured. Its routes are counted on the zone sheets.</div>'; return; }
+    if (!run) { $('take').innerHTML = '<div class="empty">Not measured yet. Click <b>Measure sheet</b>.</div>'; return; }
+    rows = run.takeoff;
+  }
+  let section = null, html = '';
+  for (const t of rows) {
+    if (t.section !== section) { section = t.section; html += `<div class="row head" style="padding-top: 10px; padding-bottom: 6px">${esc(section)}</div>`; }
+    html += `<div class="row" style="padding-top: 8px; padding-bottom: 8px; font-size: 13px"><span style="flex-grow: 1">${esc(t.item)}${t.note ? `<div class="small muted">${esc(t.note)}</div>` : ''}</span><span style="font-weight: 700; white-space: nowrap">${fmt(t.quantity)} ${esc(t.unit)}</span></div>`;
+  }
+  $('take').innerHTML = html;
+}
+
+// ── to check ──
+function renderChecks() {
+  const list = saved.discrepancies.filter((x) => x.page_id === current.id);
+  $('check').innerHTML = list.length ? list.map((d) => `
+    <div style="padding: 12px 16px; border-bottom: 1px solid var(--line-soft); display: flex; flex-direction: column; gap: 6px">
+      <div style="display: flex; gap: 10px; align-items: center">
+        <span class="pill ${d.status === 'rfi' ? 'stale' : d.status === 'resolved' ? 'confirmed' : 'in_review'}">${d.status === 'rfi' ? 'RFI' : d.status}</span>
+        <b>${esc(d.data.at)}</b><span class="muted small">${esc(d.data.category.toLowerCase())}</span>
+        <span style="flex-grow: 1"></span>
+        <select class="field" style="padding: 4px 6px; font-size: 12px" data-disc="${d.id}" aria-label="Status for ${esc(d.label)}">
+          ${['rfi', 'verify', 'resolved'].map((s) => `<option value="${s}"${s === d.status ? ' selected' : ''}>${s === 'rfi' ? 'RFI' : s}</option>`).join('')}
+        </select>
+      </div>
+      <div class="small">${esc(d.data.whats_off)} · expected ${esc(d.data.expected)}; found ${esc(d.data.found)}</div>
+      <div class="small muted">${esc(d.data.location)}${d.data.verify_first ? ` · verify first: ${esc(d.data.verify_first)}` : ''}</div>
+      ${d.data.rfi ? `<details class="small"><summary style="cursor: pointer; color: var(--blue)">Draft RFI</summary><div style="margin-top: 6px">${esc(d.data.rfi)}</div><button type="button" class="btn muted small" style="margin-top: 6px" data-copy="${esc(d.data.rfi)}">Copy</button></details>` : ''}
+    </div>`).join('') : `<div class="empty">${runOf(current.id) ? 'Nothing to check on this sheet.' : 'Not measured yet.'}</div>`;
+  document.querySelectorAll('[data-disc]').forEach((s) => s.onchange = async () => {
+    try { await post('/api/wf/wf3', { action: 'set_discrepancy', id: Number(s.dataset.disc), status: s.value }); await loadSaved(); renderChecks(); }
+    catch (e) { status(e.message, 'err'); }
+  });
+  document.querySelectorAll('[data-copy]').forEach((b) => b.onclick = () => { navigator.clipboard.writeText(b.dataset.copy); status('Draft RFI copied.', 'ok'); });
+}
+
+// ── segments ──
+const EDIT = ['total_ft', 'new_ft', 'existing_ft', 'core', 'cables', 'n_4in', 'with_cables', 'spare'];
+function renderSegs() {
+  const list = saved.segments.filter((x) => x.page_id === current.id);
+  if (!list.length) { $('segs').innerHTML = `<tr><td class="empty">${runOf(current.id) ? 'No segments found.' : 'Not measured yet.'}</td></tr>`; return; }
+  $('segs').innerHTML = `<tr class="muted small"><th style="padding: 8px">Seg</th><th>Run</th><th>Ft</th><th>Bends</th><th>Config</th><th>Flags</th><th></th></tr>` + list.map((x) => {
+    const d = x.data;
+    return `<tr class="seg-row${selSeg === x.id ? ' sel' : ''}" data-seg="${x.id}" style="border-top: 1px solid var(--line-soft)">
+      <td style="padding: 8px; font-weight: 700">${esc(d.segment)}${x.source === 'edited' ? ' <span class="pill stale" title="' + esc(x.override_basis) + '">edited</span>' : ''}</td>
+      <td>${esc(d.from)} → ${esc(d.to)}</td><td>${d.total_ft}</td><td>${d.bends_deg}</td>
+      <td>${esc(d.config || '—')}</td><td class="muted">${esc(d.flags)}</td>
+      <td><button type="button" class="btn muted small" data-edit="${x.id}">Edit</button></td></tr>
+      <tr hidden data-editrow="${x.id}"><td colspan="7" style="padding: 8px 8px 12px">
+        ${EDIT.map((k) => `<label class="small muted" style="display: inline-flex; flex-direction: column; margin-right: 8px">${k.replace(/_/g, ' ')}<input class="cell" data-f="${k}" value="${esc(d[k])}"></label>`).join('')}
+        <button type="button" class="btn green small" data-save="${x.id}">Save correction</button>
+      </td></tr>`;
+  }).join('');
+  document.querySelectorAll('[data-seg]').forEach((r) => r.onclick = (e) => { if (e.target.closest('button')) return; selSeg = Number(r.dataset.seg); renderSegs(); renderViewer(); });
+  document.querySelectorAll('[data-edit]').forEach((b) => b.onclick = () => { const r = document.querySelector(`[data-editrow="${b.dataset.edit}"]`); r.hidden = !r.hidden; });
+  document.querySelectorAll('[data-save]').forEach((b) => b.onclick = () => saveCorrection(Number(b.dataset.save)));
+}
+
+async function saveCorrection(id) {
+  const seg = saved.segments.find((x) => x.id === id);
+  const row = { ...seg.data };
+  document.querySelectorAll(`[data-editrow="${id}"] [data-f]`).forEach((i) => { row[i.dataset.f] = i.value.trim(); });
+  const basis = prompt(`Reason for correcting ${seg.data.segment} (kept with the segment):`, '');
+  if (!basis || !basis.trim()) { status('A reason is needed to save a correction.', 'err'); return; }
+  const run = runOf(current.id);
+  const fixed = recomputeSegment(row, run?.limits || limitsFromRules(rules));
+  // Rebuild this sheet's totals with the corrected row.
+  const segRows = saved.segments.filter((x) => x.page_id === current.id).map((x) => (x.id === id ? fixed : x.data));
+  const takeoff = sheetTakeoff({
+    segRows,
+    nodes: saved.nodes.filter((x) => x.page_id === current.id).map((x) => x.data),
+    callouts: saved.callouts.filter((x) => x.page_id === current.id).map((x) => x.data),
+    disc: saved.discrepancies.filter((x) => x.page_id === current.id).map((x) => x.data),
+  });
+  try {
+    await post('/api/wf/wf3', { action: 'override_segment', segment_id: id, row: fixed, basis, takeoff });
+    await loadSaved(); select(current); status(`${seg.data.segment} corrected.`, 'ok');
+  } catch (e) { status(e.message, 'err'); }
+}
+
+// ── step status ──
+async function loadStep() {
+  const d = await api('/api/wf/projects?id=' + projectId);
+  $('crumb').textContent = '← ' + d.project.name;
+  const s = d.steps.find((x) => x.step_code === 'WF3');
+  $('step-pill').className = 'pill ' + s.status;
+  $('step-pill').textContent = s.status === 'stale' ? 'changed' : s.status.replace('_', ' ');
+  const done = s.status === 'confirmed';
+  $('confirm').hidden = done; $('reopen').hidden = !done;
+  const zones = sheets.filter((x) => x.role === 'osp_route');
+  const measured = zones.filter((x) => runOf(x.id)).length;
+  const open = (saved?.discrepancies || []).filter((x) => x.status !== 'resolved').length;
+  $('footer-msg').textContent = done ? 'OSP confirmed. Totals go to the BOM.'
+    : `${measured} of ${zones.length} zone sheets measured · ${open} item${open === 1 ? '' : 's'} to check${s.status === 'stale' && s.stale_reason ? ` · changed: ${s.stale_reason}` : ''}`;
+}
+$('confirm').onclick = async () => {
+  const unmeasured = sheets.filter((x) => x.role === 'osp_route' && !runOf(x.id));
+  if (unmeasured.length && !confirm(`${unmeasured.length} zone sheet(s) not measured. Confirm anyway?`)) return;
+  try { await post('/api/wf/projects', { action: 'confirm_step', project_id: Number(projectId), step_code: 'WF3' }); status('OSP confirmed.', 'ok'); loadStep(); }
+  catch (e) { status(e.message, 'err'); }
+};
+$('reopen').onclick = async () => {
+  try { await post('/api/wf/projects', { action: 'reopen_step', project_id: Number(projectId), step_code: 'WF3' }); loadStep(); }
+  catch (e) { status(e.message, 'err'); }
+};
+
+window.addEventListener('resize', () => { if (zoom === 'fit') renderViewer(); });
+await loadSaved();
+buildSheets();
+loadStep();
+</script>
+</body>
+</html>
