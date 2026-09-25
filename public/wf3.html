@@ -59,13 +59,14 @@ td, th { text-align: left; }
     <section>
       <div class="row" style="padding: 0 0 10px; border: none; gap: 8px">
         <span id="sheet-title" style="font-weight: 700; flex-grow: 1"></span>
+        <button type="button" class="btn blue small" id="show-all" hidden>Show all</button>
         <button type="button" class="btn muted small" data-zoom="fit">Fit</button>
         <button type="button" class="btn muted small" data-zoom="0.5">50%</button>
         <button type="button" class="btn muted small" data-zoom="1">100%</button>
         <button type="button" class="btn blue small" id="measure-one">Measure sheet</button>
       </div>
       <div class="viewer" id="viewer"><canvas id="pdf"></canvas><canvas id="ovl"></canvas></div>
-      <div class="small muted" style="margin-top: 6px">Take-off labels (toMH-1, toS05…) in green are generated here, not drawing text. Click a segment in the Segments tab to highlight it.</div>
+      <div class="small muted" style="margin-top: 6px">Take-off labels (toMH-1, toS05…) in green are generated here, not drawing text. Click a segment (Segments tab) or an item's label (To check) to show only that part; Show all brings everything back.</div>
     </section>
 
     <section style="display: flex; flex-direction: column; gap: 12px; min-width: 0">
@@ -120,6 +121,7 @@ const status = (m, c = '') => { $('status').className = 'status-line ' + c; $('s
 const fmt = (v) => (typeof v === 'number' ? v.toLocaleString('en-US') : esc(v));
 
 let intake = null, saved = null, rules = [], sheets = [], current = null, zoom = 'fit', scope = 'sheet', selSeg = null;
+let focus = null; // { segs: Set<segment label>, node: label|null, title } — draw only these
 const pdfCache = new Map();
 
 document.querySelectorAll('.tab').forEach((t) => t.onclick = () => {
@@ -164,7 +166,7 @@ function renderChips() {
 }
 
 function select(s) {
-  current = s; selSeg = null;
+  current = s; selSeg = null; focus = null;
   renderChips();
   $('work').hidden = false;
   const run = runOf(s.id);
@@ -234,6 +236,7 @@ async function renderViewer() {
     renderTask = null;
     if (token !== renderToken) return;
     drawOverlay(o.getContext('2d'), z);
+    if (focus) scrollToFocus(z);
   } catch (e) {
     if (e && e.name === 'RenderingCancelledException') return; // replaced by a newer drawing
     status('Could not show the drawing: ' + e.message, 'err');
@@ -243,10 +246,13 @@ async function renderViewer() {
 function drawOverlay(g, z) {
   g.clearRect(0, 0, g.canvas.width, g.canvas.height);
   const pid = current.id;
-  const segs = saved.segments.filter((x) => x.page_id === pid);
+  const all = saved.segments.filter((x) => x.page_id === pid);
+  const segs = focus ? all.filter((x) => focus.segs.has(x.data.segment)) : all;
+  const shownNodes = focus ? new Set([...segs.flatMap((x) => [x.data.from, x.data.to]), focus.node].filter(Boolean)) : null;
+  $('show-all').hidden = !focus;
   g.lineCap = 'round'; g.lineJoin = 'round';
   for (const sgm of segs) {
-    const d = sgm.data, sel = selSeg === sgm.id;
+    const d = sgm.data, sel = !!focus || selSeg === sgm.id;
     g.strokeStyle = sel ? 'rgba(240,192,64,0.95)' : d.route === 'existing' ? 'rgba(40,100,220,0.45)' : d.route === 'mixed' ? 'rgba(150,60,200,0.45)' : 'rgba(220,40,40,0.45)';
     g.lineWidth = Math.max(3, (sel ? 10 : 6) * z);
     g.beginPath(); d.pts.forEach(([x, y], i) => (i ? g.lineTo(x * z, y * z) : g.moveTo(x * z, y * z))); g.stroke();
@@ -254,13 +260,14 @@ function drawOverlay(g, z) {
     label(g, d.segment, m[0] * z, m[1] * z, z, '#0b5a2a');
   }
   g.strokeStyle = 'rgba(80,80,80,0.6)'; g.lineWidth = Math.max(1, 1.5 * z); g.setLineDash([4, 3]);
-  for (const co of saved.callouts.filter((x) => x.page_id === pid)) {
+  for (const co of saved.callouts.filter((x) => x.page_id === pid && (!focus || focus.segs.has(x.data.segment)))) {
     const b = co.data.bbox, h = co.data.hit; if (!b || !h) continue;
     g.beginPath(); g.moveTo(((b[0] + b[2]) / 2) * z, ((b[1] + b[3]) / 2) * z); g.lineTo(h[0] * z, h[1] * z); g.stroke();
   }
   g.setLineDash([]);
-  for (const n of saved.nodes.filter((x) => x.page_id === pid)) {
+  for (const n of saved.nodes.filter((x) => x.page_id === pid && (!shownNodes || shownNodes.has(x.data.id)))) {
     const d = n.data, vault = d.type === 'MH' || d.type === 'HH';
+    if (focus && d.id === focus.node) { g.strokeStyle = 'rgba(240,192,64,0.95)'; g.lineWidth = Math.max(2, 4 * z); g.beginPath(); g.arc(d.x * z, d.y * z, Math.max(10, 18 * z), 0, Math.PI * 2); g.stroke(); }
     g.fillStyle = vault ? '#0b7a2a' : d.type === 'END' ? '#666' : '#b86a10';
     g.beginPath(); g.arc(d.x * z, d.y * z, Math.max(3, (vault ? 7 : 5) * z), 0, Math.PI * 2); g.fill();
     if (d.type !== 'END') label(g, d.id, d.x * z + 8 * z, d.y * z - 8 * z, z, vault ? '#0b5a2a' : '#8a4a0a');
@@ -271,6 +278,28 @@ function label(g, t, x, y, z, color) {
   g.lineWidth = 3; g.strokeStyle = 'rgba(255,255,255,0.85)'; g.strokeText(t, x, y);
   g.fillStyle = color; g.fillText(t, x, y);
 }
+
+// ── focus: show only what was clicked ──
+function focusOn(label) {
+  const segs = saved.segments.filter((x) => x.page_id === current.id);
+  const seg = segs.find((x) => x.data.segment === label);
+  if (seg) focus = { segs: new Set([label]), node: null };
+  else {
+    const touching = segs.filter((x) => x.data.from === label || x.data.to === label).map((x) => x.data.segment);
+    focus = { segs: new Set(touching), node: label };
+  }
+  selSeg = seg ? seg.id : null;
+  renderViewer();
+}
+function scrollToFocus(z) {
+  const pts = saved.segments.filter((x) => x.page_id === current.id && focus.segs.has(x.data.segment)).flatMap((x) => x.data.pts);
+  const n = focus.node && saved.nodes.find((x) => x.page_id === current.id && x.data.id === focus.node);
+  if (n) pts.push([n.data.x, n.data.y]);
+  if (!pts.length) return;
+  const xs = pts.map((p) => p[0] * z), ys = pts.map((p) => p[1] * z), v = $('viewer');
+  v.scrollTo({ left: (Math.min(...xs) + Math.max(...xs)) / 2 - v.clientWidth / 2, top: (Math.min(...ys) + Math.max(...ys)) / 2 - v.clientHeight / 2, behavior: 'smooth' });
+}
+$('show-all').onclick = () => { focus = null; selSeg = null; renderSegs(); renderViewer(); };
 
 // ── take-off ──
 function renderTake() {
@@ -301,7 +330,7 @@ function renderChecks() {
     <div style="padding: 12px 16px; border-bottom: 1px solid var(--line-soft); display: flex; flex-direction: column; gap: 6px">
       <div style="display: flex; gap: 10px; align-items: center">
         <span class="pill ${d.status === 'rfi' ? 'stale' : d.status === 'resolved' ? 'confirmed' : 'in_review'}">${d.status === 'rfi' ? 'RFI' : d.status}</span>
-        <b>${esc(d.data.at)}</b><span class="muted small">${esc(d.data.category.toLowerCase())}</span>
+        <button type="button" class="btn blue small" data-focus="${esc(d.data.at)}" title="Show only ${esc(d.data.at)} on the drawing">${esc(d.data.at)}</button><span class="muted small">${esc(d.data.category.toLowerCase())}</span>
         <span style="flex-grow: 1"></span>
         <select class="field" style="padding: 4px 6px; font-size: 12px" data-disc="${d.id}" aria-label="Status for ${esc(d.label)}">
           ${['rfi', 'verify', 'resolved'].map((s) => `<option value="${s}"${s === d.status ? ' selected' : ''}>${s === 'rfi' ? 'RFI' : s}</option>`).join('')}
@@ -316,6 +345,7 @@ function renderChecks() {
     catch (e) { status(e.message, 'err'); }
   });
   document.querySelectorAll('[data-copy]').forEach((b) => b.onclick = () => { navigator.clipboard.writeText(b.dataset.copy); status('Draft RFI copied.', 'ok'); });
+  document.querySelectorAll('[data-focus]').forEach((b) => b.onclick = () => focusOn(b.dataset.focus));
 }
 
 // ── segments ──
@@ -335,7 +365,11 @@ function renderSegs() {
         <button type="button" class="btn green small" data-save="${x.id}">Save correction</button>
       </td></tr>`;
   }).join('');
-  document.querySelectorAll('[data-seg]').forEach((r) => r.onclick = (e) => { if (e.target.closest('button')) return; selSeg = Number(r.dataset.seg); renderSegs(); renderViewer(); });
+  document.querySelectorAll('[data-seg]').forEach((r) => r.onclick = (e) => {
+    if (e.target.closest('button')) return;
+    const seg = saved.segments.find((x) => x.id === Number(r.dataset.seg));
+    focusOn(seg.data.segment); renderSegs();
+  });
   document.querySelectorAll('[data-edit]').forEach((b) => b.onclick = () => { const r = document.querySelector(`[data-editrow="${b.dataset.edit}"]`); r.hidden = !r.hidden; });
   document.querySelectorAll('[data-save]').forEach((b) => b.onclick = () => saveCorrection(Number(b.dataset.save)));
 }

@@ -10,6 +10,7 @@
   --red: #f08080;   --red-bd: #7a2a2a;   --red-bg: #241010;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; } /* .banner etc. set display:flex, which would otherwise override hidden */
 body { margin: 0; font-family: "JetBrains Mono", ui-monospace, Menlo, monospace; background: var(--bg); color: var(--text); font-size: 14px; }
 a { color: var(--blue); }
 a:hover { color: #a9d3f5; }
