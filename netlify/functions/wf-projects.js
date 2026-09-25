@@ -128,6 +128,32 @@ export default async function handler(req) {
     return ok(data);
   }
 
+  // Confirm a step (its data is reviewed) or reopen it for more work.
+  if (body.action === 'confirm_step' || body.action === 'reopen_step') {
+    const { project_id, step_code } = body;
+    if (!STEP_CODES.includes(step_code) || step_code === 'WF8') return err('step_code must be WF1–WF7');
+    if (!(await assertWfProjectInOrg(supabase, project_id, orgId))) return err('Project not found', 404);
+    const confirm = body.action === 'confirm_step';
+    const { data, error } = await db.from('workflow_steps')
+      .update(confirm
+        ? { status: 'confirmed', confirmed_at: new Date().toISOString(), confirmed_by: user.id, stale_reason: null }
+        : { status: 'in_review', confirmed_at: null, confirmed_by: null })
+      .eq('project_id', project_id).eq('step_code', step_code).neq('status', 'not_applicable')
+      .select('step_code, status').maybeSingle();
+    if (error) return err(error.message, 500);
+    if (!data) return err('Step is marked N/A — add it to scope first');
+    return ok(data);
+  }
+
+  // Record that a step has work in it (first upload / first edit).
+  if (body.action === 'touch_step') {
+    const { project_id, step_code } = body;
+    if (!(await assertWfProjectInOrg(supabase, project_id, orgId))) return err('Project not found', 404);
+    await db.from('workflow_steps').update({ status: 'in_review' })
+      .eq('project_id', project_id).eq('step_code', step_code).eq('status', 'open');
+    return ok({ ok: true });
+  }
+
   return err('Unknown action');
 }
 

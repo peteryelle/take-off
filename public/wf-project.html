@@ -52,7 +52,7 @@ async function api(path, opts) {
   return body;
 }
 
-const stepHref = (code) => `${stepDef(code).page}?project_id=${projectId}`;
+const stepHref = (code) => `${stepDef(code).page}?project_id=${projectId}&step=${code}`;
 
 function render(d) {
   const p = d.project;

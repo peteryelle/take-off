@@ -12,3 +12,7 @@
 
 [functions."pass-visual-augment"]
   timeout = 60
+
+# v2 intake files a whole PDF's pages (sheets, revisions, rules) in one call.
+[functions."wf-documents"]
+  timeout = 26

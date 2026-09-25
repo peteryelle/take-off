@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WF1 · Legend & notes — Take-off</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="auth.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
+<link rel="stylesheet" href="wf.css">
+<style>
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); }
+.tab { font-family: inherit; font-size: 14px; padding: 11px 16px; background: none; border: none; border-bottom: 2px solid transparent; color: var(--muted); cursor: pointer; }
+.tab[aria-selected="true"] { color: var(--green); border-bottom-color: var(--green); font-weight: 700; }
+.src { font-size: 11px; }
+canvas.preview { max-width: 100%; border: 1px solid var(--line); border-radius: 4px; background: #fff; }
+</style>
+</head>
+<body>
+<nav id="to-nav"></nav>
+<script src="nav.js"></script>
+
+<main class="wf-page">
+  <div class="wf-head">
+    <div>
+      <a class="wf-crumb" id="crumb" href="wf-projects.html">← Project</a>
+      <h1 class="wf-title"><span class="code">WF1</span> · Legend &amp; notes</h1>
+      <div class="wf-sub">Upload T-001 (legend) and T-002 (general &amp; phasing notes). Read from the text layer — no cost.</div>
+    </div>
+    <span class="pill" id="step-pill">…</span>
+  </div>
+
+  <div id="intake"></div>
+
+  <nav class="tabs" role="tablist" aria-label="WF1 sections">
+    <button type="button" class="tab" role="tab" aria-selected="true" data-tab="legend">Legend (reference)</button>
+    <button type="button" class="tab" role="tab" aria-selected="false" data-tab="lines">Line types</button>
+    <button type="button" class="tab" role="tab" aria-selected="false" data-tab="rules">Notes &amp; rules</button>
+  </nav>
+
+  <!-- Legend (reference) -->
+  <section data-panel="legend">
+    <div class="wf-sub" style="margin-bottom: 12px">The legend is backup, not the device library. Device symbols are cropped from the floor plans in WF4; the legend is used there to suggest names.</div>
+    <div class="panel" id="legend-list"><div class="empty">Loading…</div></div>
+    <div id="preview-wrap" style="margin-top: 14px" hidden>
+      <div class="row" style="padding-left: 0"><span id="preview-title" style="flex-grow: 1; font-weight: 700"></span>
+        <button type="button" class="btn muted small" id="preview-close">Close</button></div>
+      <canvas class="preview" id="preview"></canvas>
+    </div>
+  </section>
+
+  <!-- Line types -->
+  <section data-panel="lines" hidden>
+    <div class="wf-sub" style="margin-bottom: 12px">How WF3 reads the site fiber sheets: which line styles are conduit routes, and which are ignored. Match these to the legend.</div>
+    <div class="panel">
+      <div class="row head"><span style="flex-grow: 1">Line style (as drawn)</span><span style="width: 280px">Meaning</span><span style="width: 80px"></span></div>
+      <div id="lines-rows"></div>
+      <div class="row"><button type="button" class="btn muted small" id="line-add">+ Add line type</button>
+        <span style="flex-grow: 1"></span><button type="button" class="btn green" id="lines-save">Save line types</button></div>
+    </div>
+  </section>
+
+  <!-- Notes & rules -->
+  <section data-panel="rules" hidden>
+    <div class="wf-sub" style="margin-bottom: 12px">Rules found in the notes of any uploaded sheet. They change how other steps check work. Check each against its note; anything you change is kept as edited, with your reason.</div>
+    <div class="banner orange" id="phasing-banner" hidden style="margin-bottom: 14px">
+      <div style="flex-grow: 1"><div class="kicker">PHASING SHEET REFERENCED</div><div class="msg" id="phasing-msg"></div></div>
+    </div>
+    <div class="panel">
+      <div class="row head"><span style="width: 170px">Note</span><span style="flex-grow: 1">What it says</span><span style="width: 150px">Rule</span><span style="width: 90px">Value</span><span style="width: 90px">Used by</span><span style="width: 80px">Source</span><span style="width: 40px"></span></div>
+      <div id="rules-rows"></div>
+      <div class="row"><button type="button" class="btn muted small" id="rule-add">+ Add rule</button>
+        <span style="flex-grow: 1"></span><button type="button" class="btn green" id="rules-save">Save rules</button></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="row">
+      <span id="footer-msg" style="flex-grow: 1"></span>
+      <button type="button" class="btn muted" id="reopen" hidden>Reopen</button>
+      <button type="button" class="btn green" id="confirm" style="font-weight: 700">Confirm WF1</button>
+    </div>
+  </section>
+  <div class="status-line" id="status" role="status"></div>
+</main>
+
+<script type="module">
+import { mountIntake, api, post } from './lib/wf-intake-ui.js';
+
+const projectId = new URLSearchParams(location.search).get('project_id');
+if (!projectId) location.replace('wf-projects.html');
+try { sessionStorage.setItem('to_project_id', projectId); } catch {}
+document.getElementById('crumb').href = 'wf-project.html?project_id=' + projectId;
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const status = (m, c = '') => { $('status').className = 'status-line ' + c; $('status').textContent = m; };
+
+// ── tabs ──
+document.querySelectorAll('.tab').forEach((t) => t.onclick = () => {
+  document.querySelectorAll('.tab').forEach((x) => x.setAttribute('aria-selected', String(x === t)));
+  document.querySelectorAll('[data-panel]').forEach((p) => p.hidden = p.dataset.panel !== t.dataset.tab);
+});
+
+// ── intake (shared) ──
+let intake = null;
+mountIntake($('intake'), { projectId, stepCode: 'WF1', showLocation: false, onData: (d) => { intake = d; renderLegend(); loadRules(); } });
+
+function renderLegend() {
+  const pages = intake.pages.filter((p) => (p.role === 'legend' || p.role === 'notes') && !p.is_duplicate);
+  $('legend-list').innerHTML = pages.length ? pages.map((p) => `
+    <div class="row">
+      <span style="width: 110px; font-weight: 700">${esc(p.sheet_number || '—')}</span>
+      <span style="flex-grow: 1">${esc(p.title_text || '')}</span>
+      <span class="pill ${p.role === 'legend' ? 'confirmed' : 'in_review'}">${p.role}</span>
+      <button type="button" class="btn blue small" data-view="${p.document_id}:${p.page_number}" data-title="${esc((p.sheet_number || '') + ' ' + (p.title_text || ''))}">View</button>
+    </div>`).join('') : '<div class="empty">No legend or notes sheet yet. Upload T-001 above.</div>';
+  document.querySelectorAll('[data-view]').forEach((b) => b.onclick = () => preview(b.dataset.view, b.dataset.title));
+}
+
+async function preview(key, title) {
+  const [docId, pageNo] = key.split(':').map(Number);
+  status('Loading preview…');
+  try {
+    const { url } = await post('/api/wf/documents', { action: 'file_url', document_id: docId });
+    const doc = await pdfjsLib.getDocument(url).promise;
+    const page = await doc.getPage(pageNo);
+    const width = Math.min(document.querySelector('.wf-page').clientWidth, 1400);
+    const vp = page.getViewport({ scale: width / page.getViewport({ scale: 1 }).width });
+    const c = $('preview'); c.width = vp.width; c.height = vp.height;
+    await page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+    $('preview-title').textContent = title; $('preview-wrap').hidden = false; status('');
+    c.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch (e) { status(e.message, 'err'); }
+}
+$('preview-close').onclick = () => { $('preview-wrap').hidden = true; };
+
+// ── line types ──
+const MEANINGS = { new_route: 'New conduit route (measured)', existing_route: 'Existing route — cable only', tunnel: 'Tunnel / pipe basement — cable only', ignore: 'Ignore (coordination only)' };
+const DEFAULT_LINES = [
+  { line_style: 'Red dashed', line_meaning: 'new_route' },
+  { line_style: 'Blue dashed', line_meaning: 'existing_route' },
+  { line_style: 'Black dotted', line_meaning: 'tunnel' },
+  { line_style: 'Green solid', line_meaning: 'ignore' },
+];
+let lineRows = [];
+function renderLines() {
+  $('lines-rows').innerHTML = lineRows.map((r, i) => `
+    <div class="row">
+      <span style="flex-grow: 1"><input class="field" style="width: 100%" value="${esc(r.line_style)}" data-line="${i}" data-k="line_style" aria-label="Line style"></span>
+      <span style="width: 280px"><select class="field" style="width: 100%" data-line="${i}" data-k="line_meaning" aria-label="Meaning">
+        ${Object.entries(MEANINGS).map(([k, v]) => `<option value="${k}"${k === r.line_meaning ? ' selected' : ''}>${v}</option>`).join('')}</select></span>
+      <span style="width: 80px"><button type="button" class="btn muted small" data-line-del="${i}">Remove</button></span>
+    </div>`).join('');
+  document.querySelectorAll('[data-line]').forEach((x) => x.oninput = x.onchange = () => { lineRows[+x.dataset.line][x.dataset.k] = x.value; });
+  document.querySelectorAll('[data-line-del]').forEach((b) => b.onclick = () => { lineRows.splice(+b.dataset.lineDel, 1); renderLines(); });
+}
+$('line-add').onclick = () => { lineRows.push({ line_style: '', line_meaning: 'new_route' }); renderLines(); };
+$('lines-save').onclick = async () => {
+  try { const r = await post('/api/wf/wf1', { action: 'save_line_types', project_id: Number(projectId), rows: lineRows }); status(`Saved ${r.saved} line types.`, 'ok'); }
+  catch (e) { status(e.message, 'err'); }
+};
+
+// ── rules ──
+const KINDS = { pull_limit_ft: 'Max pull length (ft)', bend_limit_deg: 'Max bends (degrees)', phasing: 'Phasing', other: 'Other' };
+let rules = [];
+async function loadRules() {
+  const d = await api('/api/wf/wf1?project_id=' + projectId);
+  lineRows = d.line_types.length ? d.line_types.map(({ line_style, line_meaning }) => ({ line_style, line_meaning })) : DEFAULT_LINES.map((x) => ({ ...x }));
+  renderLines();
+  rules = d.rules.map((r) => ({ ...r }));
+  renderRules();
+}
+function renderRules() {
+  const phasing = rules.filter((r) => r.rule_kind === 'phasing');
+  const loaded = new Set((intake?.pages || []).map((p) => p.sheet_number));
+  const missing = phasing.map((r) => (r.note_ref || '').split('→').pop().trim()).filter((s) => s && !loaded.has(s));
+  $('phasing-banner').hidden = !missing.length;
+  if (missing.length) $('phasing-msg').textContent = `The notes refer to ${[...new Set(missing)].join(', ')} for phasing, and it is not uploaded. Upload it here if the bid is phased — phasing can split BOM quantities.`;
+
+  $('rules-rows').innerHTML = rules.length ? rules.map((r, i) => `
+    <div class="row" style="font-size: 13px; align-items: flex-start">
+      <span style="width: 170px; font-weight: 700">${r.id ? esc(r.note_ref || '—') : `<input class="field" style="width: 160px; padding: 5px 6px; font-size: 12px" value="${esc(r.note_ref || '')}" data-rule="${i}" data-k="note_ref" placeholder="e.g. T-001 note 28" aria-label="Note reference">`}</span>
+      <span style="flex-grow: 1; min-width: 0" class="muted">${r.id ? esc(r.note_text || '') : `<input class="field" style="width: 100%; padding: 5px 6px; font-size: 12px" value="${esc(r.note_text || '')}" data-rule="${i}" data-k="note_text" placeholder="What the note says" aria-label="Note text">`}</span>
+      <span style="width: 150px"><select class="field" style="width: 142px; padding: 5px 6px; font-size: 12px" data-rule="${i}" data-k="rule_kind" aria-label="Rule">${Object.entries(KINDS).map(([k, v]) => `<option value="${k}"${k === r.rule_kind ? ' selected' : ''}>${v}</option>`).join('')}</select></span>
+      <span style="width: 90px"><input class="field" style="width: 80px; padding: 5px 6px; font-size: 12px" value="${r.rule_value ?? ''}" data-rule="${i}" data-k="rule_value" inputmode="decimal" aria-label="Value"></span>
+      <span style="width: 90px"><select class="field" style="width: 82px; padding: 5px 6px; font-size: 12px" data-rule="${i}" data-k="used_by_step" aria-label="Used by step"><option value="">—</option>${['WF3', 'WF4', 'WF5', 'WF6', 'WF7', 'WF8'].map((s) => `<option${s === r.used_by_step ? ' selected' : ''}>${s}</option>`).join('')}</select></span>
+      <span style="width: 80px"><span class="pill src ${r.source === 'extracted' ? 'confirmed' : r.source === 'edited' ? 'stale' : 'in_review'}" title="${esc(r.override_basis || '')}">${r.source || 'new'}</span></span>
+      <span style="width: 40px"><button type="button" class="btn muted small" data-rule-del="${i}" aria-label="Remove rule">×</button></span>
+    </div>`).join('') : '<div class="empty">No rules found yet. They are read from the notes of every sheet you upload, in any step.</div>';
+  document.querySelectorAll('[data-rule]').forEach((x) => x.oninput = x.onchange = () => { rules[+x.dataset.rule][x.dataset.k] = x.value; });
+  document.querySelectorAll('[data-rule-del]').forEach((b) => b.onclick = () => { rules.splice(+b.dataset.ruleDel, 1); renderRules(); });
+}
+$('rule-add').onclick = () => { rules.push({ note_ref: '', note_text: '', rule_kind: 'pull_limit_ft', rule_value: '', used_by_step: '' }); renderRules(); };
+$('rules-save').onclick = async () => {
+  const changed = rules.some((r) => r.id && r.source === 'extracted');
+  let basis = 'Changed in WF1';
+  if (changed) basis = prompt('Reason for any changes to rules read from the notes (kept with the rule):', 'Checked against the note') || basis;
+  try {
+    const r = await post('/api/wf/wf1', { action: 'save_rules', project_id: Number(projectId), rows: rules.map((x) => ({ ...x, override_basis: basis })) });
+    status(`Saved ${r.saved} rule${r.saved === 1 ? '' : 's'}${r.removed ? `, removed ${r.removed}` : ''}.`, 'ok');
+    loadRules();
+  } catch (e) { status(e.message, 'err'); }
+};
+
+// ── step status / confirm ──
+async function loadStep() {
+  const d = await api('/api/wf/projects?id=' + projectId);
+  $('crumb').textContent = '← ' + d.project.name;
+  const s = d.steps.find((x) => x.step_code === 'WF1');
+  $('step-pill').className = 'pill ' + s.status;
+  $('step-pill').textContent = s.status === 'stale' ? 'changed' : s.status.replace('_', ' ');
+  const done = s.status === 'confirmed';
+  $('confirm').hidden = done; $('reopen').hidden = !done;
+  $('footer-msg').textContent = done ? 'WF1 is confirmed. Reopen it to make changes.' : 'Confirm when the legend, line types and rules are checked.';
+}
+$('confirm').onclick = async () => {
+  try { await post('/api/wf/projects', { action: 'confirm_step', project_id: Number(projectId), step_code: 'WF1' }); status('WF1 confirmed.', 'ok'); loadStep(); }
+  catch (e) { status(e.message, 'err'); }
+};
+$('reopen').onclick = async () => {
+  try { await post('/api/wf/projects', { action: 'reopen_step', project_id: Number(projectId), step_code: 'WF1' }); loadStep(); }
+  catch (e) { status(e.message, 'err'); }
+};
+loadStep();
+</script>
+</body>
+</html>

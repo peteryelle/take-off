@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Step coming soon — Take-off</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="auth.js"></script>
+<link rel="stylesheet" href="wf.css">
+</head>
+<body>
+<nav id="to-nav"></nav>
+<script src="nav.js"></script>
+<main class="wf-page">
+  <a class="wf-crumb" id="crumb" href="wf-projects.html">← Project</a>
+  <h1 class="wf-title" id="title">Step</h1>
+  <section class="banner amber">
+    <div style="flex-grow: 1">
+      <div class="kicker">BEING BUILT</div>
+      <div class="msg">This step's page is not built yet. Steps are being added in order, WF1 first.</div>
+    </div>
+  </section>
+</main>
+<script type="module">
+import { stepDef } from './lib/wf-steps.js';
+const q = new URLSearchParams(location.search);
+const s = stepDef(q.get('step'));
+if (s) { document.getElementById('title').innerHTML = `<span class="code">${s.code}</span> · ${s.name}`; document.title = `${s.code} · ${s.name} — Take-off`; }
+if (q.get('project_id')) document.getElementById('crumb').href = 'wf-project.html?project_id=' + encodeURIComponent(q.get('project_id'));
+</script>
+</body>
+</html>
