@@ -226,3 +226,367 @@ export function buildChains(frags, link) {
 
 // Bridge tolerance from the measured dash gap (Python: process()).
 export const bridgeTolerance = (median, override) => (override ? override : median ? Math.max(2.0, Math.min(14.0, 2.5 * median)) : 6.0);
+
+// ═════════════════════════════ stage 2 ═════════════════════════════
+export const BLACK = [0, 0, 0];
+
+// Python round(): exact halves go to the even neighbour.
+export function pyRound(x, nd = 0) {
+  const f = 10 ** nd, y = x * f, fl = Math.floor(y);
+  if (y - fl === 0.5) return (fl % 2 === 0 ? fl : fl + 1) / f;
+  return Number(x.toFixed(nd));
+}
+
+// ── drawing reader that keeps PyMuPDF's item kinds ──
+// Each draw: { color [0..1], width, items: [['l',a,b] | ['c',p0,p1,p2,p3] | ['re',[x0,y0,x1,y1]]] }
+// in the page frame (top-left origin). Curves stay curves (the MH/HH square
+// finder ignores them, as the Python does); closePath adds no line item.
+export async function extractDraws(page, OPS) {
+  const [vx0, , , vy1] = page.view;
+  const { fnArray, argsArray } = await page.getOperatorList();
+  const mul = (m, n) => [m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1], m[0] * n[2] + m[2] * n[3], m[1] * n[2] + m[3] * n[3], m[0] * n[4] + m[2] * n[5] + m[4], m[1] * n[4] + m[3] * n[5] + m[5]];
+  let ctm = [1, 0, 0, 1, 0, 0], stroke = [0, 0, 0], lw = 1;
+  const stack = [], out = [];
+  let items = [], pt = null, start = null;
+  const T = (x, y) => [ctm[0] * x + ctm[2] * y + ctm[4] - vx0, vy1 - (ctm[1] * x + ctm[3] * y + ctm[5])];
+  const scale = () => Math.sqrt(Math.abs(ctm[0] * ctm[3] - ctm[1] * ctm[2]));
+  const cmyk = ([c, m, y, k]) => [(1 - c) * (1 - k), (1 - m) * (1 - k), (1 - y) * (1 - k)];
+  for (let i = 0; i < fnArray.length; i++) {
+    const fn = fnArray[i], a = argsArray[i];
+    switch (fn) {
+      case OPS.save: stack.push([ctm.slice(), stroke.slice(), lw]); break;
+      case OPS.restore: if (stack.length) [ctm, stroke, lw] = stack.pop(); break;
+      case OPS.transform: ctm = mul(ctm, a); break;
+      case OPS.setStrokeRGBColor: stroke = [a[0] / 255, a[1] / 255, a[2] / 255]; break;
+      case OPS.setStrokeGray: stroke = [a[0], a[0], a[0]]; break;
+      case OPS.setStrokeCMYKColor: stroke = cmyk(a); break;
+      case OPS.setLineWidth: lw = a[0]; break;
+      case OPS.constructPath: {
+        const ops = a[0], co = a[1]; let j = 0;
+        for (const op of ops) {
+          if (op === OPS.moveTo) { pt = T(co[j++], co[j++]); start = pt; }
+          else if (op === OPS.lineTo) { const p = T(co[j++], co[j++]); if (pt) items.push(['l', pt, p]); pt = p; }
+          else if (op === OPS.curveTo) { const c1 = T(co[j++], co[j++]), c2 = T(co[j++], co[j++]), e = T(co[j++], co[j++]); if (pt) items.push(['c', pt, c1, c2, e]); pt = e; }
+          else if (op === OPS.curveTo2) { const c2 = T(co[j++], co[j++]), e = T(co[j++], co[j++]); if (pt) items.push(['c', pt, pt, c2, e]); pt = e; }
+          else if (op === OPS.curveTo3) { const c1 = T(co[j++], co[j++]), e = T(co[j++], co[j++]); if (pt) items.push(['c', pt, c1, e, e]); pt = e; }
+          else if (op === OPS.rectangle) {
+            const x = co[j++], y = co[j++], w = co[j++], h = co[j++];
+            const c = [T(x, y), T(x + w, y), T(x + w, y + h), T(x, y + h)];
+            const xs = c.map((p) => p[0]), ys = c.map((p) => p[1]);
+            items.push(['re', [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]]);
+            pt = c[0]; start = c[0];
+          } else if (op === OPS.closePath) { pt = start; }
+        }
+        break;
+      }
+      case OPS.stroke: case OPS.closeStroke: case OPS.fillStroke: case OPS.eoFillStroke: case OPS.closeFillStroke: case OPS.closeEOFillStroke:
+        if (items.length) out.push({ color: stroke.slice(), width: lw * scale(), items });
+        items = []; pt = null; break;
+      case OPS.fill: case OPS.eoFill: case OPS.endPath: items = []; pt = null; break;
+    }
+  }
+  return out;
+}
+
+export function bezier(p0, p1, p2, p3, n = 8) {
+  const out = [];
+  for (let k = 0; k <= n; k++) {
+    const t = k / n, m = 1 - t;
+    out.push([m ** 3 * p0[0] + 3 * m * m * t * p1[0] + 3 * m * t * t * p2[0] + t ** 3 * p3[0], m ** 3 * p0[1] + 3 * m * m * t * p1[1] + 3 * m * t * t * p2[1] + t ** 3 * p3[1]]);
+  }
+  return out;
+}
+// Continuous point lists of one draw (Python: subpaths).
+export function subpaths(d) {
+  const out = []; let cur = [];
+  for (const it of d.items) {
+    let seg;
+    if (it[0] === 'l') seg = [it[1], it[2]];
+    else if (it[0] === 'c') seg = bezier(it[1], it[2], it[3], it[4]);
+    else if (it[0] === 're') { const r = it[1]; seg = [[r[0], r[1]], [r[2], r[1]], [r[2], r[3]], [r[0], r[3]], [r[0], r[1]]]; }
+    else continue;
+    if (cur.length && dist(cur[cur.length - 1], seg[0]) < 0.05) cur.push(...seg.slice(1));
+    else { if (cur.length >= 2) out.push(cur); cur = seg.slice(); }
+  }
+  if (cur.length >= 2) out.push(cur);
+  return out;
+}
+// Fragments from draws with items (replaces the stroke-list path of stage 1).
+export function collectFragmentsFromDraws(draws) {
+  const tot = {};
+  for (const d of draws) {
+    const w = r2(d.width);
+    for (const [name, t] of Object.entries(CLASS_OF)) if (colIs(d.color, t)) {
+      tot[name] ??= new Map();
+      tot[name].set(w, (tot[name].get(w) || 0) + subpaths(d).reduce((a, s) => a + plen(s), 0));
+    }
+  }
+  const widths = {};
+  for (const [name, m] of Object.entries(tot)) widths[name] = [...m].sort((a, b) => b[1] - a[1])[0][0];
+  const frags = [];
+  for (const d of draws) {
+    const w = r2(d.width);
+    for (const [name, t] of Object.entries(CLASS_OF)) {
+      if (name in widths && w === widths[name] && colIs(d.color, t)) for (const s of subpaths(d)) if (plen(s) > 0.1) frags.push({ pts: s, cls: name });
+    }
+  }
+  return { frags, widths };
+}
+
+// ── text: PyMuPDF-style words and blocks from pdf.js text runs ──
+export function wordsFromText(tcItems, view) {
+  const [vx0, , , vy1] = view;
+  const words = [];
+  for (const it of tcItems) {
+    if (!it.str || !it.str.trim()) continue;
+    const size = Math.hypot(it.transform[2], it.transform[3]);
+    const bx = it.transform[4] - vx0, by = vy1 - it.transform[5];
+    const cw = it.width / Math.max(it.str.length, 1);
+    const re = /\S+/g; let m;
+    while ((m = re.exec(it.str))) words.push([bx + m.index * cw, by - 0.8 * size, bx + (m.index + m[0].length) * cw, by + 0.2 * size, m[0]]);
+  }
+  return words;
+}
+// Blocks, PyMuPDF-style: text runs grouped in the order they appear in the
+// PDF — a run joins the current block if it continues the same line, or starts
+// the next line directly below, left-aligned. (Grouping by nearness alone made
+// blocks too large and pulled "REFER TO SHEET" tags onto the wrong END nodes.)
+export function blocksFromText(tcItems, view) {
+  const [vx0, , , vy1] = view;
+  const blocks = [];
+  let cur = null;
+  for (const it of tcItems) {
+    if (!it.str || !it.str.trim()) continue;
+    const size = Math.hypot(it.transform[2], it.transform[3]);
+    const x = it.transform[4] - vx0, base = vy1 - it.transform[5];
+    const r = { x0: x, x1: x + it.width, y0: base - 0.8 * size, y1: base + 0.2 * size, base, size, text: it.str };
+    const sameLine = cur && Math.abs(r.base - cur.lastBase) < 0.3 * size && r.x0 >= cur.lastX1 - 1 && r.x0 - cur.lastX1 < 1.5 * size;
+    const nextLine = cur && r.base - cur.lastBase > 0.3 * size && r.base - cur.lastBase < 1.6 * size && Math.abs(r.x0 - cur.x0) < 2 * size && Math.abs(size - cur.size) < 0.5;
+    if (sameLine || nextLine) {
+      cur.x0 = Math.min(cur.x0, r.x0); cur.x1 = Math.max(cur.x1, r.x1); cur.y0 = Math.min(cur.y0, r.y0); cur.y1 = Math.max(cur.y1, r.y1);
+      cur.text += (nextLine ? '\n' : ' ') + r.text; cur.lastBase = r.base; cur.lastX1 = r.x1;
+    } else {
+      cur = { ...r, lastBase: r.base, lastX1: r.x1 };
+      blocks.push(cur);
+    }
+  }
+  return blocks.map((k) => [k.x0, k.y0, k.x1, k.y1, k.text]);
+}
+
+// ── scale bar (Python: detect_scale) ──
+export function detectScale(words, W, H) {
+  const toks = words.filter((w) => (/^\d+'$/.test(w[4]) || w[4] === '0') && w[0] > W * 0.70 && w[1] > H * 0.75);
+  let best = null;
+  for (const z of toks.filter((w) => w[4] === '0')) {
+    const zx = (z[0] + z[2]) / 2, zy = (z[1] + z[3]) / 2;
+    const row = toks.filter((w) => w[4] !== '0' && Math.abs((w[1] + w[3]) / 2 - zy) < 3 && (w[0] + w[2]) / 2 > zx);
+    if (row.length) {
+      const far = row.reduce((m, w) => ((w[0] + w[2]) / 2 > (m[0] + m[2]) / 2 ? w : m));
+      const dx = (far[0] + far[2]) / 2 - zx;
+      if (dx > 0) best = parseInt(far[4].slice(0, -1), 10) * 72.0 / dx;
+    }
+  }
+  if (best === null) return { est: null, scale: null };
+  return { est: best, scale: STANDARD_SCALES.reduce((m, s) => (Math.abs(s - best) < Math.abs(m - best) ? s : m)) };
+}
+
+// ── MH / HH symbol squares (Python: find_boxes) ──
+export function findBoxes(draws, labelPts) {
+  const near = (p) => labelPts.some((lp) => dist(p, lp) < 40);
+  const segs = [], rects = [];
+  for (const d of draws) {
+    if (!colIs(d.color, BLACK) || !d.width) continue;
+    for (const it of d.items) {
+      if (it[0] === 're') { const r = it[1]; if (near([(r[0] + r[2]) / 2, (r[1] + r[3]) / 2])) rects.push(r.slice()); }
+      else if (it[0] === 'l') { const a = it[1], b = it[2]; if (dist(a, b) < 60 && (near(a) || near(b))) segs.push([a, b]); }
+    }
+  }
+  const uf = new UF(segs.length);
+  for (let i = 0; i < segs.length; i++) for (let j = i + 1; j < segs.length; j++) {
+    let m = Infinity; for (const p of segs[i]) for (const q of segs[j]) m = Math.min(m, dist(p, q));
+    if (m < 2.0) uf.u(i, j);
+  }
+  const groups = new Map();
+  segs.forEach((s, i) => { const k = uf.f(i); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(s); });
+  for (const g of groups.values()) if (g.length >= 3) {
+    const xs = g.flatMap((s) => s.map((p) => p[0])), ys = g.flatMap((s) => s.map((p) => p[1]));
+    rects.push([Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]);
+  }
+  for (const [x, y] of labelPts) {
+    let top = null, bot = null, left = null, right = null;
+    for (const [a, b] of segs) {
+      if (Math.abs(a[1] - b[1]) < 0.6 && Math.min(a[0], b[0]) - 1 <= x && x <= Math.max(a[0], b[0]) + 1) {
+        const yy = (a[1] + b[1]) / 2;
+        if (y - yy > 2 && y - yy < 30 && (top === null || yy > top)) top = yy;
+        if (yy - y > 2 && yy - y < 30 && (bot === null || yy < bot)) bot = yy;
+      } else if (Math.abs(a[0] - b[0]) < 0.6 && Math.min(a[1], b[1]) - 1 <= y && y <= Math.max(a[1], b[1]) + 1) {
+        const xx = (a[0] + b[0]) / 2;
+        if (x - xx > 2 && x - xx < 40 && (left === null || xx > left)) left = xx;
+        if (xx - x > 2 && xx - x < 40 && (right === null || xx < right)) right = xx;
+      }
+    }
+    if (top !== null && bot !== null && left !== null && right !== null) rects.push([left, top, right, bot]);
+  }
+  return rects.filter((r) => { const w = r[2] - r[0], h = r[3] - r[1]; return w >= 6 && w <= 60 && h >= 6 && h <= 60 && w / h >= 0.6 && w / h <= 1.67; });
+}
+
+export function buildZones(words, draws, tol) {
+  const labels = words.filter((w) => w[4] === 'MH' || w[4] === 'HH').map((w) => [w[4], [(w[0] + w[2]) / 2, (w[1] + w[3]) / 2]]);
+  const boxes = findBoxes(draws, labels.map((l) => l[1]));
+  const order = labels.map((l, i) => [i, l]).sort((a, b) => a[1][1][1] - b[1][1][1] || a[1][1][0] - b[1][1][0]);
+  const zones = [];
+  for (const [, [kind, lp]] of order) {
+    const around = boxes.filter((b) => b[0] - 1 <= lp[0] && lp[0] <= b[2] + 1 && b[1] - 1 <= lp[1] && lp[1] <= b[3] + 1);
+    let core, src;
+    if (around.length) { const b = around.reduce((m, r) => ((r[2] - r[0]) * (r[3] - r[1]) < (m[2] - m[0]) * (m[3] - m[1]) ? r : m)); core = b.slice(); src = 'symbol'; }
+    else { core = [lp[0] - 8, lp[1] - 8, lp[0] + 8, lp[1] + 8]; src = 'label-only'; }
+    zones.push({ kind, core, src, rect: [core[0] - tol, core[1] - tol, core[2] + tol, core[3] + tol] });
+  }
+  const counts = {};
+  for (const z of zones) { counts[z.kind] = (counts[z.kind] || 0) + 1; z.id = `to${z.kind}-${counts[z.kind]}`; }
+  return { zones, nbox: boxes.length };
+}
+
+export function splitByZones(chain, zones) {
+  const runs = []; let cur = [], curc = [], start = null, prev = null;
+  chain.pts.forEach((p, idx) => {
+    const c = chain.cls[idx];
+    let z = zones.find((zz) => inRect(p, zz.rect))?.id ?? null;
+    if (z === null && prev !== null && cur.length) {
+      const zb = zones.find((zz) => segHitsRect(prev, p, zz.rect))?.id ?? null;
+      if (zb) { if (cur.length >= 2) runs.push({ pts: cur, cls: curc, a: start, b: zb }); cur = []; curc = []; start = zb; }
+    }
+    if (z !== null) { if (cur.length >= 2) runs.push({ pts: cur, cls: curc, a: start, b: z }); cur = []; curc = []; start = z; }
+    else { cur.push(p); curc.push(c); }
+    prev = p;
+  });
+  if (cur.length >= 2) runs.push({ pts: cur, cls: curc, a: start, b: null });
+  return runs;
+}
+export function revEdge(e) {
+  const cls = e.cls, rc = [cls[cls.length - 1]];
+  for (let k = 1; k < cls.length; k++) rc.push(cls[cls.length - k]);
+  return { pts: e.pts.slice().reverse(), cls: rc, a: e.b, b: e.a };
+}
+export function splitEdge(e, splits) {
+  const pts = e.pts, cls = e.cls;
+  const sp = splits.slice().sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+  const pieces = []; let cur = [pts[0]], curc = [cls[0]], a = e.a, k = 0;
+  for (let i = 0; i < pts.length - 1; i++) {
+    while (k < sp.length && sp[k][0] === i) {
+      const [, , q, nid] = sp[k];
+      cur.push(q); curc.push(cls[i + 1]); pieces.push({ pts: cur, cls: curc, a, b: nid });
+      cur = [q]; curc = [cls[i + 1]]; a = nid; k++;
+    }
+    cur.push(pts[i + 1]); curc.push(cls[i + 1]);
+  }
+  pieces.push({ pts: cur, cls: curc, a, b: e.b });
+  return pieces.filter((p) => p.pts.length >= 2 && plen(p.pts) > 0.5);
+}
+
+// ── the route graph: nodes + vault-to-vault segments (Python: process, part 1) ──
+// Parity with the Python on T-108: all 29 segments identical (ends, lengths,
+// bends) and all 29 nodes identical in type, degree and position.
+// One deliberate difference: END notes read "REFER TO SHEET" text that wraps
+// across lines. PyMuPDF keeps a trailing space before the line break, so the
+// Python's regex missed "...REFER\nTO SHEET T1.B" and tagged toEND-16 with the
+// next-nearest sheet (T1.1.B). This port reads the wrapped callout (T1.B).
+export function buildGraph({ chains, zones, tol, ppf, blocks }) {
+  const nodes = new Map();
+  for (const z of zones) {
+    const c = z.core;
+    nodes.set(z.id, { id: z.id, type: z.kind, x: (c[0] + c[2]) / 2, y: (c[1] + c[3]) / 2, note: `${z.src} tag ${(c[2] - c[0]).toFixed(0)}x${(c[3] - c[1]).toFixed(0)} pt (not to scale)` });
+  }
+  let edges = [];
+  for (const ch of chains) edges.push(...splitByZones(ch, zones));
+
+  // free ends joined end-to-end -> JOINT nodes
+  const free = [];
+  edges.forEach((e, ei) => { for (const s of ['a', 'b']) if (e[s] === null) free.push([ei, s]); });
+  const fpos = free.map(([ei, s]) => (s === 'a' ? edges[ei].pts[0] : edges[ei].pts[edges[ei].pts.length - 1]));
+  const uf = new UF(free.length);
+  for (let i = 0; i < free.length; i++) for (let j = i + 1; j < free.length; j++) if (dist(fpos[i], fpos[j]) <= 2 * tol) uf.u(i, j);
+  const groups = new Map();
+  for (let i = 0; i < free.length; i++) { const k = uf.f(i); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(i); }
+  let jn = 0; const singles = [];
+  for (const g of groups.values()) {
+    if (g.length === 1) { singles.push(g[0]); continue; }
+    jn++; const nid = `toJ-${jn}`;
+    nodes.set(nid, { id: nid, type: 'JOINT', x: g.reduce((a, i) => a + fpos[i][0], 0) / g.length, y: g.reduce((a, i) => a + fpos[i][1], 0) / g.length, note: '' });
+    for (const i of g) { const [ei, s] = free[i]; edges[ei][s] = nid; }
+  }
+  // tee junctions: a free end landing on another run's body
+  const splits = new Map();
+  for (const i of singles) {
+    const [ei, s] = free[i], p = fpos[i];
+    let best = null;
+    edges.forEach((e, ej) => {
+      if (ej === ei) return;
+      const [d, si, t, q] = polyNearest(p, e.pts);
+      if (d <= 2 * tol + 2 && (best === null || d < best[0])) best = [d, ej, si, t, q];
+    });
+    if (best) {
+      const [, ej, si, t, q] = best;
+      jn++; const nid = `toJ-${jn}`;
+      nodes.set(nid, { id: nid, type: 'JUNCTION', x: q[0], y: q[1], note: 'tee' });
+      edges[ei][s] = nid;
+      if (!splits.has(ej)) splits.set(ej, []);
+      splits.get(ej).push([si, t, q, nid]);
+    }
+  }
+  edges = edges.flatMap((e, ej) => (splits.has(ej) ? splitEdge(e, splits.get(ej)) : [e]));
+
+  // remaining open ends -> END nodes, tagged with the nearest "REFER TO SHEET"
+  const refers = [];
+  for (const b of blocks) { const m = String(b[4]).toUpperCase().replace(/\n/g, ' ').match(/REFER TO SHEET\s+([A-Z0-9.\-]+)/); if (m) refers.push([m[1].replace(/\.+$/, ''), b.slice(0, 4)]); }
+  let en = 0;
+  for (const e of edges) for (const s of ['a', 'b']) if (e[s] === null) {
+    const p = s === 'a' ? e.pts[0] : e.pts[e.pts.length - 1];
+    let tag = '', bestd = 250;
+    for (const [sheet, r] of refers) { const d = dist(p, [Math.min(Math.max(p[0], r[0]), r[2]), Math.min(Math.max(p[1], r[1]), r[3])]); if (d < bestd) { bestd = d; tag = sheet; } }
+    en++; const nid = `toEND-${en}`;
+    nodes.set(nid, { id: nid, type: 'END', x: p[0], y: p[1], note: tag ? `near 'REFER TO ${tag}'` : '' });
+    e[s] = nid;
+  }
+  // merge straight-through JOINTs (degree 2)
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const deg = new Map();
+    edges.forEach((e, idx) => { if (e) { for (const s of ['a', 'b']) { if (!deg.has(e[s])) deg.set(e[s], []); deg.get(e[s]).push([idx, s]); } } });
+    for (const [nid, lst] of deg) {
+      if (nodes.get(nid).type !== 'JOINT' || lst.length !== 2 || lst[0][0] === lst[1][0]) continue;
+      const [[i1, s1], [i2, s2]] = lst;
+      const e1 = s1 === 'a' ? revEdge(edges[i1]) : edges[i1];
+      const e2 = s2 === 'b' ? revEdge(edges[i2]) : edges[i2];
+      edges[i1] = { pts: e1.pts.concat(e2.pts), cls: e1.cls.concat(e2.cls), a: e1.a, b: e2.b };
+      edges[i2] = null; nodes.get(nid).type = '_merged'; changed = true; break;
+    }
+  }
+  edges = edges.filter((e) => e && plen(e.pts) / ppf >= 1.0);
+  const deg = new Map();
+  for (const e of edges) { deg.set(e.a, (deg.get(e.a) || 0) + 1); deg.set(e.b, (deg.get(e.b) || 0) + 1); }
+  for (const [k, v] of [...nodes]) if (v.type === '_merged' || !deg.get(k)) nodes.delete(k);
+  for (const [k, v] of nodes) { v.degree = deg.get(k); if (v.type === 'JOINT') v.type = deg.get(k) >= 3 ? 'JUNCTION' : 'BEND'; }
+
+  // run each segment into the MH/HH centre (the part hidden under the tag)
+  for (const e of edges) e.bend_pts = e.pts.slice();
+  for (const e of edges) {
+    const na = nodes.get(e.a), nb = nodes.get(e.b);
+    if (na.type === 'MH' || na.type === 'HH') { e.pts = [[na.x, na.y], ...e.pts]; e.cls = [e.cls[0], ...e.cls]; }
+    if (nb.type === 'MH' || nb.type === 'HH') { e.pts = [...e.pts, [nb.x, nb.y]]; e.cls = [...e.cls, e.cls[e.cls.length - 1]]; }
+  }
+  // metrics + ids
+  for (const e of edges) {
+    let nw = 0, ex = 0;
+    for (let i = 0; i < e.pts.length - 1; i++) { const L = dist(e.pts[i], e.pts[i + 1]); if (e.cls[i + 1] === 'new') nw += L; else ex += L; }
+    e.new_ft = nw / ppf; e.exist_ft = ex / ppf; e.total_ft = e.new_ft + e.exist_ft;
+    e.bend_list = bendList(e.bend_pts, ppf);
+    e.bends = e.bend_list.reduce((a, b) => a + Math.abs(b), 0);
+    e.mid = pointAt(e.pts, 0.5);
+    e.callouts = [];
+  }
+  edges.sort((a, b) => pyRound(a.mid[1] / 50) - pyRound(b.mid[1] / 50) || a.mid[0] - b.mid[0]);
+  edges.forEach((e, i) => { e.id = `toS${String(i + 1).padStart(2, '0')}`; });
+  return { nodes, edges };
+}
