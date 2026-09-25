@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Project — Take-off</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="auth.js"></script>
+<link rel="stylesheet" href="wf.css">
+</head>
+<body>
+<nav id="to-nav"></nav>
+<script src="nav.js"></script>
+
+<main class="wf-page">
+  <div class="wf-head">
+    <div>
+      <a class="wf-crumb" href="wf-projects.html">← Projects</a>
+      <h1 class="wf-title" id="p-name">Loading…</h1>
+      <div class="wf-sub" id="p-sub"></div>
+    </div>
+    <div class="wf-sub" id="p-lib" style="text-align: right"></div>
+  </div>
+
+  <section class="banner amber" id="next" hidden>
+    <div style="flex-grow: 1">
+      <div class="kicker">NEXT UP</div>
+      <div class="msg" id="next-msg"></div>
+    </div>
+    <a class="btn amber" id="next-btn" href="#">Open</a>
+  </section>
+
+  <section class="panel" aria-label="Workflow steps">
+    <div id="steps"><div class="empty">Loading…</div></div>
+  </section>
+
+  <div class="status-line" id="status" role="status"></div>
+</main>
+
+<script type="module">
+import { STEPS, stepDef, nextUp, stepSummary } from './lib/wf-steps.js';
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const projectId = new URLSearchParams(location.search).get('project_id');
+try { if (projectId) sessionStorage.setItem('to_project_id', projectId); } catch {}
+
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || `Request failed (${res.status})`);
+  return body;
+}
+
+const stepHref = (code) => `${stepDef(code).page}?project_id=${projectId}`;
+
+function render(d) {
+  const p = d.project;
+  document.title = `${p.name} — Take-off`;
+  $('p-name').textContent = p.name;
+  $('p-sub').textContent = [p.number, p.client, `${d.documents} file${d.documents === 1 ? '' : 's'} · ${d.sheets} sheet${d.sheets === 1 ? '' : 's'}`]
+    .filter(Boolean).join(' · ');
+  if (d.library) {
+    $('p-lib').innerHTML = `Device library: ${d.library.device_types} type${d.library.device_types === 1 ? '' : 's'}` +
+      (d.library.copied ? '<br><span style="color: var(--orange)">copied — re-check each type in WF4</span>' : '');
+  }
+
+  const n = nextUp(d.steps);
+  $('next').hidden = false;
+  $('next').className = 'banner ' + (n.kind === 'stale' ? 'orange' : n.kind === 'bom' ? 'green' : 'amber');
+  $('next-msg').textContent = n.text;
+  $('next-btn').href = stepHref(n.code);
+  $('next-btn').textContent = `Open ${n.code}`;
+
+  $('steps').innerHTML = STEPS.map((s) => {
+    const sum = stepSummary(s.code, d.steps);
+    const files = d.documents_by_step[s.code];
+    const na = sum.status === 'not_applicable';
+    const scopeBtn = s.code === 'WF8' ? '' :
+      `<button type="button" class="btn muted small" data-scope="${s.code}" data-in="${na ? '1' : '0'}">${na ? 'Add to scope' : 'Mark N/A'}</button>`;
+    return `
+      <div class="row"${na ? ' style="opacity: .6"' : ''}>
+        <span style="width: 48px; color: var(--amber); font-weight: 700">${s.code}</span>
+        <span style="width: 200px; font-size: 15px; font-weight: 600">${esc(s.name)}</span>
+        <span style="width: 110px"><span class="pill ${sum.status}">${esc(sum.label)}</span></span>
+        <span style="flex-grow: 1; font-size: 13px" class="muted">${esc(sum.note)}${files ? ` · ${files} file${files === 1 ? '' : 's'}` : ''}</span>
+        ${scopeBtn}
+        ${na ? '' : `<a class="btn blue small" href="${stepHref(s.code)}">Open</a>`}
+      </div>`;
+  }).join('');
+
+  document.querySelectorAll('[data-scope]').forEach((b) => {
+    b.onclick = async () => {
+      b.disabled = true;
+      try {
+        await api('/api/wf/projects', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'set_scope', project_id: Number(projectId), step_code: b.dataset.scope, in_scope: b.dataset.in === '1' }),
+        });
+        load();
+      } catch (e) {
+        $('status').className = 'status-line err'; $('status').textContent = e.message; b.disabled = false;
+      }
+    };
+  });
+}
+
+async function load() {
+  if (!projectId) { location.replace('wf-projects.html'); return; }
+  try {
+    render(await api('/api/wf/projects?id=' + encodeURIComponent(projectId)));
+  } catch (e) {
+    $('p-name').textContent = 'Project not available';
+    $('steps').innerHTML = `<div class="empty" style="color: var(--red)">${esc(e.message)}</div>`;
+  }
+}
+
+load();
+</script>
+</body>
+</html>

@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Projects (workflow) — Take-off</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="auth.js"></script>
+<link rel="stylesheet" href="wf.css">
+</head>
+<body>
+<nav id="to-nav"></nav>
+<script src="nav.js"></script>
+
+<main class="wf-page">
+  <div class="wf-head">
+    <div>
+      <h1 class="wf-title">Projects</h1>
+      <div class="wf-sub">One project = one bid set. Drawings are added inside each step.</div>
+    </div>
+    <button type="button" class="btn green" id="btn-new">+ New project</button>
+  </div>
+
+  <!-- WF0 · New project -->
+  <section class="panel" id="new-panel" hidden aria-labelledby="new-title">
+    <div class="row head"><span id="new-title"><span style="color: var(--amber)">WF0</span> · New project</span></div>
+    <form id="new-form" novalidate>
+      <div class="form">
+        <label class="lbl">PROJECT NAME<input class="field" name="name" required autocomplete="off"></label>
+        <label class="lbl">PROJECT NUMBER<input class="field" name="number" autocomplete="off"></label>
+        <label class="lbl">CUSTOMER<input class="field" name="client" autocomplete="off"></label>
+        <label class="lbl">AE FIRM<input class="field" name="ae_firm" autocomplete="off"></label>
+        <label class="lbl" style="grid-column: span 2">DEVICE LIBRARY (THIS PROJECT)
+          <select class="field" name="library">
+            <option value="">Start empty — build from these plans in WF4</option>
+          </select>
+          <span class="hint">Copied device types start unverified and must be re-checked on this set before they count.</span>
+        </label>
+      </div>
+      <div class="form" style="grid-template-columns: 1fr 2fr; padding-top: 0">
+        <fieldset>
+          <legend>CHANGE-ORDER PRICING</legend>
+          <label class="check"><input type="radio" name="co_pricing_basis" value="bid" checked> Bid unit prices (frozen at reference)</label>
+          <label class="check" style="margin-top: 10px"><input type="radio" name="co_pricing_basis" value="current"> Current unit prices</label>
+        </fieldset>
+        <fieldset>
+          <legend>STEPS IN SCOPE — UNCHECK = N/A (CHANGE LATER)</legend>
+          <div id="scope" style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 28px"></div>
+        </fieldset>
+      </div>
+      <div class="row" style="justify-content: flex-end">
+        <span class="status-line" id="new-status" role="status" style="flex-grow: 1"></span>
+        <button type="button" class="btn muted" id="btn-cancel">Cancel</button>
+        <button type="submit" class="btn green" id="btn-create" style="font-weight: 700">Create project</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="panel" aria-label="Projects">
+    <div class="row head">
+      <span style="width: 320px">Project</span><span style="width: 160px">Customer</span>
+      <span style="flex-grow: 1">Steps</span><span style="width: 70px"></span>
+    </div>
+    <div id="list"><div class="empty">Loading…</div></div>
+  </section>
+</main>
+
+<script type="module">
+import { STEPS } from './lib/wf-steps.js';
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || `Request failed (${res.status})`);
+  return body;
+}
+
+// ── list ──
+async function loadList() {
+  try {
+    const rows = await api('/api/wf/projects');
+    if (!rows.length) { $('list').innerHTML = '<div class="empty">No projects yet. Create one to start.</div>'; return; }
+    $('list').innerHTML = rows.map((p) => `
+      <div class="row">
+        <span style="width: 320px"><a href="wf-project.html?project_id=${p.id}" style="font-weight: 700; text-decoration: none">${esc(p.name)}</a>
+          ${p.number ? `<span class="muted" style="font-size: 12px"> · ${esc(p.number)}</span>` : ''}</span>
+        <span style="width: 160px">${esc(p.client) || '<span class="muted">—</span>'}</span>
+        <span style="flex-grow: 1; display: flex; gap: 6px; flex-wrap: wrap">
+          ${p.workflow_steps.map((s) => `<span class="pill ${s.status}" title="${s.step_code} · ${s.status}">${s.step_code}</span>`).join('')}
+        </span>
+        <a class="btn blue small" href="wf-project.html?project_id=${p.id}">Open</a>
+      </div>`).join('');
+  } catch (e) {
+    $('list').innerHTML = `<div class="empty" style="color: var(--red)">${esc(e.message)}</div>`;
+  }
+}
+
+// ── new project form ──
+function buildScope() {
+  $('scope').innerHTML = STEPS.filter((s) => s.code !== 'WF8').map((s) => `
+    <label class="check"><input type="checkbox" name="scope" value="${s.code}" checked> ${s.code} ${esc(s.name)}</label>`).join('');
+}
+
+async function loadCopySources(client) {
+  const sel = document.querySelector('select[name=library]');
+  sel.length = 1;
+  try {
+    const rows = await api('/api/wf/projects?copy_sources=1&client=' + encodeURIComponent(client || ''));
+    for (const r of rows) {
+      const o = document.createElement('option');
+      o.value = r.library_id;
+      o.textContent = `Copy from ${r.project_name}${r.client ? ' · ' + r.client : ''} (${r.device_types} device types)`;
+      sel.appendChild(o);
+    }
+  } catch { /* copying is optional; start-empty still works */ }
+}
+
+$('btn-new').onclick = () => { $('new-panel').hidden = false; $('btn-new').hidden = true; document.querySelector('[name=name]').focus(); loadCopySources(''); };
+$('btn-cancel').onclick = () => { $('new-panel').hidden = true; $('btn-new').hidden = false; $('new-form').reset(); $('new-status').textContent = ''; };
+document.querySelector('[name=client]').addEventListener('change', (e) => loadCopySources(e.target.value.trim()));
+
+$('new-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  const name = (f.get('name') || '').trim();
+  if (!name) { $('new-status').className = 'status-line err'; $('new-status').textContent = 'Project name is required.'; return; }
+  $('btn-create').disabled = true;
+  $('new-status').className = 'status-line'; $('new-status').textContent = 'Creating…';
+  try {
+    const res = await api('/api/wf/projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'create',
+        name,
+        number: f.get('number') || null,
+        client: (f.get('client') || '').trim() || null,
+        ae_firm: (f.get('ae_firm') || '').trim() || null,
+        co_pricing_basis: f.get('co_pricing_basis'),
+        in_scope: f.getAll('scope'),
+        copy_from_library_id: f.get('library') ? Number(f.get('library')) : null,
+      }),
+    });
+    location.href = 'wf-project.html?project_id=' + res.id;
+  } catch (err) {
+    $('new-status').className = 'status-line err'; $('new-status').textContent = err.message;
+    $('btn-create').disabled = false;
+  }
+});
+
+buildScope();
+loadList();
+</script>
+</body>
+</html>

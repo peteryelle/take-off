@@ -1,0 +1,63 @@
+/* public/wf.css — shared look for the v2 workflow pages (matches the approved mockups) */
+:root {
+  --bg: #0e1110; --panel: #151a18; --line: #26302b; --line-soft: #1e2622;
+  --text: #d9e0dc; --muted: #8c9a93;
+  --green: #7ee08a; --green-bd: #3a7a3a; --green-bg: #14241a;
+  --blue: #7ab8e8;  --blue-bd: #2a4a66;  --blue-bg: #0f1822;
+  --amber: #f0c040; --amber-bd: #6a5000; --amber-bg: #1f1a08;
+  --orange: #f0a050; --orange-bd: #7a4a1a; --orange-bg: #241808;
+  --purple: #c9a0f0; --purple-bd: #5a3a7a; --purple-bg: #1c1426;
+  --red: #f08080;   --red-bd: #7a2a2a;   --red-bg: #241010;
+}
+* { box-sizing: border-box; }
+body { margin: 0; font-family: "JetBrains Mono", ui-monospace, Menlo, monospace; background: var(--bg); color: var(--text); font-size: 14px; }
+a { color: var(--blue); }
+a:hover { color: #a9d3f5; }
+.wf-page { max-width: 1200px; margin: 0 auto; padding: 36px 32px 60px; display: flex; flex-direction: column; gap: 22px; }
+.wf-crumb { font-size: 13px; text-decoration: none; }
+.wf-title { margin: 6px 0 0; font-size: 26px; }
+.wf-title .code { color: var(--amber); }
+.wf-sub { font-size: 13px; color: var(--muted); margin-top: 6px; }
+.wf-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 20px; }
+
+.panel { border: 1px solid var(--line); background: var(--panel); border-radius: 4px; }
+.row { display: flex; align-items: center; gap: 20px; padding: 14px 20px; border-bottom: 1px solid var(--line-soft); }
+.row:last-child { border-bottom: none; }
+.row.head { font-size: 12px; color: var(--muted); letter-spacing: .06em; text-transform: uppercase; padding-top: 11px; padding-bottom: 11px; }
+
+.banner { display: flex; align-items: center; gap: 20px; padding: 18px 22px; border-radius: 4px; border: 1px solid; }
+.banner .kicker { font-size: 12px; letter-spacing: .1em; }
+.banner .msg { font-size: 16px; margin-top: 6px; }
+.banner.amber { border-color: var(--amber-bd); background: var(--amber-bg); } .banner.amber .kicker { color: var(--amber); }
+.banner.orange { border-color: var(--orange-bd); background: var(--orange-bg); } .banner.orange .kicker { color: var(--orange); }
+.banner.green { border-color: var(--green-bd); background: var(--green-bg); } .banner.green .kicker { color: var(--green); }
+.banner.red { border-color: var(--red-bd); background: var(--red-bg); } .banner.red .kicker { color: var(--red); }
+
+.pill { display: inline-block; font-size: 12px; padding: 4px 10px; border-radius: 3px; border: 1px solid; white-space: nowrap; }
+.pill.confirmed { color: var(--green); border-color: #2f6a3a; background: #12241a; }
+.pill.open, .pill.not_applicable { color: var(--muted); border-color: #3a443f; background: #141816; }
+.pill.extracted, .pill.in_review { color: var(--blue); border-color: var(--blue-bd); background: var(--blue-bg); }
+.pill.stale { color: var(--orange); border-color: var(--orange-bd); background: var(--orange-bg); }
+
+.btn { font-family: inherit; font-size: 13px; padding: 10px 16px; border-radius: 3px; border: 1px solid; cursor: pointer; text-decoration: none; display: inline-block; }
+.btn.green { background: var(--green-bg); color: var(--green); border-color: var(--green-bd); }
+.btn.blue { background: var(--blue-bg); color: var(--blue); border-color: var(--blue-bd); }
+.btn.amber { background: #2a2208; color: var(--amber); border-color: var(--amber-bd); font-weight: 700; }
+.btn.muted { background: #141816; color: var(--muted); border-color: #3a443f; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn.small { padding: 7px 12px; font-size: 12px; }
+
+.form { padding: 24px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px 20px; }
+.lbl { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); letter-spacing: .06em; }
+.lbl .hint { font-size: 11px; letter-spacing: 0; }
+.field { font-family: inherit; font-size: 14px; background: var(--bg); color: var(--text); border: 1px solid #3a443f; border-radius: 3px; padding: 10px 12px; }
+.field:focus, .btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+fieldset { border: none; margin: 0; padding: 0; }
+legend { font-size: 12px; color: var(--muted); letter-spacing: .06em; margin-bottom: 12px; padding: 0; }
+.check { display: flex; gap: 10px; align-items: center; font-size: 14px; }
+
+.muted { color: var(--muted); }
+.status-line { font-size: 13px; min-height: 18px; }
+.status-line.err { color: var(--red); }
+.status-line.ok { color: var(--green); }
+.empty { padding: 28px 20px; color: var(--muted); font-size: 14px; }

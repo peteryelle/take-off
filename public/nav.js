@@ -12,6 +12,7 @@
 (function () {
   const ITEMS = [
     { file: 'projects.html',     label: '⚡ Projects' },
+    { file: 'wf-projects.html',  label: '▶ Workflow (v2)' },
     { file: 'discover.html',     label: '🔍 Discover' },
     { file: 'multi-page.html',   label: 'Take-off' },
     { file: 'rack-orchestration.html', label: 'Rack Orch' },
