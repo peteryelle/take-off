@@ -333,44 +333,66 @@ export function collectFragmentsFromDraws(draws) {
   return { frags, widths };
 }
 
-// ── text: PyMuPDF-style words and blocks from pdf.js text runs ──
-export function wordsFromText(tcItems, view) {
+// ── text: PyMuPDF-style words, lines and blocks from pdf.js text runs ──
+// PyMuPDF line boxes run 0.697 x font size above the baseline and 0.197
+// below (measured on T-108 against page.get_text("dict")); pdf.js's own font
+// ascent (0.905) gives taller boxes, so the measured proportions are used.
+export const ASC = 0.697, DESC = 0.197;
+
+function runsOf(tcItems, view) {
   const [vx0, , , vy1] = view;
-  const words = [];
+  const out = [];
   for (const it of tcItems) {
-    if (!it.str || !it.str.trim()) continue;
+    if (!it.str) continue;
     const size = Math.hypot(it.transform[2], it.transform[3]);
-    const bx = it.transform[4] - vx0, by = vy1 - it.transform[5];
-    const cw = it.width / Math.max(it.str.length, 1);
+    const x = it.transform[4] - vx0, base = vy1 - it.transform[5];
+    out.push({ str: it.str, x0: x, x1: x + it.width, base, size, cw: it.width / Math.max(it.str.length, 1) });
+  }
+  return out;
+}
+
+export function wordsFromText(tcItems, view) {
+  const words = [];
+  for (const r of runsOf(tcItems, view)) {
     const re = /\S+/g; let m;
-    while ((m = re.exec(it.str))) words.push([bx + m.index * cw, by - 0.8 * size, bx + (m.index + m[0].length) * cw, by + 0.2 * size, m[0]]);
+    while ((m = re.exec(r.str))) words.push([r.x0 + m.index * r.cw, r.base - ASC * r.size, r.x0 + (m.index + m[0].length) * r.cw, r.base + DESC * r.size, m[0]]);
   }
   return words;
 }
-// Blocks, PyMuPDF-style: text runs grouped in the order they appear in the
-// PDF — a run joins the current block if it continues the same line, or starts
-// the next line directly below, left-aligned. (Grouping by nearness alone made
-// blocks too large and pulled "REFER TO SHEET" tags onto the wrong END nodes.)
-export function blocksFromText(tcItems, view) {
-  const [vx0, , , vy1] = view;
+
+// Blocks of lines (Python: page.get_text("dict")). Runs are taken in the order
+// they appear in the PDF: a run continues the current line when it sits on the
+// same baseline just to the right; it starts the next line of the same block
+// when it sits one line below, left-aligned; otherwise it starts a new block.
+// Runs on one line are joined with no separator (as PyMuPDF joins spans),
+// unless there is a visible gap between them.
+export function textDict(tcItems, view) {
   const blocks = [];
-  let cur = null;
-  for (const it of tcItems) {
-    if (!it.str || !it.str.trim()) continue;
-    const size = Math.hypot(it.transform[2], it.transform[3]);
-    const x = it.transform[4] - vx0, base = vy1 - it.transform[5];
-    const r = { x0: x, x1: x + it.width, y0: base - 0.8 * size, y1: base + 0.2 * size, base, size, text: it.str };
-    const sameLine = cur && Math.abs(r.base - cur.lastBase) < 0.3 * size && r.x0 >= cur.lastX1 - 1 && r.x0 - cur.lastX1 < 1.5 * size;
-    const nextLine = cur && r.base - cur.lastBase > 0.3 * size && r.base - cur.lastBase < 1.6 * size && Math.abs(r.x0 - cur.x0) < 2 * size && Math.abs(size - cur.size) < 0.5;
-    if (sameLine || nextLine) {
-      cur.x0 = Math.min(cur.x0, r.x0); cur.x1 = Math.max(cur.x1, r.x1); cur.y0 = Math.min(cur.y0, r.y0); cur.y1 = Math.max(cur.y1, r.y1);
-      cur.text += (nextLine ? '\n' : ' ') + r.text; cur.lastBase = r.base; cur.lastX1 = r.x1;
-    } else {
-      cur = { ...r, lastBase: r.base, lastX1: r.x1 };
-      blocks.push(cur);
+  let blk = null, ln = null;
+  for (const r of runsOf(tcItems, view)) {
+    if (!r.str.trim() && r.x1 - r.x0 < 0.01) continue; // empty line markers
+    const sameLine = ln && Math.abs(r.base - ln.base) < 0.3 * r.size && r.x0 >= ln.x1 - 1 && r.x0 - ln.x1 < 1.5 * r.size;
+    const nextLine = blk && !sameLine && r.base - ln.base > 0.3 * r.size && r.base - ln.base < 1.6 * r.size && Math.abs(r.x0 - blk.lines[0].bbox[0]) < 2 * r.size && Math.abs(r.size - ln.size) < 0.5;
+    if (sameLine) {
+      ln.text += (r.x0 - ln.x1 > 0.25 * r.size ? ' ' : '') + r.str;
+      ln.x1 = Math.max(ln.x1, r.x1);
+      ln.bbox[2] = Math.max(ln.bbox[2], r.x1);
+      continue;
     }
+    if (!r.str.trim()) continue; // a lone space does not start a line
+    ln = { text: r.str, base: r.base, size: r.size, x1: r.x1, bbox: [r.x0, r.base - ASC * r.size, r.x1, r.base + DESC * r.size] };
+    if (nextLine) blk.lines.push(ln);
+    else { blk = { lines: [ln] }; blocks.push(blk); }
   }
-  return blocks.map((k) => [k.x0, k.y0, k.x1, k.y1, k.text]);
+  for (const b of blocks) {
+    b.bbox = [Math.min(...b.lines.map((l) => l.bbox[0])), Math.min(...b.lines.map((l) => l.bbox[1])), Math.max(...b.lines.map((l) => l.bbox[2])), Math.max(...b.lines.map((l) => l.bbox[3]))];
+  }
+  return blocks;
+}
+
+// Blocks as [x0, y0, x1, y1, text] (Python: page.get_text("blocks")).
+export function blocksFromText(tcItems, view) {
+  return textDict(tcItems, view).map((b) => [...b.bbox, b.lines.map((l) => l.text).join('\n')]);
 }
 
 // ── scale bar (Python: detect_scale) ──
@@ -589,4 +611,120 @@ export function buildGraph({ chains, zones, tol, ppf, blocks }) {
   edges.sort((a, b) => pyRound(a.mid[1] / 50) - pyRound(b.mid[1] / 50) || a.mid[0] - b.mid[0]);
   edges.forEach((e, i) => { e.id = `toS${String(i + 1).padStart(2, '0')}`; });
   return { nodes, edges };
+}
+
+// ═════════════════════════════ stage 3 ═════════════════════════════
+export const FILL_12OS2 = 24, FILL_24OS2 = 27; // T-001 fill charts, 4" conduit @ 40%
+
+// Callouts start with "(n) CORE-A/B"; following lines of the same block are
+// appended (Python: extract_callouts).
+export function extractCallouts(dictBlocks) {
+  const out = [];
+  for (const b of dictBlocks) {
+    let cur = null;
+    for (const ln of b.lines) {
+      const t = ln.text.trim();
+      if (!t) continue;
+      if (/^\(\s*\d+\s*\)\s*CORE-[AB]/.test(t.toUpperCase())) {
+        if (cur) out.push(cur);
+        cur = { text: t, bbox: ln.bbox.slice(), first: ln.bbox.slice(), last: ln.bbox.slice() };
+      } else if (cur) {
+        cur.text += ' ' + t; cur.last = ln.bbox.slice();
+        const bb = ln.bbox, cb = cur.bbox;
+        cur.bbox = [Math.min(cb[0], bb[0]), Math.min(cb[1], bb[1]), Math.max(cb[2], bb[2]), Math.max(cb[3], bb[3])];
+      }
+    }
+    if (cur) out.push(cur);
+  }
+  return out;
+}
+
+export function parseCallout(text) {
+  const T = text.toUpperCase().replace(/\u201d/g, '"').replace(/\u2033/g, '"').replace(/''/g, '"').split(/\s+/).filter(Boolean).join(' ');
+  const r = { raw: T };
+  const m = T.match(/^\(\s*(\d+)\s*\)\s*CORE-([AB])/);
+  r.cables = parseInt(m[1], 10); r.core = m[2];
+  r.demarc = T.includes('DEMARC');
+  const grab = (re, dflt = 0) => { const mm = T.match(re); return mm ? parseInt(mm[1], 10) : dflt; };
+  r.n4 = grab(/\((\d+)\)\s*4\s*"\s*CONDUITS?/);
+  r.n1_fa = grab(/\((\d+)\)\s*1\s*"\s*CONDUITS?\s*FOR\s*FIRE/);
+  r.with_cables = grab(/\((\d+)\)\s*CONDUITS?\s*WITH\s*CABLES/, r.n4 === 1 ? 1 : 0);
+  r.spare = grab(/\((\d+)\)\s*SPARE/);
+  r.elec = grab(/\((\d+)\)\s*CONDUITS?\s*WITH\s*ELECTRICAL/);
+  r.pathway = T.includes('PIPE BASEMENT') ? 'pipe basement' : T.includes('EXISTING TUNNEL') ? 'existing tunnel'
+    : T.includes('EXISTING UNDERGROUND CONDUIT') ? 'existing UG conduit' : 'duct bank';
+  const flags = [];
+  if (r.with_cables) {
+    const per = r.cables / r.with_cables;
+    r.cables_per_conduit = pyRound(per, 1);
+    if (per > FILL_24OS2) flags.push(`>${FILL_24OS2}/conduit exceeds 24-str OS2 fill`);
+    else if (per > FILL_12OS2) flags.push(`>${FILL_12OS2}/conduit exceeds 12-str OS2 fill`);
+  } else r.cables_per_conduit = '';
+  if (r.demarc) flags.push('+demarc qty not stated');
+  r.fill_flag = flags.join('; ');
+  return r;
+}
+
+// Thin black strokes: the leader lines (Python: leader_candidates).
+export function leaderCandidates(draws) {
+  const out = [];
+  for (const d of draws) {
+    const w = d.width || 0;
+    if (colIs(d.color, BLACK) && w >= 0.05 && w <= 1.0) for (const sp of subpaths(d)) { const L = plen(sp); if (L >= 0.5 && L <= 900) out.push(sp); }
+  }
+  const g = new Grid(5.0);
+  out.forEach((sp, i) => { g.add(sp[0], [i, 0]); g.add(sp[sp.length - 1], [i, 1]); });
+  return { leaders: out, lgrid: g };
+}
+
+// Follow the leader from the callout text to the conduit (Python: trace_leader).
+export function traceLeader(co, leaders, lgrid, edges, zones = [], maxHops = 4, hitTol = 8.0) {
+  const starts = new Map();
+  for (const key of ['first', 'last']) {
+    const ln = co[key], ym = (ln[1] + ln[3]) / 2;
+    for (const ax of [[ln[0], ym], [ln[2], ym]]) for (const [q, [i, e]] of lgrid.near(ax, 14)) if (Math.abs(q[1] - ym) <= 6) starts.set(i + ':' + e, [i, e]);
+  }
+  let best = null; const tips = [];
+  for (const [i, e] of starts.values()) {
+    const path = (e === 0 ? leaders[i] : leaders[i].slice().reverse()).slice(); const used = new Set([i]);
+    for (let hop = 0; hop <= maxHops; hop++) {
+      const tip = path[path.length - 1]; tips.push(tip);
+      for (const ed of edges) { const [d, , , q] = polyNearest(tip, ed.pts); if (d <= hitTol && (best === null || d < best[0])) best = [d, ed, q]; }
+      let nxt = null;
+      for (const [, [j, f]] of lgrid.near(tip, 0.8)) if (!used.has(j)) { nxt = [j, f]; break; }
+      if (nxt === null) break;
+      const [j, f] = nxt; used.add(j);
+      path.push(...(f === 0 ? leaders[j] : leaders[j].slice().reverse()).slice(1));
+    }
+  }
+  if (best === null) {
+    for (const tip of tips) for (const z of zones) {
+      const c = z.core;
+      if (inRect(tip, [c[0] - 4, c[1] - 4, c[2] + 4, c[3] + 4])) for (const ed of edges) if (ed.a === z.id || ed.b === z.id) {
+        const [d, , , q] = polyNearest(tip, ed.pts); if (best === null || d < best[0]) best = [d, ed, q];
+      }
+    }
+  }
+  return best;
+}
+
+// Attach every callout to a segment: by leader, else nearest (flagged).
+export function assignCallouts({ dictBlocks, draws, edges, zones, ppf }) {
+  const callouts = extractCallouts(dictBlocks);
+  callouts.sort((a, b) => pyRound(a.bbox[1] / 20) - pyRound(b.bbox[1] / 20) || a.bbox[0] - b.bbox[0]);
+  const { leaders, lgrid } = leaderCandidates(draws);
+  callouts.forEach((co, ci) => {
+    co.id = `toC${String(ci + 1).padStart(2, '0')}`;
+    Object.assign(co, parseCallout(co.text));
+    const best = traceLeader(co, leaders, lgrid, edges, zones);
+    if (best) { co.method = 'leader'; co.seg = best[1]; co.hit = best[2]; }
+    else {
+      const bb = co.bbox, c = [(bb[0] + bb[2]) / 2, (bb[1] + bb[3]) / 2];
+      let pick = null;
+      for (const e of edges) { const pn = polyNearest(c, e.pts); if (!pick || pn[0] < pick[0]) pick = [pn[0], e, pn[3]]; }
+      co.method = `NEAREST ONLY (${pyRound(pick[0] / ppf)} ft) - verify`; co.seg = pick[1]; co.hit = pick[2];
+    }
+    co.seg.callouts.push(co);
+  });
+  return callouts;
 }
