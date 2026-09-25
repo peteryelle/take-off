@@ -1,0 +1,25 @@
+sheet,section,item,quantity,unit,note
+T-108,Structures,Manholes (MH),4,ea,typ 6'x6'x6' per CU602
+T-108,Structures,Handholes (HH),5,ea,typ 3'x3'x4' per T-502
+T-108,Structures,Junctions with no vault shown,3,ea,script-inferred - review in discrepancy log
+T-108,Structures,Building entries / continuation ends,16,ea,
+T-108,"Route length (plan, center-to-center)",New route (red),1043,ft,
+T-108,"Route length (plan, center-to-center)",Existing route (blue),1197,ft,
+T-108,"Route length (plan, center-to-center)",Total route,2240,ft,
+T-108,"Route length (plan, center-to-center)",New duct bank / trench,769,ft,"new route carrying new 4"" conduit"
+T-108,Conduit - new install,"4"" conduit (total)",3149,ft,conduit count x new route length
+T-108,Conduit - new install,"4"" conduit - with cables",1715,ft,
+T-108,Conduit - new install,"4"" conduit - spare",1433,ft,
+T-108,Conduit - new install,"1"" fire-alarm fiber conduit",27,ft,
+T-108,Conduit - coordination (by EC / electrical dwgs),"4"" with electrical cables",648,ft,shown for coordination only
+T-108,Conduit - existing (reused),"4"" conduit in existing routes",2897,ft,field-verify condition and fill
+T-108,"Cable (plan length, no slack / vertical)",Core-A cable,26529,ft,
+T-108,"Cable (plan length, no slack / vertical)",Core-B cable,22484,ft,
+T-108,"Cable (plan length, no slack / vertical)",Demarc cables,not stated,,quantity not given on drawings - RFI
+T-108,Completeness,Segments,29,ea,
+T-108,Completeness,Segments with no callout (not in conduit/cable totals),3,ea,153 ft of route
+T-108,Completeness,Callouts matched by proximity (verify),3,ea,
+T-108,Completeness,Runs over pull-length limit,2,ea,
+T-108,Completeness,Runs over 180 deg plan bends,3,ea,
+T-108,Completeness,Discrepancies - RFI candidates,0,ea,
+T-108,Completeness,Discrepancies - verify on overlay,20,ea,

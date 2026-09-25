@@ -1,0 +1,30 @@
+segment,from,from_type,to,to_type,route,total_ft,new_ft,existing_ft,bends_deg,bend_detail,callouts,core,cables,demarc,n_4in,n_1in_fa,with_cables,spare,elec,pathway,config,new_4in_conduit_ft,new_1in_conduit_ft,cable_ft_plan,pull_limit_ft,flags
+toS01,toHH-1,HH,toJ-7,JUNCTION,new,103.4,103.4,0.0,180,90 + 90,toC05,B,1,,3,0,1,2,0,duct bank,3x4in (1 cabled/2 spare) | 1 Core-B,310,0,103,250,
+toS02,toEND-11,END,toEND-16,END,existing,175.1,0.0,175.1,238,90 + 90 + 44 + 13,toC04 toC06 toC09,A,38,Y,0,0,0,0,0,pipe basement,0x4in (0 cabled/0 spare) | 38 Core-A + demarc | pipe basement,0,0,6653,100,OVER 100' PULL LIMIT; BENDS >180; multi-config: see callouts; +demarc qty not stated
+toS03,toJ-7,JUNCTION,toHH-1,HH,existing,94.9,0.0,94.9,90,90,toC03,A,2,,3,0,1,2,0,duct bank,3x4in (1 cabled/2 spare) | 2 Core-A,0,0,190,250,
+toS04,toEND-7,END,toMH-1,MH,new,244.1,244.1,0.0,44,29 + 15,toC01 toC13,B,50,Y,5,0,3,2,0,duct bank,5x4in (3 cabled/2 spare) | 50 Core-B + demarc,1221,0,12205,250,+demarc qty not stated
+toS05,toJ-7,JUNCTION,toMH-3,MH,existing,323.9,0.0,323.9,180,135 + 45,toC02 toC12,A,41,Y,4,0,2,2,2,duct bank,4x4in (2 cabled/2 spare/2 elec) | 41 Core-A + demarc,0,0,13282,250,OVER 250' PULL LIMIT; BENDS >180; multi-config: see callouts; +demarc qty not stated
+toS06,toHH-1,HH,toEND-8,END,existing,9.4,0.0,9.4,0,straight,toC07,A,1,,1,0,1,0,0,duct bank,1x4in (1 cabled/0 spare) | 1 Core-A,0,0,9,250,
+toS07,toHH-1,HH,toEND-10,END,existing,72.8,0.0,72.8,0,straight,toC08 toC15,A,1,,1,0,1,0,0,duct bank,1x4in (1 cabled/0 spare) | 1 Core-A,0,0,73,250,callout placed by proximity
+toS08,toHH-2,HH,toHH-1,HH,new,81.1,81.1,0.0,88,88,,,0,,0,0,0,0,0,,,0,0,0,250,no callout
+toS09,toHH-2,HH,toHH-3,HH,new,44.2,44.2,0.0,88,88,toC10 toC11,B,2,,3,0,1,2,0,duct bank,3x4in (1 cabled/2 spare) | 2 Core-B,132,0,88,250,multi-config: see callouts; callout placed by proximity
+toS10,toHH-3,HH,toMH-1,MH,new,20.4,20.4,0.0,0,straight,toC14,B,3,,3,0,1,2,0,duct bank,3x4in (1 cabled/2 spare) | 3 Core-B,61,0,61,250,
+toS11,toMH-2,MH,toMH-3,MH,existing,48.3,0.0,48.3,9,9,toC19,A,54,Y,5,0,3,2,0,duct bank,5x4in (3 cabled/2 spare) | 54 Core-A + demarc,0,0,2607,250,+demarc qty not stated
+toS12,toMH-2,MH,toEND-2,END,existing,21.2,0.0,21.2,0,straight,toC17,A,1,,3,0,1,2,0,duct bank,3x4in (1 cabled/2 spare) | 1 Core-A,0,0,21,250,
+toS13,toJ-6,JUNCTION,toMH-2,MH,existing,41.6,0.0,41.6,0,straight,,,0,,0,0,0,0,0,,,0,0,0,250,no callout
+toS14,toJ-6,JUNCTION,toMH-4,MH,new,10.1,10.1,0.0,0,straight,toC16,B,1,,3,1,1,2,0,duct bank,3x4in (1 cabled/2 spare) + 1x1in FA | 1 Core-B,30,10,10,250,
+toS15,toJ-5,JUNCTION,toJ-6,JUNCTION,existing,30.4,0.0,30.4,90,90,,,0,,0,0,0,0,0,,,0,0,0,250,no callout
+toS16,toMH-1,MH,toJ-5,JUNCTION,new,125.6,125.6,0.0,62,62,toC18 toC22,B,53,Y,5,0,3,2,0,duct bank,5x4in (3 cabled/2 spare) | 53 Core-B + demarc,628,0,6655,250,multi-config: see callouts; +demarc qty not stated; callout placed by proximity
+toS17,toEND-9,END,toMH-3,MH,existing,141.9,0.0,141.9,0,straight,toC20 toC21,A,13,,3,0,1,2,0,duct bank,3x4in (1 cabled/2 spare) | 13 Core-A,0,0,1845,250,multi-config: see callouts
+toS18,toJ-4,BEND,toJ-4,BEND,mixed,153.0,77.4,75.6,186,175 + 11,toC23 toC29,A,1,,0,0,0,0,0,existing UG conduit,0x4in (0 cabled/0 spare) | 1 Core-A | existing UG conduit,0,0,153,250,BENDS >180
+toS19,toMH-3,MH,toEND-12,END,new,115.2,115.2,0.0,90,90,toC27,B,3,,1,0,1,0,0,existing tunnel,1x4in (1 cabled/0 spare) | 3 Core-B | existing tunnel,115,0,345,250,
+toS20,toMH-4,MH,toMH-3,MH,new,90.3,90.3,0.0,0,straight,toC25,B,4,,3,0,1,2,0,duct bank,3x4in (1 cabled/2 spare) | 4 Core-B,271,0,361,250,
+toS21,toEND-1,END,toMH-2,MH,existing,22.6,0.0,22.6,0,straight,toC28,A,56,Y,5,0,3,2,0,duct bank,5x4in (3 cabled/2 spare) | 56 Core-A + demarc,0,0,1268,250,+demarc qty not stated
+toS22,toMH-4,MH,toEND-15,END,new,16.5,16.5,0.0,0,straight,toC26,B,58,Y,5,1,3,2,0,duct bank,5x4in (3 cabled/2 spare) + 1x1in FA | 58 Core-B + demarc,82,16,955,250,+demarc qty not stated
+toS23,toJ-5,JUNCTION,toMH-4,MH,new,29.2,29.2,0.0,14,14,toC24,B,54,Y,5,0,3,2,0,duct bank,5x4in (3 cabled/2 spare) | 54 Core-B + demarc,146,0,1578,250,+demarc qty not stated
+toS24,toHH-4,HH,toEND-14,END,new,13.2,13.2,0.0,0,straight,toC31,B,1,,1,0,1,0,0,duct bank,1x4in (1 cabled/0 spare) | 1 Core-B,13,0,13,250,
+toS25,toEND-5,END,toHH-5,HH,existing,39.7,0.0,39.7,53,26 + 26,toC30,A,4,,3,1,1,2,0,duct bank,3x4in (1 cabled/2 spare) + 1x1in FA | 4 Core-A,0,0,159,250,
+toS26,toEND-3,END,toHH-4,HH,new,32.9,32.9,0.0,90,63 + 27,toC32,B,2,,3,0,1,2,0,duct bank,3x4in (1 cabled/2 spare) | 2 Core-B,99,0,66,250,
+toS27,toHH-4,HH,toEND-4,END,new,39.3,39.3,0.0,90,90,toC33,B,1,,1,0,1,0,0,duct bank,1x4in (1 cabled/0 spare) | 1 Core-B,39,0,39,250,
+toS28,toEND-13,END,toHH-5,HH,existing,85.8,0.0,85.8,0,straight,toC34,A,3,,3,1,1,2,0,duct bank,3x4in (1 cabled/2 spare) + 1x1in FA | 3 Core-A,0,0,257,250,
+toS29,toHH-5,HH,toEND-6,END,existing,14.2,0.0,14.2,0,straight,toC35,A,1,,1,0,1,0,0,duct bank,1x4in (1 cabled/0 spare) | 1 Core-A,0,0,14,250,

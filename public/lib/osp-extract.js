@@ -728,3 +728,245 @@ export function assignCallouts({ dictBlocks, draws, edges, zones, ppf }) {
   });
   return callouts;
 }
+
+// ═════════════════════════════ stage 4 ═════════════════════════════
+// Limits come from the project's WF1 rules; the Python's constants are only
+// the fallback when a rule is missing.
+export const DEFAULT_LIMITS = { osp_pull_ft: PULL_LIMIT_OSP_FT, interior_pull_ft: PULL_LIMIT_INTERIOR_FT, bends_deg: MAX_BENDS_DEG };
+export function limitsFromRules(rules = []) {
+  const pick = (kind, step) => rules.find((r) => r.rule_kind === kind && r.used_by_step === step && r.rule_value != null)?.rule_value;
+  return {
+    osp_pull_ft: Number(pick('pull_limit_ft', 'WF3') ?? PULL_LIMIT_OSP_FT),
+    interior_pull_ft: Number(pick('pull_limit_ft', 'WF4') ?? PULL_LIMIT_INTERIOR_FT),
+    bends_deg: Number(pick('bend_limit_deg', 'WF3') ?? MAX_BENDS_DEG),
+  };
+}
+const f0 = (x) => String(pyRound(x));                     // Python f"{x:.0f}"
+const fc0 = (x) => pyRound(x).toLocaleString('en-US');   // Python f"{x:,.0f}"
+const uniq = (a) => [...new Set(a)];
+const pyStrCmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+
+// One row per segment (Python: seg_rows).
+export function segmentRows(edges, nodes, limits = DEFAULT_LIMITS) {
+  return edges.map((e) => {
+    const cos = e.callouts;
+    const prim = cos.length ? cos.reduce((m, c) => (c.cables > m.cables ? c : m)) : null;
+    const pathway = prim ? prim.pathway : '';
+    const limit = pathway === 'pipe basement' ? limits.interior_pull_ft : limits.osp_pull_ft;
+    const flags = [];
+    if (e.total_ft > limit) flags.push(`OVER ${limit}' PULL LIMIT`);
+    if (e.bends > limits.bends_deg) flags.push(`BENDS >${limits.bends_deg}`);
+    if (!cos.length) flags.push('no callout');
+    if (new Set(cos.map((c) => `${c.cables}|${c.n4}|${c.n1_fa}`)).size > 1) flags.push('multi-config: see callouts');
+    if (prim && prim.fill_flag) flags.push(prim.fill_flag);
+    if (cos.some((c) => c.method !== 'leader')) flags.push('callout placed by proximity');
+    const route = e.new_ft > 0.5 && e.exist_ft > 0.5 ? 'mixed' : e.new_ft >= e.exist_ft ? 'new' : 'existing';
+    const n4 = prim ? prim.n4 : 0, n1 = prim ? prim.n1_fa : 0, cab = prim ? prim.cables : 0;
+    return {
+      segment: e.id, from: e.a, from_type: nodes.get(e.a).type, to: e.b, to_type: nodes.get(e.b).type, route,
+      total_ft: pyRound(e.total_ft, 1), new_ft: pyRound(e.new_ft, 1), existing_ft: pyRound(e.exist_ft, 1),
+      bends_deg: pyRound(e.bends), bend_detail: e.bend_list.map((b) => f0(Math.abs(b))).join(' + ') || 'straight',
+      callouts: cos.map((c) => c.id).join(' '),
+      core: prim ? prim.core : '', cables: cab, demarc: prim && prim.demarc ? 'Y' : '',
+      n_4in: n4, n_1in_fa: n1, with_cables: prim ? prim.with_cables : 0, spare: prim ? prim.spare : 0, elec: prim ? prim.elec : 0,
+      pathway,
+      config: prim ? `${n4}x4in (${prim.with_cables} cabled/${prim.spare} spare${prim.elec ? `/${prim.elec} elec` : ''})${n1 ? ` + ${n1}x1in FA` : ''} | ${cab} Core-${prim.core}${prim.demarc ? ' + demarc' : ''}${pathway !== 'duct bank' ? ` | ${pathway}` : ''}` : '',
+      new_4in_conduit_ft: pyRound(n4 * e.new_ft), new_1in_conduit_ft: pyRound(n1 * e.new_ft), cable_ft_plan: pyRound(cab * e.total_ft),
+      pull_limit_ft: limit, flags: flags.join('; '),
+    };
+  });
+}
+
+// Sheet border grid (Python: sheet_grid) and nearby named labels (find_landmarks).
+export function sheetGrid(words, W, H) {
+  const cols = new Map(), rows = new Map();
+  for (const w of words) {
+    const t = w[4], cx = (w[0] + w[2]) / 2, cy = (w[1] + w[3]) / 2;
+    if (/^([1-9]|1[0-2])$/.test(t) && (cy < H * 0.04 || cy > H * 0.96)) { if (!cols.has(t)) cols.set(t, []); cols.get(t).push(cx); }
+    if (/^[A-H]$/.test(t) && (cx < W * 0.03 || cx > W * 0.97)) { if (!rows.has(t)) rows.set(t, []); rows.get(t).push(cy); }
+  }
+  const med = (m) => new Map([...m].map(([k, v]) => { const s = v.slice().sort((a, b) => a - b); return [k, s[Math.floor(s.length / 2)]]; }));
+  const C = med(cols), R = med(rows);
+  return (p) => {
+    if (!C.size || !R.size) return '';
+    const c = [...C].reduce((m, x) => (Math.abs(x[1] - p[0]) < Math.abs(m[1] - p[0]) ? x : m))[0];
+    const r = [...R].reduce((m, x) => (Math.abs(x[1] - p[1]) < Math.abs(m[1] - p[1]) ? x : m))[0];
+    return `${r}-${c}`;
+  };
+}
+export function findLandmarks(dictBlocks) {
+  const out = [];
+  for (const b of dictBlocks) for (const ln of b.lines) {
+    const t = ln.text.split(/\s+/).filter(Boolean).join(' ').toUpperCase();
+    if (/^(BLDG \d+|T\d{1,2}[A-Z]?|DATA CENTER|MEP BLDG|IT BLDG)$/.test(t)) out.push([t, [(ln.bbox[0] + ln.bbox[2]) / 2, (ln.bbox[1] + ln.bbox[3]) / 2]]);
+  }
+  return out;
+}
+export function describeLocation(p, ref, landmarks, ppf) {
+  const parts = []; const g = ref(p);
+  if (g) parts.push(`grid ${g}`);
+  if (landmarks.length) { const [name, q] = landmarks.reduce((m, l) => (dist(p, l[1]) < dist(p, m[1]) ? l : m)); parts.push(`~${f0(dist(p, q) / ppf)} ft from '${name}' label`); }
+  return parts.join(', ');
+}
+
+// Cable balance at vaults + segment checks (Python: discrepancies, node balance).
+export function findDiscrepancies({ segRows, nodes, zones, edges, ref, landmarks, ppf, limits = DEFAULT_LIMITS }) {
+  const byNode = new Map();
+  for (const r of segRows) for (const k of [r.from, r.to]) { if (!byNode.has(k)) byNode.set(k, []); byNode.get(k).push(r); }
+  const zsrc = new Map(zones.map((z) => [z.id, z.src]));
+  const edgeOf = new Map(edges.map((e) => [e.id, e]));
+  const disc = [];
+  const segRisks = (r) => {
+    const rk = [];
+    if (!r.core) rk.push(`${r.segment} has no callout`);
+    if (r.flags.includes('proximity')) rk.push(`${r.segment} callout placed by proximity`);
+    if (r.flags.includes('multi-config')) rk.push(`${r.segment} carries 2+ different callouts`);
+    if (r.from === r.to) rk.push(`${r.segment} is a closed loop (chaining artifact)`);
+    for (const nid of [r.from, r.to]) {
+      if (['JUNCTION', 'BEND'].includes(nodes.get(nid).type)) rk.push(`${nid} is script-inferred (no MH/HH symbol)`);
+      if (zsrc.get(nid) === 'label-only') rk.push(`${nid} tag outline not found`);
+    }
+    return rk;
+  };
+  const add = (category, at, p, legs, expected, found, whats_off, rk) => {
+    rk = uniq(rk);
+    disc.push({ item: '', status: rk.length ? 'verify on overlay' : 'RFI candidate', category, at, location: describeLocation(p, ref, landmarks, ppf), legs, expected, found, whats_off, verify_first: rk.join('; ') });
+  };
+  for (const [nid, n] of [...nodes].sort((a, b) => pyStrCmp(a[0], b[0]))) {
+    n.balance = '';
+    if (!['MH', 'HH', 'JUNCTION'].includes(n.type)) continue;
+    const rows = byNode.get(nid) || [], p = [n.x, n.y];
+    const rk = rows.flatMap(segRisks);
+    if (n.type === 'JUNCTION') rk.unshift(`${nid} is script-inferred (no MH/HH symbol)`);
+    if (zsrc.get(nid) === 'label-only') rk.unshift(`${nid} tag outline not found`);
+    const missing = rows.filter((r) => !r.core).map((r) => r.segment);
+    const msgs = [];
+    for (const core of ['A', 'B']) {
+      // Python sorts (cables, segment) tuples in reverse.
+      const legs = rows.filter((r) => r.core === core).map((r) => [r.cables, r.segment]).sort((a, b) => b[0] - a[0] || pyStrCmp(b[1], a[1]));
+      if (!legs.length) continue;
+      const legtxt = legs.map(([c, s]) => `${s}=${c}`).join(', ');
+      if (legs.length === 1) {
+        if (!missing.length) {
+          msgs.push(`Core-${core} only on ${legs[0][1]} - no continuation`);
+          add('NO CONTINUATION', nid, p, `Core-${core}: ${legtxt}`, `Core-${core} continues on another leg`, 'only one leg carries it', `${legs[0][0]} Core-${core} end at ${nid} with no outgoing leg`, rk);
+        }
+        continue;
+      }
+      const trunk = legs[0][0], rest = legs.slice(1).reduce((a, [c]) => a + c, 0);
+      if (trunk !== rest) {
+        msgs.push(`Core-${core}: ${legs[0][1]}=${trunk} vs others=${rest}`);
+        const noVault = n.type === 'JUNCTION';
+        const diff = trunk - rest;
+        add(noVault ? 'COUNT CHANGE, NO VAULT' : 'COUNT IMBALANCE', nid, p,
+          `Core-${core}: ${legtxt}` + (missing.length ? `; no callout on ${missing.join(' ')}` : ''),
+          `${legs[0][1]} (${trunk}) = sum of other legs`, `other legs sum to ${rest}`,
+          noVault ? `count changes ${Math.min(trunk, rest)}->${Math.max(trunk, rest)} where no MH/HH is shown` : `off by ${diff >= 0 ? '+' : ''}${diff} Core-${core}`, rk);
+      }
+    }
+    if (missing.length) msgs.push('no callout on ' + missing.join(' '));
+    n.balance = msgs.length ? 'CHECK ' + msgs.join('; ') : 'OK';
+  }
+  for (const r of segRows) {
+    const e = edgeOf.get(r.segment), p = e.mid, rk = segRisks(r), run = `${r.from}->${r.to}`;
+    if (r.from === r.to) { add('TOPOLOGY', r.segment, p, run, 'run between two different nodes', 'closed loop', 'script chaining artifact - not a drawing issue', rk); continue; }
+    if (!r.core) add('MISSING CALLOUT', r.segment, p, run, 'a cable/conduit callout on the run', 'none attached', 'configuration unknown for this run', [...rk, 'leader may have been missed by the script']);
+    if (r.flags.includes('multi-config')) {
+      add('CONFIG CHANGE MID-RUN', r.segment, p, e.callouts.map((c) => `${c.id}: ${c.cables} Core-${c.core}, ${c.n4}x4in`).join('; '),
+        'one configuration per MH/HH-to-MH/HH run', `${e.callouts.length} different callouts`, 'configuration changes with no MH/HH between', rk);
+    }
+    if (r.flags.includes('PULL LIMIT')) add('PULL LENGTH', r.segment, p, run, `<= ${r.pull_limit_ft} ft between pull points`, `${f0(r.total_ft)} ft`, `exceeds limit by ${f0(r.total_ft - r.pull_limit_ft)} ft`, rk);
+    if (r.flags.includes('BENDS')) add('BENDS', r.segment, p, run, `<= ${limits.bends_deg} deg cumulative`, `${r.bends_deg} deg (${r.bend_detail})`, `exceeds by ${r.bends_deg - limits.bends_deg} deg`, [...rk, 'plan-view bend total; confirm on overlay']);
+  }
+  const order = { 'RFI candidate': 0, 'verify on overlay': 1 };
+  disc.sort((a, b) => order[a.status] - order[b.status] || pyStrCmp(a.category, b.category) || pyStrCmp(a.at, b.at));
+  disc.forEach((d, i) => { d.item = `toD${String(i + 1).padStart(2, '0')}`; });
+  return disc;
+}
+
+// Draft RFI wording for a discrepancy (Python: _rfi_drafts.md).
+export function rfiDraft(d, sheet) {
+  if (['COUNT IMBALANCE', 'COUNT CHANGE, NO VAULT', 'NO CONTINUATION', 'CONFIG CHANGE MID-RUN'].includes(d.category)) {
+    return `On sheet ${sheet} (${d.location}), the fiber cable callouts do not reconcile: ${d.legs}. Expected ${d.expected}; the drawing shows ${d.found} (${d.whats_off}). Please confirm the correct cable counts and conduit configuration at this location, and whether a manhole or handhole is required.`;
+  }
+  if (['PULL LENGTH', 'BENDS'].includes(d.category)) {
+    return `On sheet ${sheet} (${d.location}), the conduit run measures ${d.found}, exceeding Drawing Note 1 (${d.expected}). Please confirm whether an additional handhole or manhole is required.`;
+  }
+  return '';
+}
+
+// Take-off totals (Python: _takeoff.csv).
+export function takeoffRows({ segRows, nodes, callouts, disc }) {
+  const q = (section, item, qty, unit, note = '') => ({ section, item, quantity: typeof qty === 'number' && !Number.isInteger(qty) ? pyRound(qty) : qty, unit, note });
+  const nt = {}; for (const n of nodes.values()) nt[n.type] = (nt[n.type] || 0) + 1;
+  const S = (f, cond = () => true) => segRows.filter(cond).reduce((a, r) => a + f(r), 0);
+  const newFt = S((r) => r.new_ft), exFt = S((r) => r.existing_ft);
+  const noCo = segRows.filter((r) => !r.core);
+  return [
+    q('Structures', 'Manholes (MH)', nt.MH || 0, 'ea', "typ 6'x6'x6' per CU602"),
+    q('Structures', 'Handholes (HH)', nt.HH || 0, 'ea', "typ 3'x3'x4' per T-502"),
+    q('Structures', 'Junctions with no vault shown', nt.JUNCTION || 0, 'ea', 'script-inferred - review in discrepancy log'),
+    q('Structures', 'Building entries / continuation ends', nt.END || 0, 'ea'),
+    q('Route length (plan, center-to-center)', 'New route (red)', newFt, 'ft'),
+    q('Route length (plan, center-to-center)', 'Existing route (blue)', exFt, 'ft'),
+    q('Route length (plan, center-to-center)', 'Total route', newFt + exFt, 'ft'),
+    q('Route length (plan, center-to-center)', 'New duct bank / trench', S((r) => r.new_ft, (r) => r.n_4in && r.pathway === 'duct bank'), 'ft', 'new route carrying new 4" conduit'),
+    q('Conduit - new install', '4" conduit (total)', S((r) => r.n_4in * r.new_ft), 'ft', 'conduit count x new route length'),
+    q('Conduit - new install', '4" conduit - with cables', S((r) => r.with_cables * r.new_ft), 'ft'),
+    q('Conduit - new install', '4" conduit - spare', S((r) => r.spare * r.new_ft), 'ft'),
+    q('Conduit - new install', '1" fire-alarm fiber conduit', S((r) => r.n_1in_fa * r.new_ft), 'ft'),
+    q('Conduit - coordination (by EC / electrical dwgs)', '4" with electrical cables', S((r) => r.elec * r.total_ft), 'ft', 'shown for coordination only'),
+    q('Conduit - existing (reused)', '4" conduit in existing routes', S((r) => r.n_4in * r.existing_ft), 'ft', 'field-verify condition and fill'),
+    q('Cable (plan length, no slack / vertical)', 'Core-A cable', S((r) => r.cables * r.total_ft, (r) => r.core === 'A'), 'ft'),
+    q('Cable (plan length, no slack / vertical)', 'Core-B cable', S((r) => r.cables * r.total_ft, (r) => r.core === 'B'), 'ft'),
+    q('Cable (plan length, no slack / vertical)', 'Demarc cables', 'not stated', '', 'quantity not given on drawings - RFI'),
+    q('Completeness', 'Segments', segRows.length, 'ea'),
+    q('Completeness', 'Segments with no callout (not in conduit/cable totals)', noCo.length, 'ea', `${fc0(noCo.reduce((a, r) => a + r.total_ft, 0))} ft of route`),
+    q('Completeness', 'Callouts matched by proximity (verify)', callouts.filter((c) => c.method !== 'leader').length, 'ea'),
+    q('Completeness', 'Runs over pull-length limit', segRows.filter((r) => r.flags.includes('PULL LIMIT')).length, 'ea'),
+    q('Completeness', 'Runs over 180 deg plan bends', segRows.filter((r) => r.flags.includes('BENDS')).length, 'ea'),
+    q('Completeness', 'Discrepancies - RFI candidates', disc.filter((d) => d.status === 'RFI candidate').length, 'ea'),
+    q('Completeness', 'Discrepancies - verify on overlay', disc.filter((d) => d.status !== 'RFI candidate').length, 'ea'),
+  ];
+}
+
+// ═════════════════════════════ entry point ═════════════════════════════
+// One sheet in, the full take-off out. Pure: pass the page's draws (from
+// extractDraws), its pdf.js text items, page.view, the file name, and the
+// project's WF1 rules. Returns everything the WF3 page shows and saves, plus
+// `problems` — what could not be recognised, so a new drawing style fails
+// loudly instead of quietly under-counting.
+export function runOsp({ draws, tcItems, view, filename = '', rules = [], scaleOverride = null, gapOverride = null, maxAngle = 25 }) {
+  const W = view[2] - view[0], H = view[3] - view[1];
+  const problems = [];
+  const words = wordsFromText(tcItems, view), dict = textDict(tcItems, view), blocks = blocksFromText(tcItems, view);
+  const sheet = (filename.match(/(T-\d{3}[A-Z]?)/) || [null, 'sheet'])[1];
+  const sc = detectScale(words, W, H);
+  const scale = scaleOverride || sc.scale;
+  if (!scale) return { sheet, problems: ['No scale bar recognised — enter the scale (feet per inch) to measure this sheet.'] };
+  const ppf = 72 / scale;
+  const { frags, widths } = collectFragmentsFromDraws(draws);
+  if (!frags.length) return { sheet, scale, problems: ['No red or blue conduit linework recognised — check the line types in WF1.'] };
+  const gap = estimateGap(frags), tol = bridgeTolerance(gap.median, gapOverride);
+  const chains = buildChains(frags, linkFragments(frags, tol, maxAngle));
+  const { zones, nbox } = buildZones(words, draws, tol);
+  if (!zones.length) problems.push('No MH or HH labels recognised on this sheet.');
+  const labelOnly = zones.filter((z) => z.src !== 'symbol').map((z) => z.id);
+  if (labelOnly.length) problems.push(`No symbol outline found around ${labelOnly.join(', ')} — position taken from the label.`);
+  const { nodes, edges } = buildGraph({ chains, zones, tol, ppf, blocks });
+  const callouts = edges.length ? assignCallouts({ dictBlocks: dict, draws, edges, zones, ppf }) : [];
+  if (edges.length && !callouts.length) problems.push('No cable callouts recognised — expected text starting "(n) CORE-A" or "(n) CORE-B".');
+  const limits = limitsFromRules(rules);
+  const segRows = segmentRows(edges, nodes, limits);
+  const disc = findDiscrepancies({ segRows, nodes, zones, edges, ref: sheetGrid(words, W, H), landmarks: findLandmarks(dict), ppf, limits });
+  const takeoff = takeoffRows({ segRows, nodes, callouts, disc });
+  return {
+    sheet, scale, scale_measured: sc.est, ppf, widths, fragments: frags.length, gap_pct: gap.pct, tol, chains: chains.length, candidate_outlines: nbox,
+    limits, problems,
+    nodes: [...nodes.values()].map((n) => ({ id: n.id, type: n.type, x: n.x, y: n.y, degree: n.degree, balance: n.balance, note: n.note })),
+    segments: segRows.map((r) => ({ ...r, pts: edges.find((e) => e.id === r.segment).pts })),
+    callouts: callouts.map((c) => ({ id: c.id, segment: c.seg.id, method: c.method, core: c.core, cables: c.cables, demarc: c.demarc, n4: c.n4, n1_fa: c.n1_fa, with_cables: c.with_cables, spare: c.spare, elec: c.elec, pathway: c.pathway, cables_per_conduit: c.cables_per_conduit, fill_flag: c.fill_flag, raw: c.raw, bbox: c.bbox, hit: c.hit })),
+    discrepancies: disc.map((d) => ({ ...d, rfi: rfiDraft(d, sheet) })),
+    takeoff,
+  };
+}

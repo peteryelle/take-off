@@ -1,0 +1,30 @@
+id,type,degree,x,y,balance,note
+toEND-1,END,1,833.5,1151.4,,near 'REFER TO T1.1.T'
+toEND-10,END,1,1186.3,820.8,,near 'REFER TO T1.1.Y'
+toEND-11,END,1,851.5,610.2,,near 'REFER TO T1.1.V'
+toEND-12,END,1,405.1,1245.3,,near 'REFER TO T1.1.U'
+toEND-13,END,1,484.0,1430.4,,near 'REFER TO T1.1.U'
+toEND-14,END,1,1074.8,1295.0,,near 'REFER TO T1.1.Y'
+toEND-15,END,1,982.9,1150.2,,near 'REFER TO T1.1.T'
+toEND-16,END,1,362.0,425.1,,near 'REFER TO T1.1.B'
+toEND-2,END,1,833.5,993.6,,near 'REFER TO T1.1.T'
+toEND-3,END,1,982.3,1295.0,,near 'REFER TO T1.1.Y'
+toEND-4,END,1,1033.4,1442.6,,near 'REFER TO T1.1.Y'
+toEND-5,END,1,822.7,1295.0,,
+toEND-6,END,1,821.8,1453.4,,near 'REFER TO T1.1.Y'
+toEND-7,END,1,1801.3,92.5,,
+toEND-8,END,1,1219.7,558.0,,near 'REFER TO T1.1.Z'
+toEND-9,END,1,149.6,1082.3,,near 'REFER TO T1.1.U'
+toHH-1,HH,5,1186.0,558.8,CHECK no callout on toS08,symbol tag 14x13 pt (not to scale)
+toHH-2,HH,2,1264.1,779.3,CHECK no callout on toS08,symbol tag 14x13 pt (not to scale)
+toHH-3,HH,2,1356.2,850.3,CHECK Core-B: toS10=3 vs others=2,symbol tag 14x13 pt (not to scale)
+toHH-4,HH,3,1074.6,1342.5,OK,symbol tag 14x13 pt (not to scale)
+toHH-5,HH,3,792.9,1431.2,OK,symbol tag 14x13 pt (not to scale)
+toJ-4,BEND,2,149.6,1178.4,,
+toJ-5,JUNCTION,3,1083.1,1064.2,CHECK Core-B: toS23=54 vs others=53; no callout on toS15,tee
+toJ-6,JUNCTION,3,982.9,1069.2,CHECK no callout on toS13 toS15,tee
+toJ-7,JUNCTION,3,926.3,477.0,CHECK Core-A: toS05=41 vs others=2; Core-B only on toS01 - no continuation,tee
+toMH-1,MH,3,1424.1,877.8,OK,symbol tag 14x13 pt (not to scale)
+toMH-2,MH,4,833.2,1069.9,CHECK Core-A: toS21=56 vs others=55; no callout on toS13,symbol tag 14x13 pt (not to scale)
+toMH-3,MH,5,659.9,1075.8,CHECK Core-B: toS20=4 vs others=3,symbol tag 14x13 pt (not to scale)
+toMH-4,MH,4,981.8,1091.0,CHECK Core-B: toS22=58 vs others=59,symbol tag 14x13 pt (not to scale)
