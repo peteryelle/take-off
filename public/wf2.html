@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WF2 · Schedule — Take-off</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="auth.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
+<link rel="stylesheet" href="wf.css">
+<style>
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); }
+.tab { font-family: inherit; font-size: 14px; padding: 11px 16px; background: none; border: none; border-bottom: 2px solid transparent; color: var(--muted); cursor: pointer; }
+.tab[aria-selected="true"] { color: var(--green); border-bottom-color: var(--green); font-weight: 700; }
+.cell { font-family: inherit; font-size: 13px; background: var(--bg); color: var(--text); border: 1px solid #3a443f; border-radius: 3px; padding: 5px 6px; }
+.cell.changed { border-color: var(--orange-bd); color: var(--orange); }
+.pill.manual { color: var(--purple); border-color: var(--purple-bd); background: var(--purple-bg); }
+</style>
+</head>
+<body>
+<nav id="to-nav"></nav>
+<script src="nav.js"></script>
+
+<main class="wf-page">
+  <div class="wf-head">
+    <div>
+      <a class="wf-crumb" id="crumb" href="wf-projects.html">← Project</a>
+      <h1 class="wf-title"><span class="code">WF2</span> · Schedule</h1>
+      <div class="wf-sub">Upload the TR schedule sheet (T-500). Read from the text layer — no cost.</div>
+    </div>
+    <span class="pill" id="step-pill">…</span>
+  </div>
+
+  <div id="intake"></div>
+
+  <section class="panel" aria-label="Schedule sheets">
+    <div class="row head"><span style="width: 110px">Sheet</span><span style="flex-grow: 1">Title</span><span style="width: 140px">Revision</span><span style="width: 160px"></span></div>
+    <div id="sched-pages"><div class="empty">Loading…</div></div>
+  </section>
+
+  <section class="banner orange" id="read-banner" hidden>
+    <div style="flex-grow: 1"><div class="kicker" id="read-kicker">READ</div><div class="msg" id="read-msg"></div></div>
+  </section>
+
+  <nav class="tabs" role="tablist" aria-label="WF2 sections">
+    <button type="button" class="tab" role="tab" aria-selected="true" data-tab="list">TR list</button>
+    <button type="button" class="tab" role="tab" aria-selected="false" data-tab="changes">Changes vs saved</button>
+  </nav>
+
+  <section data-panel="list">
+    <div class="panel">
+      <div class="row head">
+        <span style="width: 130px">TR</span><span style="width: 80px">Bldg</span><span style="width: 70px">Level</span>
+        <span style="width: 130px">Cat6A term.</span><span style="width: 110px">Patch pnl</span><span style="flex-grow: 1">Source</span><span style="width: 40px"></span>
+      </div>
+      <div id="tr-rows"></div>
+      <div class="row">
+        <button type="button" class="btn muted small" id="tr-add">+ Add a TR by hand</button>
+        <span class="muted" id="tr-count" style="flex-grow: 1; font-size: 13px"></span>
+        <button type="button" class="btn muted" id="discard" hidden>Discard changes</button>
+        <button type="button" class="btn green" id="save" disabled>Save TR list</button>
+      </div>
+    </div>
+  </section>
+
+  <section data-panel="changes" hidden>
+    <div class="panel" id="changes"><div class="empty">Read a schedule sheet to compare it with the saved TR list.</div></div>
+  </section>
+
+  <section class="panel">
+    <div class="row">
+      <span id="footer-msg" style="flex-grow: 1"></span>
+      <button type="button" class="btn muted" id="reopen" hidden>Reopen</button>
+      <button type="button" class="btn green" id="confirm" style="font-weight: 700">Confirm schedule</button>
+    </div>
+  </section>
+  <div class="status-line" id="status" role="status"></div>
+</main>
+
+<script type="module">
+import { mountIntake, api, post } from './lib/wf-intake-ui.js';
+import { scheduleItemsFromTextContent, readTrSchedule, diffTrRows, panelsFor } from './lib/wf-schedule.js';
+
+const projectId = new URLSearchParams(location.search).get('project_id');
+if (!projectId) location.replace('wf-projects.html');
+try { sessionStorage.setItem('to_project_id', projectId); } catch {}
+document.getElementById('crumb').href = 'wf-project.html?project_id=' + projectId;
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const status = (m, c = '') => { $('status').className = 'status-line ' + c; $('status').textContent = m; };
+const FIELDS = ['tr_number', 'building', 'level', 'cat6a_terminations', 'min_patch_panels'];
+
+document.querySelectorAll('.tab').forEach((t) => t.onclick = () => {
+  document.querySelectorAll('.tab').forEach((x) => x.setAttribute('aria-selected', String(x === t)));
+  document.querySelectorAll('[data-panel]').forEach((p) => p.hidden = p.dataset.panel !== t.dataset.tab);
+});
+
+let saved = [];          // rows in the database
+let working = [];        // rows on screen
+let readFrom = null;     // { revision_id, label } when working came from a fresh read
+let dirty = false;
+
+// ── intake + schedule sheets ──
+mountIntake($('intake'), { projectId, stepCode: 'WF2', showLocation: false, onData: renderSchedPages });
+
+function renderSchedPages(intake) {
+  const pages = intake.pages.filter((p) => p.role === 'schedule' && !p.is_duplicate && p.revision && p.revision.status !== 'rejected');
+  $('sched-pages').innerHTML = pages.length ? pages.map((p) => `
+    <div class="row">
+      <span style="width: 110px; font-weight: 700">${esc(p.sheet_number || '—')}</span>
+      <span style="flex-grow: 1">${esc(p.title_text || '')}</span>
+      <span style="width: 140px">${esc(p.revision.rev_label)} ${p.revision.is_current ? '' : '<span class="pill open">not current</span>'}</span>
+      <span style="width: 160px; text-align: right"><button type="button" class="btn blue small" data-read="${p.document_id}:${p.page_number}:${p.revision.id}:${esc(p.sheet_number + ' ' + p.revision.rev_label)}" ${p.revision.status === 'pending' ? 'disabled title="Accept this revision above first"' : ''}>Read schedule</button></span>
+    </div>`).join('') : '<div class="empty">No schedule sheet yet. Upload T-500 above.</div>';
+  document.querySelectorAll('[data-read]').forEach((b) => b.onclick = () => readSheet(...b.dataset.read.split(':')));
+}
+
+async function readSheet(docId, pageNo, revisionId, label) {
+  if (dirty && !confirm('Discard your unsaved changes and read the sheet again?')) return;
+  status(`Reading ${label}…`);
+  try {
+    const { url } = await post('/api/wf/documents', { action: 'file_url', document_id: Number(docId) });
+    const doc = await pdfjsLib.getDocument(url).promise;
+    const page = await doc.getPage(Number(pageNo));
+    const tc = await page.getTextContent({ includeMarkedContent: false });
+    const r = readTrSchedule(scheduleItemsFromTextContent(tc.items, page.getViewport({ scale: 1 })));
+    await doc.destroy();
+    $('read-banner').hidden = false;
+    if (!r.found) {
+      $('read-kicker').textContent = 'NO TR SCHEDULE FOUND';
+      $('read-msg').textContent = `No termination schedule table was recognised on ${label}. Tables seen: ${r.tables.join(', ') || 'none'}. You can enter TRs by hand below.`;
+      status('');
+      return;
+    }
+    readFrom = { revision_id: Number(revisionId), label };
+    working = r.rows.map((x) => ({ ...x, source: 'extracted' }));
+    const d = diffTrRows(saved, working);
+    $('read-kicker').textContent = `READ ${label.toUpperCase()}`;
+    $('read-msg').textContent = saved.length
+      ? `${working.length} TRs read. Compared with the saved list: ${d.changed.length} changed, ${d.added.length} added, ${d.removed.length} removed. Check, then save.`
+      : `${working.length} TRs read. Check the rows, fix any misread cell, then save.`;
+    dirty = true;
+    renderRows(); renderChanges();
+    status('');
+  } catch (e) { status(e.message, 'err'); }
+}
+
+// ── TR list ──
+function renderRows() {
+  const savedBy = new Map(saved.map((s) => [s.tr_number, s]));
+  $('tr-rows').innerHTML = working.length ? working.map((r, i) => {
+    const s = savedBy.get(r.tr_number);
+    const cls = (f) => (s && String(s[f] ?? '') !== String(r[f] ?? '') ? 'cell changed' : 'cell');
+    const pill = r.source === 'manual' ? '<span class="pill manual">entered by hand</span>'
+      : r.source === 'edited' ? `<span class="pill stale" title="As read: ${esc(JSON.stringify(r.original_value || {}))}">edited</span>`
+      : `<span class="pill confirmed">read from ${esc(readFrom?.label || 'sheet')}</span>`;
+    return `
+      <div class="row" style="padding-top: 8px; padding-bottom: 8px">
+        <span style="width: 130px"><input class="${cls('tr_number')}" style="width: 120px; font-weight: 700" value="${esc(r.tr_number)}" data-i="${i}" data-f="tr_number" aria-label="TR number"></span>
+        <span style="width: 80px"><input class="${cls('building')}" style="width: 70px" value="${esc(r.building)}" data-i="${i}" data-f="building" aria-label="Building"></span>
+        <span style="width: 70px"><input class="${cls('level')}" style="width: 60px" value="${esc(r.level)}" data-i="${i}" data-f="level" aria-label="Level"></span>
+        <span style="width: 130px"><input class="${cls('cat6a_terminations')}" style="width: 110px" inputmode="numeric" value="${esc(r.cat6a_terminations)}" data-i="${i}" data-f="cat6a_terminations" aria-label="Cat6A terminations"></span>
+        <span style="width: 110px"><input class="${cls('min_patch_panels')}" style="width: 90px" inputmode="numeric" value="${esc(r.min_patch_panels)}" data-i="${i}" data-f="min_patch_panels" aria-label="Patch panels"></span>
+        <span style="flex-grow: 1">${pill}</span>
+        <span style="width: 40px"><button type="button" class="btn muted small" data-del="${i}" aria-label="Remove ${esc(r.tr_number)}">×</button></span>
+      </div>`;
+  }).join('') : '<div class="empty">No TRs yet. Read the schedule sheet above, or add TRs by hand.</div>';
+  $('tr-count').textContent = `${working.length} TRs · ${working.filter((r) => r.source === 'edited').length} edited · ${working.filter((r) => r.source === 'manual').length} entered by hand`;
+  $('save').disabled = !dirty;
+  $('discard').hidden = !dirty;
+
+  document.querySelectorAll('[data-f]').forEach((inp) => inp.onchange = () => {
+    const r = working[+inp.dataset.i];
+    if (r.source === 'extracted') { r.original_value = Object.fromEntries(FIELDS.map((f) => [f, r[f]])); r.source = 'edited'; }
+    const f = inp.dataset.f;
+    r[f] = ['cat6a_terminations', 'min_patch_panels'].includes(f) ? (inp.value.trim() === '' ? null : Number(inp.value)) : inp.value.trim();
+    dirty = true; renderRows(); renderChanges();
+  });
+  document.querySelectorAll('[data-del]').forEach((b) => b.onclick = () => { working.splice(+b.dataset.del, 1); dirty = true; renderRows(); renderChanges(); });
+}
+$('tr-add').onclick = () => {
+  working.push({ tr_number: '', building: '', level: '', cat6a_terminations: null, min_patch_panels: null, source: 'manual' });
+  dirty = true; renderRows();
+  const inputs = document.querySelectorAll('[data-f="tr_number"]'); inputs[inputs.length - 1]?.focus();
+};
+$('discard').onclick = () => { working = saved.map((x) => ({ ...x })); readFrom = null; dirty = false; $('read-banner').hidden = true; renderRows(); renderChanges(); };
+
+function renderChanges() {
+  if (!saved.length) { $('changes').innerHTML = '<div class="empty">Nothing saved yet — everything on the TR list is new.</div>'; return; }
+  const d = diffTrRows(saved, working);
+  const label = { cat6a_terminations: 'Cat6A terminations', min_patch_panels: 'patch panels', building: 'building', level: 'level' };
+  const rows = [
+    ...d.changed.flatMap((c) => c.diffs.map((x) => `
+      <div class="row"><span style="width: 130px; font-weight: 700">${esc(c.tr_number)}</span><span style="width: 200px">${label[x.field]}</span>
+        <span style="width: 200px"><span class="muted" style="text-decoration: line-through">${esc(x.from)}</span> → <b style="color: var(--orange)">${esc(x.to)}</b></span>
+        <span class="muted" style="flex-grow: 1; font-size: 13px">${x.field === 'cat6a_terminations' && panelsFor(x.from) !== panelsFor(x.to) ? `needs ${panelsFor(x.to)} panels at 48 ports (was ${panelsFor(x.from)}) · ` : ''}rack BOM and WF4 reconciliation will need review</span></div>`)),
+    ...d.added.map((a) => `<div class="row"><span style="width: 130px; font-weight: 700">${esc(a.tr_number)}</span><span class="pill confirmed">new TR</span><span class="muted" style="flex-grow: 1; font-size: 13px">${esc(a.cat6a_terminations)} terminations · ${esc(a.min_patch_panels)} panels</span></div>`),
+    ...d.removed.map((a) => `<div class="row"><span style="width: 130px; font-weight: 700">${esc(a.tr_number)}</span><span class="pill stale">removed</span><span class="muted" style="flex-grow: 1; font-size: 13px">no longer on the schedule</span></div>`),
+  ];
+  $('changes').innerHTML = rows.length ? rows.join('') : '<div class="empty">No differences from the saved TR list.</div>';
+  document.querySelector('[data-tab="changes"]').textContent = `Changes vs saved (${rows.length})`;
+}
+
+$('save').onclick = async () => {
+  const needsReason = working.some((r) => r.source !== 'extracted');
+  let basis = '';
+  if (needsReason) {
+    basis = prompt('Reason for edited or hand-entered rows (kept with those rows):', 'Checked against the T-500 sheet') || '';
+    if (!basis.trim()) { status('A reason is needed for edited or hand-entered rows.', 'err'); return; }
+  }
+  $('save').disabled = true;
+  try {
+    const r = await post('/api/wf/wf2', { action: 'save_trs', project_id: Number(projectId), sheet_revision_id: readFrom?.revision_id || null, basis, rows: working });
+    status(`Saved: ${r.inserted} added, ${r.updated} updated, ${r.removed} removed.${r.staled.length ? ` ${r.staled.join(', ')} marked changed.` : ''}${r.linked ? ` ${r.linked} TR references linked.` : ''}`, 'ok');
+    dirty = false; $('read-banner').hidden = true;
+    await loadSaved();
+    await post('/api/wf/projects', { action: 'touch_step', project_id: Number(projectId), step_code: 'WF2' }).catch(() => {});
+    loadStep();
+  } catch (e) { status(e.message, 'err'); $('save').disabled = false; }
+};
+
+async function loadSaved() {
+  const d = await api('/api/wf/wf2?project_id=' + projectId);
+  saved = d.trs.map(({ id, sheet_revision_id, override_basis, entered_at, ...r }) => r);
+  if (!dirty) { working = saved.map((x) => ({ ...x })); readFrom = null; }
+  renderRows(); renderChanges();
+}
+
+// ── step status ──
+async function loadStep() {
+  const d = await api('/api/wf/projects?id=' + projectId);
+  $('crumb').textContent = '← ' + d.project.name;
+  const s = d.steps.find((x) => x.step_code === 'WF2');
+  $('step-pill').className = 'pill ' + s.status;
+  $('step-pill').textContent = s.status === 'stale' ? 'changed' : s.status.replace('_', ' ');
+  const done = s.status === 'confirmed';
+  $('confirm').hidden = done; $('reopen').hidden = !done;
+  $('footer-msg').textContent = done ? 'Schedule confirmed. The TR list is available to WF3–WF7.'
+    : s.status === 'stale' ? `Needs review: ${s.stale_reason || 'a sheet changed'}.` : 'Save the TR list, then confirm. Confirming makes these TRs the list other steps pick from.';
+}
+$('confirm').onclick = async () => {
+  if (dirty) { status('Save the TR list first.', 'err'); return; }
+  if (!saved.length && !confirm('There are no TRs saved. Confirm the schedule as empty?')) return;
+  try { await post('/api/wf/projects', { action: 'confirm_step', project_id: Number(projectId), step_code: 'WF2' }); status('Schedule confirmed.', 'ok'); loadStep(); }
+  catch (e) { status(e.message, 'err'); }
+};
+$('reopen').onclick = async () => {
+  try { await post('/api/wf/projects', { action: 'reopen_step', project_id: Number(projectId), step_code: 'WF2' }); loadStep(); }
+  catch (e) { status(e.message, 'err'); }
+};
+
+window.addEventListener('beforeunload', (e) => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
+loadSaved(); loadStep();
+</script>
+</body>
+</html>
