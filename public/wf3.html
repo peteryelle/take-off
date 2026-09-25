@@ -212,22 +212,32 @@ $('measure-all').onclick = async () => {
 };
 
 // ── drawing + overlay ──
-let renderToken = 0;
+// Only one drawing on the canvas at a time: a newer request cancels the one in
+// progress (pdf.js refuses two render() calls on the same canvas).
+let renderToken = 0, renderTask = null;
 async function renderViewer() {
   const s = current; if (!s) return;
   const token = ++renderToken;
+  if (renderTask) { renderTask.cancel(); renderTask = null; }
   try {
     const doc = await loadPdf(s.document_id);
     const page = await doc.getPage(s.page_number);
+    if (token !== renderToken) return;               // a newer request arrived while loading
+    if (renderTask) { renderTask.cancel(); renderTask = null; }
     const base = page.getViewport({ scale: 1 });
     const z = zoom === 'fit' ? ($('viewer').clientWidth - 2) / base.width : Number(zoom);
     const vp = page.getViewport({ scale: z });
     const c = $('pdf'), o = $('ovl');
     c.width = o.width = Math.floor(vp.width); c.height = o.height = Math.floor(vp.height);
-    await page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+    renderTask = page.render({ canvasContext: c.getContext('2d'), viewport: vp });
+    await renderTask.promise;
+    renderTask = null;
     if (token !== renderToken) return;
     drawOverlay(o.getContext('2d'), z);
-  } catch (e) { status('Could not show the drawing: ' + e.message, 'err'); }
+  } catch (e) {
+    if (e && e.name === 'RenderingCancelledException') return; // replaced by a newer drawing
+    status('Could not show the drawing: ' + e.message, 'err');
+  }
 }
 
 function drawOverlay(g, z) {
@@ -378,7 +388,8 @@ $('reopen').onclick = async () => {
   catch (e) { status(e.message, 'err'); }
 };
 
-window.addEventListener('resize', () => { if (zoom === 'fit') renderViewer(); });
+let resizeTimer = null;
+window.addEventListener('resize', () => { if (zoom !== 'fit') return; clearTimeout(resizeTimer); resizeTimer = setTimeout(renderViewer, 200); });
 await loadSaved();
 buildSheets();
 loadStep();
