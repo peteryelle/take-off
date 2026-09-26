@@ -1,0 +1,636 @@
+// netlify/functions/wf4-batch.js
+// WF4 copy of pass-batch.js — batch runner, one page at a time (the browser
+// orchestrates the sequence). NO metered calls: detection runs on the browser's
+// pdf.js text layer + stored data (public/lib/pipeline.js).
+//
+// POST /api/wf/wf4/batch
+// Body: { project_id, page_id, eval_page_num, text_items,
+//         page_width_pts, page_height_pts,
+//         demarc_pins: [{ demarc_id, x_norm, y_norm, name, stub_ft }] }   demarc_id = TR pin id
+//
+// Changes from pass-batch.js (detection, reconcile, exclude-zone, dedup and
+// wall-aware routing logic are unchanged):
+//   * `takeoff` schema; device types come from the project's device library,
+//     and only VERIFIED types count (copied types must be re-checked first).
+//   * Cable length follows the routing mode (public/lib/route-modes.js):
+//     straight (default) | right_angle | routed; sheet override wins over the
+//     project setting. Routed keeps the old 1.35 factor, so its lengths match.
+//   * Manual devices are device_instances rows (source = 'manual'): a re-run
+//     wipes only non-manual rows, and updates each manual row's length/TR in
+//     place instead of re-inserting it.
+//   * schedule_rows seeding is skipped — no table in v2 and no project uses it
+//     (0 rows, no device type configured with a 'schedule' source).
+//   * No project lock / last_run_at (v2 snapshots the BOM in WF8 instead).
+// ─────────────────────────────────────────────────────────────────
+
+import { ok, err, CORS } from "./utils/clients.js";
+import { requireOrg } from "./utils/auth.js";
+import { td, assertWfProjectInOrg } from "./utils/takeoff-db.js";
+import { effectiveRouting, appliedFactor, measure, lengthsFt } from "../../public/lib/route-modes.js";
+import { buildDeviceList } from "../../public/lib/pipeline.js";
+import { parseSchedule } from "../../public/lib/schedule.js";
+import { buildGreedyPath } from "../../public/lib/waypoint-path.js";
+import { buildPageRouter } from "../../public/lib/wall-aware-path.js";
+import { toIdentityXY } from "../../public/lib/frame.js";
+import { hasUsableScale, resolveTiaLimit } from "../../public/lib/pipeline-guards.js";
+
+const TIA_OUTLET_FT = 295;   // fallback when a device type has no tia_limit_ft override set
+
+function portsFromFamilies(fams = []) {
+  const F = fams.map((f) => String(f).toUpperCase());
+  const data = F.filter((f) => f === "DD");
+  const voice = F.filter((f) => f === "DV");
+  const node = F.filter((f) => f === "N");
+  return { data_ports: data, voice_ports: voice, node_labels: node,
+           port_count_data: data.length, port_count_voice: voice.length };
+}
+
+export default async function handler(req) {
+  if (req.method === "OPTIONS") return new Response("", { headers: CORS });
+  if (req.method !== "POST")    return err("POST required", 405);
+
+  let body;
+  try { body = await req.json(); } catch { return err("Invalid JSON"); }
+
+  const { project_id, page_id, eval_page_num, text_items,
+          page_width_pts, page_height_pts, demarc_pins, symbol_instances, leader_overrides,
+          scale_override, sheet_class, content_bbox } = body;
+  if (!project_id || !page_id || !text_items?.length)
+    return err("project_id, page_id and text_items required");
+
+  const gate = await requireOrg(req);
+  if (gate.error) return gate.error;
+  const { supabase, orgId } = gate;
+  const tdb = td(supabase);
+
+  if (!(await assertWfProjectInOrg(supabase, project_id, orgId))) return err("Project not found", 404);
+  const { data: pageCheck } = await tdb.from("pages").select("project_id").eq("id", page_id).maybeSingle();
+  if (!pageCheck || String(pageCheck.project_id) !== String(project_id)) return err("Page not found in this project", 404);
+  await tdb.from("pages").update({ run_status: "running", run_status_msg: null }).eq("id", page_id);
+
+  // Persist the client-computed sheet_class probe (substep 4 wiring tail). Passive,
+  // best-effort — the client already used it to route the symbol locator; a probe
+  // write must never fail the count.
+  if (sheet_class && typeof sheet_class === "object") {
+    try { await tdb.from("pages").update({ sheet_class }).eq("id", page_id); }
+    catch (e) { console.warn("[sheet_class persist]", e?.message); }
+  }
+
+  // Persist the content-bbox frame x_norm/y_norm were normalized against (fractions
+  // of full page width/height). Without this, any later re-render of the page
+  // (confidence map, leader-cluster markup) has no way to reconstruct where
+  // x_norm/y_norm=(0,0)-(1,1) actually sits — it silently assumes content bbox ==
+  // full page, which drifts on any sheet whose content overflows the MediaBox.
+  // Best-effort, same as sheet_class above — a probe write must never fail the count.
+  if (content_bbox && typeof content_bbox === "object") {
+    try {
+      await tdb.from("pages").update({
+        content_xmin_frac: content_bbox.xmin_frac ?? null,
+        content_ymin_frac: content_bbox.ymin_frac ?? null,
+        content_w_frac:    content_bbox.w_frac    ?? null,
+        content_h_frac:    content_bbox.h_frac    ?? null
+      }).eq("id", page_id);
+    } catch (e) { console.warn("[content_bbox persist]", e?.message); }
+  }
+
+  try {
+    const [{ data: page }, { data: project }] = await Promise.all([
+      tdb.from("pages").select("*").eq("id", page_id).single(),
+      tdb.from("projects").select("id, device_library_id, route_mode, route_multiplier").eq("id", project_id).single()
+    ]);
+    if (!page) return err("Page not found", 404);
+    if (!project?.device_library_id) return err("This project has no device library yet — create or copy one first", 404);
+
+    const { data: libTypes, error: dtErr } = await tdb.from("device_types")
+      .select("id, legend_id, name, detection_config, tia_limit_ft, verified")
+      .eq("library_id", project.device_library_id)
+      .not("detection_config", "is", null);
+    if (dtErr) throw new Error(`device_types: ${dtErr.message}`);
+    const deviceTypes = (libTypes || []).filter((t) => t.verified);
+    const skippedUnverified = (libTypes || []).filter((t) => !t.verified).map((t) => t.name);
+
+    const routing = effectiveRouting(project, page);
+    const factor  = appliedFactor(routing.mode, routing.multiplier);
+
+    // ── Scale gate ──────────────────────────────────────────────────
+    // Distance (and any TR-run cable line item) silently comes out null
+    // when a page has no scale — confirmed on a real project: page 8 had
+    // 31 devices correctly detected and TR-assigned, but total_ft stayed
+    // null for every one of them because scale was never set, with
+    // nothing surfacing the gap until the BOM's missing_distance flag
+    // caught it well downstream of the actual cause. Refuse to run
+    // detection at all until a scale exists (already on the page, or
+    // supplied as scale_override in this request) — brittleness triggers
+    // the human immediately, not a silent null discovered three steps
+    // later. The scale_override persist block below still runs AFTER
+    // this gate on a normal call, so a page can be unblocked by simply
+    // supplying scale_override on the next run — no separate save step.
+    // See public/lib/pipeline-guards.js for the (now fixture-tested) check.
+    if (!hasUsableScale(page, scale_override)) {
+      await tdb.from("pages").update({
+        run_status: "error",
+        run_status_msg: "Scale not set — set the page scale before running detection"
+      }).eq("id", page_id);
+      return err("Scale not set for this page — set scale (Pass B, or the manual override) before running detection", 422);
+    }
+
+    if (!deviceTypes?.length)
+      return err(skippedUnverified.length
+        ? `No verified device types — verify these on this drawing set first: ${skippedUnverified.join(", ")}`
+        : "No device types with detection_config — run Discover first", 404);
+
+    // ── Drawing-bounds filter (label + vector symbol tracks) ────────────
+    // Boilerplate text and legend glyphs outside the actual plan area were being
+    // detected as real placed devices on every page that carried them — confirmed
+    // on a real project: a WAP-symbol legend block got counted as 7+ placed
+    // devices, requiring the same hand-culls to be redone on every re-run, since
+    // the source was never actually removed. drawing_bounds (captured by Pass B,
+    // pages.drawing_x0/y0/x1/y1) marks the real plan area vs. surrounding title
+    // block/legend/notes — both in the same identity-frame fraction units as
+    // text_items' cx_norm/cy_norm and symbol_instances' x/y, so no conversion
+    // needed. Falls back to unfiltered when bounds haven't been captured for this
+    // page yet (e.g. Pass B hasn't run) rather than silently dropping everything.
+    //
+    // Schedule parsing deliberately does NOT use this filter below — a schedule
+    // table often sits outside what Pass B considers the "drawing" area, and
+    // filtering it the same way would break UIN/cable_dest extraction entirely.
+    const db = { x0: page.drawing_x0, y0: page.drawing_y0, x1: page.drawing_x1, y1: page.drawing_y1 };
+    const hasDrawingBounds = [db.x0, db.y0, db.x1, db.y1].every((v) => v != null);
+    const inDrawingArea = (x, y) => !hasDrawingBounds || (x >= db.x0 && x <= db.x1 && y >= db.y0 && y <= db.y1);
+
+    const labelTextItems = hasDrawingBounds
+      ? text_items.filter((t) => inDrawingArea(t.cx_norm, t.cy_norm))
+      : text_items;
+    const boundedSymbolInstances = hasDrawingBounds
+      ? (symbol_instances || []).filter((s) => inDrawingArea(s.x, s.y))
+      : (symbol_instances || []);
+
+    // Scale override from the per-page editor: persist to the page row (so distances
+    // use it and it survives reload; redo replaces), then read it back for this run.
+    if (scale_override && Number.isFinite(scale_override.paper_value) && Number.isFinite(scale_override.real_value) && scale_override.real_value > 0) {
+      const ptsPer = (72 * scale_override.paper_value) / scale_override.real_value;
+      await tdb.from("pages").update({
+        scale_paper_in:   scale_override.paper_value,
+        scale_real_ft:    scale_override.real_value,
+        scale_pts_per_ft: ptsPer,
+        scale_label:      `${scale_override.paper_value}" = ${scale_override.real_value}'`
+      }).eq("id", page_id);
+      page.scale_pts_per_ft = ptsPer;   // use immediately
+    }
+
+    const ptsPerFt = page.scale_pts_per_ft ?? null;
+    // Only this project's TR pins may be assigned (tr_pin_id is a real FK now).
+    const { data: projectPins } = await tdb.from("tr_pins").select("id, tr_name, tr_id").eq("project_id", project_id);
+    const pinById = new Map((projectPins || []).map((p) => [String(p.id), p]));
+    const pins = (demarc_pins ?? []).filter((p) => p && (p.demarc_id == null || pinById.has(String(p.demarc_id))));
+    const scopedPins   = pins.filter((p) => p && p.scope_box);
+    const unscopedPins = pins.filter((p) => p && !p.scope_box);
+
+    // Tier 1 cable-routing waypoints (public/lib/waypoint-path.js) — a shared pool for
+    // the whole page; the greedy walk below decides per-device whether any are on the
+    // way. A page with zero waypoints falls straight back to the exact pre-waypoint
+    // straight-line distance (empty pool -> buildGreedyPath returns [device, demarc]).
+    const { data: pageWaypoints, error: wpErr } = await tdb
+      .from("waypoints").select("id, x_norm, y_norm").eq("page_id", page_id);
+    if (wpErr) console.warn("[waypoints fetch]", wpErr.message);
+    const waypointsPts = (pageWaypoints ?? [])
+      .filter((w) => Number.isFinite(w.x_norm) && Number.isFinite(w.y_norm))
+      .map((w) => ({ id: w.id, x: w.x_norm * (page_width_pts ?? 1), y: w.y_norm * (page_height_pts ?? 1) }));
+
+    function euclidPts(cx, cy, pin) {
+      const dx = (cx - pin.x_norm) * (page_width_pts  ?? 1);
+      const dy = (cy - pin.y_norm) * (page_height_pts ?? 1);
+      return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    // ── Tier 3 (wall-aware) routing gate ────────────────────────────
+    // Confirmed per-project, geometry persisted per-page — both required.
+    // Neither loads a PDF here; wall-aware-path.js has zero DOM/PDF
+    // dependency by design (proven by running it headlessly against real
+    // drawings during development), and the geometry it needs was already
+    // extracted client-side and persisted via pass-wall-geometry.js at
+    // confirm time. If either check fails, or a specific device's route
+    // comes back unreachable (result.total_dist === null — e.g. an enclosed
+    // room with no detected door), this falls straight back to Tier 1
+    // (buildGreedyPath) for that device — same behavior as before this gate
+    // existed. A page can route to more than one TR (scopedPins/unscopedPins
+    // above already assume this), so the router is cached per demarc_id, not
+    // built once for the whole page — each distinct TR gets its own shared
+    // Dijkstra field, reused across every device that routes to it.
+    const { data: calib } = await tdb
+      .from("wall_calibrations").select("status").eq("project_id", project_id).maybeSingle();
+    const { data: pageGeom } = await tdb
+      .from("page_wall_geometry").select("walls, doors, tray").eq("page_id", page_id).maybeSingle();
+    const tier3Available = calib?.status === "confirmed" && !!pageGeom?.walls?.length;
+    const tier3RouterCache = new Map(); // demarc_id -> router (buildPageRouter result)
+    const tier3Bounds = { x0: 0, y0: 0, x1: page_width_pts ?? 1, y1: page_height_pts ?? 1 };
+
+    // TEMPORARY DIAGNOSTIC — remove once the tier3_count=0-on-real-batch-runs
+    // bug is confirmed fixed. Every precondition checks out true directly
+    // against the database (wall_calibrations.status='confirmed',
+    // page_wall_geometry has 1749 walls for this exact page_id, device_instances
+    // all get total_ft/demarc_id so routedPts() is definitely being called) —
+    // yet routed_via_tier3 is false for 100% of devices on two separate
+    // projects. This counts what actually happens inside routedPts() itself,
+    // per call, so the next real batch run's response says definitively which
+    // of the three possible failure points it is: tier3Available false,
+    // getTier3Router returning null, or routeDevice() always unreachable.
+    const tier3Debug = {
+      calibStatus: calib?.status ?? null,
+      pageGeomFound: !!pageGeom,
+      pageGeomWallCount: pageGeom?.walls?.length ?? 0,
+      tier3Available,
+      project_id, page_id,
+      routerBuiltCount: 0, routerNullCount: 0,
+      tier3SuccessCount: 0, tier3UnreachableCount: 0, tier1FallbackCount: 0,
+    };
+
+    function getTier3Router(pin) {
+      const key = pin.demarc_id ?? `${pin.x_norm},${pin.y_norm}`;
+      if (tier3RouterCache.has(key)) return tier3RouterCache.get(key);
+      const demarcXY = [pin.x_norm * (page_width_pts ?? 1), pin.y_norm * (page_height_pts ?? 1)];
+      const router = buildPageRouter(demarcXY, pageGeom, tier3Bounds);
+      if (router) tier3Debug.routerBuiltCount++; else tier3Debug.routerNullCount++;
+      tier3RouterCache.set(key, router);
+      return router;
+    }
+
+    // Routed distance in points: Tier 3 (wall-aware grid + Dijkstra) if
+    // available and this device is reachable through it; otherwise Tier 1
+    // (greedy-walks the shared waypoint pool, falling back to the exact
+    // euclidPts straight line whenever no waypoint is on the way) — see
+    // buildGreedyPath's header for that algorithm. Either way the return
+    // shape is identical ({points, legs, total_dist, waypoint_ids_used}),
+    // so nothing downstream of this function needs to know which tier ran.
+    function routedPts(cx, cy, pin) {
+      const deviceXY = [cx * (page_width_pts ?? 1), cy * (page_height_pts ?? 1)];
+      const demarcXY = [pin.x_norm * (page_width_pts ?? 1), pin.y_norm * (page_height_pts ?? 1)];
+      if (tier3Available) {
+        const router = getTier3Router(pin);
+        if (router) {
+          const result = router.routeDevice(deviceXY);
+          if (result.total_dist !== null) { tier3Debug.tier3SuccessCount++; return { ...result, _tier3: true }; }
+          tier3Debug.tier3UnreachableCount++;
+        }
+      }
+      tier3Debug.tier1FallbackCount++;
+      return buildGreedyPath(deviceXY, waypointsPts, demarcXY);
+    }
+    function inBox(b, x, y) { return x >= b.x0 && x <= b.x1 && y >= b.y0 && y <= b.y1; }
+    function nearestOf(pool, cx, cy) {
+      let best = null, bd = Infinity;
+      for (const p of pool) { const d = euclidPts(cx, cy, p); if (d < bd) { bd = d; best = p; } }
+      return best;
+    }
+    // Scope-aware pin assignment. A scoped pin claims only the devices inside its box,
+    // so per-box exits measure to the right exit instead of the nearest one. A device in
+    // no box on a fully-scoped page is out of scope (null distance — honest blank, not a
+    // wrong length). With no scoped pins this reduces to nearest-pin (back-compat: VA and
+    // every unboxed page behave exactly as before).
+    function assignPin(cx, cy) {
+      for (const p of scopedPins) if (inBox(p.scope_box, cx, cy)) return p;
+      if (scopedPins.length && !unscopedPins.length) return null;
+      return nearestOf(unscopedPins.length ? unscopedPins : pins, cx, cy);
+    }
+
+    // ── detect + schedule + symbol → reconcile ──────────────────
+    // Overrides come from the body when the client just marked them (and get persisted
+    // below), else fall back to whatever was saved on the page. undefined = use saved.
+    const leaderOv = (leader_overrides !== undefined) ? leader_overrides : (page.leader_overrides ?? []);
+
+    // ── seed reconcile from the persisted schedule (authoritative device list) ──
+    // Only types configured with 'schedule' in their detection sources are seeded,
+    // so unconfigured/uncounted classes present in the schedule never become phantom
+    // devices. Plan labels join these by UIN; a scheduled type's plan label with no
+    // matching schedule UIN is surfaced by reconcile as not_in_schedule (e.g. ALM-1100B).
+    const scheduledTypeByPrefix = new Map();   // anchor prefix (UPPER) -> reconcile type key
+    for (const dt of deviceTypes) {
+      const cfg = dt.detection_config || {};
+      if (cfg.anchor && Array.isArray(cfg.sources) && cfg.sources.includes("schedule")) {
+        scheduledTypeByPrefix.set(String(cfg.anchor).trim().toUpperCase(), cfg.type || dt.name);
+      }
+    }
+    // WF4: no schedule_rows table in v2 (unused: 0 rows, no type has a
+    // 'schedule' source). The seeding code is kept, fed an empty list, so it
+    // can be re-enabled by adding the table without touching reconcile.
+    let seededScheduleRows = [];
+    if (scheduledTypeByPrefix.size) {
+      console.warn("[wf4-batch] device type(s) configured with a 'schedule' source, but v2 has no schedule_rows — not seeded");
+      const schedRows = [];
+      seededScheduleRows = (schedRows || []).map((r) => {
+        const prefix = String(r.device_prefix || (r.uin || "").split("-")[0] || "").trim().toUpperCase();
+        const type = scheduledTypeByPrefix.get(prefix);
+        if (!type) return null;                    // unconfigured/uncounted type -> not seeded
+        const cable_dest = [r.cable_dest_1, r.cable_dest_2].filter(Boolean);
+        return { uin: String(r.uin).trim().toUpperCase(), type,
+                 attributes: { cable_dest, detail_sheet: r.detail_sheet || null } };
+      }).filter(Boolean);
+    }
+
+    // Attach each schedule row's OWN UIN-text coordinate so reconcile can tell a
+    // re-detected schedule label (echo — parks the device on the table, off-plan and
+    // outside the distance boxes) from a real plan stamp. Derived from the same text
+    // layer at run time, so no schema/persist dependency; best-effort and guarded —
+    // absent/empty schedule cfg yields no xy, and reconcile's echo guard is then inert
+    // (pre-fix behavior). Never affects the count, only which xy a device adopts.
+    if (seededScheduleRows.length && page.schedule && page.schedule.present !== false) {
+      try {
+        const xyByUin = new Map();
+        for (const r of parseSchedule(text_items, page.schedule, {})) {
+          if (Number.isFinite(r.x) && Number.isFinite(r.y)) xyByUin.set(String(r.uin).trim().toUpperCase(), [r.x, r.y]);
+        }
+        for (const row of seededScheduleRows) {
+          const xy = xyByUin.get(row.uin);
+          if (xy) { row.x = xy[0]; row.y = xy[1]; }
+        }
+      } catch (e) { console.warn("[schedule echo xy]", e?.message); }
+    }
+
+    const { devices: reconciled, typeMap } = buildDeviceList(
+      labelTextItems, deviceTypes, page.schedule,
+      { scheduleRows: seededScheduleRows, planRegions: scopedPins.map((p) => p.scope_box).filter(Boolean) },
+      boundedSymbolInstances, leaderOv);
+
+    // ── Manually-added devices (confidence-map "add missed device") ─────
+    // manual_devices is the durable source — re-injected as synthetic reconcile
+    // candidates on EVERY run, so a manual add survives device_instances' delete-
+    // then-insert wipe below without needing any protective flag on that table.
+    // Tagged _manual (internal only — stripped before persisting, see the row
+    // build below) so it can bypass the exclude-zone filter (an explicit human
+    // placement overrides a general zone rule) and anchor the dedup pass after it.
+    const { data: manualRows, error: manualErr } = await tdb
+      .from("device_instances")
+      .select("id, device_type_id, x_norm, y_norm, uin")
+      .eq("page_id", page_id)
+      .eq("source", "manual");
+    if (manualErr) console.warn("[manual devices fetch]", manualErr.message);
+
+    function resolveTypeKey(dt) {
+      const cfg = dt.detection_config || {};
+      if (cfg.anchor) return cfg.type || dt.name;
+      return cfg.symbol_token || cfg.symbol_template?.symbol_token || cfg.type || dt.name;
+    }
+    for (const m of (manualRows ?? [])) {
+      const dt = deviceTypes.find((x) => x.id === m.device_type_id);
+      if (!dt) continue;   // type deleted/renamed since the manual add — skip rather than crash the run
+      // hasRealUin distinguishes a genuine user-entered UIN from the synthetic
+      // `_manual{id}` placeholder below. The placeholder exists only so every
+      // manual row has SOME uin value for schedule-join/display purposes — it
+      // must never reach raw_labels (see below), or every manually-added device
+      // becomes its own unique, unmatchable BOM family (each carries a different
+      // id), permanently unable to expand through its type's real assembly even
+      // when one exists. See the "Counted but Unmodeled" report investigation.
+      const hasRealUin = !!(m.uin && String(m.uin).trim());
+      reconciled.push({
+        uin: m.uin || `_manual${m.id}`, type: resolveTypeKey(dt),
+        x: m.x_norm, y: m.y_norm, xy_source: 'manual', symbol_via: null,
+        sources: ['manual'], attributes: { families: [], codes: [] },
+        confidence: 'high', flags: ['manual_added'], _manual: true, _manualId: m.id, _hasRealUin: hasRealUin
+      });
+    }
+
+    // ── Out-of-scope exclusion (hatched zones, kind:'exclude') ──────────
+    // Separate mechanism from scopedPins/scope-box distance-routing above: a device
+    // inside an exclude region is dropped entirely — never persisted, never counted,
+    // never distance-computed. Server-authoritative (queried fresh here, not trusted
+    // from the client) so a stale client can't bypass it. Manual adds bypass this —
+    // see the block above.
+    const { data: excludeRegions, error: exclErr } = await tdb
+      .from("page_regions")
+      .select("x0, y0, x1, y1")
+      .eq("page_id", page_id)
+      .eq("kind", "exclude");
+    if (exclErr) console.warn("[exclude regions]", exclErr.message);
+
+    // Small automatic buffer on genuinely drawn out-of-scope REGIONS — not the tiny
+    // per-device boxes the confidence-map cull flow auto-generates (those stay
+    // pixel-precise on purpose, so they don't swallow a nearby device on a dense
+    // sheet). A hand-drawn region is rarely pixel-perfect against the true wall/
+    // room edge; a device sitting just outside it by a hair is still meant to be
+    // excluded, not counted on a technicality. Confirmed on a real project: several
+    // rows of devices sat 0.011-0.018 outside a drawn boundary, all along the same
+    // wall line — a systematic under-draw, not scattered noise. 0.02 covers that
+    // with a little headroom. MIN_REGION_SIZE_FOR_BUFFER distinguishes "region" from
+    // "single-device cull box" by size (cull boxes are exactly CULL_PAD_FRAC*2 wide,
+    // well under this) rather than needing a schema flag for it.
+    const EXCLUDE_ZONE_BUFFER_FRAC = 0.02;
+    const MIN_REGION_SIZE_FOR_BUFFER = 0.05;
+
+    // Exclude regions are always stored in the identity (full-page) frame — the
+    // client draws them via the SAME bboxForDevice transform normToCanvasXY uses
+    // for rendering. But device.x/device.y here are NOT always in that frame:
+    // label-sourced (and vector-symbol-sourced) devices are normalized against
+    // the page's TEXT-CONTENT bounding box, not the full page. Comparing them
+    // directly against an identity-frame box compares two different coordinate
+    // spaces — confirmed on a real project: a cull's own exclude box failed to
+    // suppress the same device on the very next re-run, with position drift
+    // separately ruled out (three consecutive re-runs landed on IDENTICAL
+    // coordinates). The content-bbox offset alone (this page: ~0.03, ~-0.03)
+    // exceeds a per-device cull box's own half-width, so the mismatch guarantees
+    // a miss regardless of how precisely the device re-detects. See frame.js.
+    const inExcludeZone = (x, y) => {
+      if (x == null || y == null || !excludeRegions?.length) return false;
+      return excludeRegions.some((r) => {
+        if (r.x0 == null) return false;
+        const isRegion = (r.x1 - r.x0) >= MIN_REGION_SIZE_FOR_BUFFER && (r.y1 - r.y0) >= MIN_REGION_SIZE_FOR_BUFFER;
+        const buf = isRegion ? EXCLUDE_ZONE_BUFFER_FRAC : 0;
+        return x >= r.x0 - buf && x <= r.x1 + buf && y >= r.y0 - buf && y <= r.y1 + buf;
+      });
+    };
+    const excludedCount = reconciled.filter((dev) => {
+      if (dev._manual) return false;
+      const [ix, iy] = toIdentityXY(dev, content_bbox);
+      return inExcludeZone(ix, iy);
+    }).length;
+    let inScope = reconciled.filter((dev) => {
+      if (dev._manual) return true;
+      const [ix, iy] = toIdentityXY(dev, content_bbox);
+      return !inExcludeZone(ix, iy);
+    });
+
+    // Dedup: if detection later genuinely finds the same physical device a manual
+    // add already covers (better symbol matching, a schedule row lands, etc.), drop
+    // the freshly-detected duplicate rather than double-counting — the manual entry
+    // was a confirmed human decision and wins. Compares in identity frame (see
+    // frame.js) — manual points are already identity-frame; dev may not be.
+    const MANUAL_DEDUP_RADIUS_FRAC = 0.015;
+    const manualPoints = inScope.filter((d) => d._manual);
+    if (manualPoints.length) {
+      inScope = inScope.filter((dev) => {
+        if (dev._manual || dev.x == null || dev.y == null) return true;
+        const [ix, iy] = toIdentityXY(dev, content_bbox);
+        return !manualPoints.some((m) =>
+          m.type === dev.type && Math.hypot(ix - m.x, iy - m.y) <= MANUAL_DEDUP_RADIUS_FRAC);
+      });
+    }
+
+    const instances = inScope.map((dev) => {
+      const dt = typeMap[dev.type] || {};
+      const fams = dev.attributes?.families || [];
+      const codes = dev.attributes?.codes || [];     // full tokens w/ detail # (DV1/DD3)
+      const anchor = dt.detection_config?.anchor || null;
+      const ports = portsFromFamilies(fams);
+      // Transform to identity frame BEFORE any position-based use — assignPin,
+      // routedPts, and euclidPts all compare against demarc pins and scope
+      // boxes, which are always identity-frame (placed via the pin modal's
+      // identity-frame click math). dev.x/dev.y are NOT always identity-frame
+      // (label and vector-symbol devices normalize against the content-bbox).
+      // This was the same frame-mismatch class fixed for the exclude-zone
+      // check earlier tonight, but here it affects EVERY distance value shown
+      // for a label-sourced device, not just the exclude-zone gate — a much
+      // more foundational bug than tonight's other fixes. See frame.js.
+      const [cx, cy] = toIdentityXY(dev, content_bbox);
+      const hasXY = cx != null && cy != null;
+      // Label: anchor leads (N2), then the detail-numbered family codes in detected order.
+      // UIN'd (prefix) types lead with the UIN; standalone (WAP/180) just the type.
+      // A manual add without a real UIN (dev._manual && !dev._hasRealUin) must NOT
+      // use dev.uin here — that's the internal-only `_manual{id}` placeholder, unique
+      // per instance, which would otherwise become its own unmatchable BOM family.
+      // Falls through to the same anchor/type label any other UIN-less device gets.
+      const useUin = dev.uin && (!dev._manual || dev._hasRealUin);
+      const rawLabels = useUin
+        ? [dev.uin, ...codes]
+        : (codes.length ? (anchor ? [anchor, ...codes] : codes)
+                        : (anchor ? [anchor] : [dev.type]));
+
+      const xFt = hasXY && ptsPerFt && page_width_pts  ? parseFloat((cx * page_width_pts  / ptsPerFt).toFixed(1)) : null;
+      const yFt = hasXY && ptsPerFt && page_height_pts ? parseFloat((cy * page_height_pts / ptsPerFt).toFixed(1)) : null;
+
+      let demarcId = null, runLengthFt = null, totalFt = null, tiaFlag = false, tiaReason = null, outOfScope = false;
+      let routedViaWaypoints = null, routeGeometry = null, routedViaTier3 = false, routeFtRaw = null, routeMethod = "none";
+      if (hasXY) {
+        const pin = assignPin(cx, cy);
+        demarcId  = pin?.demarc_id ?? null;
+        outOfScope = scopedPins.length > 0 && !pin;   // scoped page, device inside no box
+        if (pin && ptsPerFt) {
+          const W = page_width_pts ?? 1, H = page_height_pts ?? 1;
+          const m = measure(routing.mode, [cx * W, cy * H], [pin.x_norm * W, pin.y_norm * H],
+                            () => routedPts(cx, cy, pin));
+          routedViaWaypoints = m.waypoint_ids;
+          routedViaTier3 = m.tier3;
+          routeGeometry  = m.points?.length ? m.points : null;
+          const L = lengthsFt(m.dist_pts, ptsPerFt, factor, pin.stub_ft ?? 0);
+          routeFtRaw  = L.route_ft_raw;
+          runLengthFt = L.run_ft;
+          totalFt     = L.route_ft;
+          routeMethod = routing.mode;
+          // See public/lib/pipeline-guards.js for the (now fixture-tested) resolver.
+          const limit = resolveTiaLimit(dt.tia_limit_ft, TIA_OUTLET_FT);
+          if (totalFt > limit) { tiaFlag = true; tiaReason = `${totalFt}ft exceeds ${limit}ft TIA limit`; }
+        }
+      }
+      const mergedFlags = outOfScope ? [ ...(dev.flags || []), "out_of_scope" ] : (dev.flags || []);
+
+      return {
+        dev, dt, routed_via_waypoints: routedViaWaypoints,
+        manual_id: dev._manualId ?? null,
+        row: {
+          org_id: orgId, project_id, page_id, source: dev._manual ? "manual" : "extracted",
+          level: page.level ?? null, zone: page.zone ?? null,
+          tr_pin_id: demarcId, tr_name: demarcId != null ? (pinById.get(String(demarcId))?.tr_name ?? null) : null,
+          tr_id: demarcId != null ? (pinById.get(String(demarcId))?.tr_id ?? null) : null,
+          route_method: routeMethod, route_ft_raw: routeFtRaw, route_multiplier: routeFtRaw != null ? factor : null,
+          device_type_id: dt.id ?? null, detection_method: dev._manual ? "manual" : "reconciled",
+          uin: dev.uin ?? null,
+          // ORIGINAL native-frame coordinates, not the identity-transformed
+          // cx/cy above — the client applies its own transform on render
+          // (bboxForDevice, keyed on xy_source), so persisting the already-
+          // transformed value here would double-transform every label-sourced
+          // device's displayed position. cx/cy exist ONLY for this function's
+          // own position-based math against identity-frame pins/scope-boxes.
+          x_norm: hasXY ? parseFloat(dev.x.toFixed(4)) : null,
+          y_norm: hasXY ? parseFloat(dev.y.toFixed(4)) : null,
+          x_ft: xFt, y_ft: yFt,
+          raw_labels: rawLabels,
+          data_ports: ports.data_ports, voice_ports: ports.voice_ports, node_labels: ports.node_labels,
+          port_count_data: ports.port_count_data, port_count_voice: ports.port_count_voice,
+          route_ft: totalFt,
+          route_geometry: routeGeometry, routed_via_tier3: routedViaTier3,
+          tia_flag: tiaFlag, tia_reason: tiaReason,
+          confidence: ["high", "medium", "low"].includes(dev.confidence) ? dev.confidence : null,
+          xy_source: dev.xy_source ?? null,
+          symbol_via: dev.symbol_via ?? null,
+          flags: mergedFlags.length ? mergedFlags : null
+        }
+      };
+    });
+
+    // Wipe only detected rows — manual rows are the durable human record.
+    const { error: delErr } = await tdb.from("device_instances").delete().eq("page_id", page_id).neq("source", "manual");
+    if (delErr) throw new Error(`Delete error: ${delErr.message}`);
+    const toInsert = instances.filter((x) => x.manual_id == null);
+    const { data: insertedRows, error: insErr } = toInsert.length
+      ? await tdb.from("device_instances").insert(toInsert.map((x) => x.row)).select("id")
+      : { data: [], error: null };
+    if (insErr) throw new Error(`Insert error: ${insErr.message}`);
+    // Manual rows: refresh the computed fields in place, never their provenance.
+    const MANUAL_KEEP = new Set(["org_id", "project_id", "page_id", "source", "device_type_id", "x_norm", "y_norm", "uin", "detection_method", "confidence"]);
+    for (const x of instances.filter((i) => i.manual_id != null)) {
+      const upd = Object.fromEntries(Object.entries(x.row).filter(([k]) => !MANUAL_KEEP.has(k)));
+      const { error: upErr } = await tdb.from("device_instances").update(upd).eq("id", x.manual_id).eq("source", "manual");
+      if (upErr) throw new Error(`Manual update error: ${upErr.message}`);
+    }
+    // ids aligned with `instances` for the response
+    let insIdx = 0;
+    const inserted = instances.map((x) => ({ id: x.manual_id ?? insertedRows?.[insIdx++]?.id }));
+
+    const needsPlacement = instances.filter((x) => x.dev.flags?.includes("needs_placement")).length;
+    const unlabeledSym   = instances.filter((x) => x.dev.flags?.includes("no_uin")).length;
+    const bits = [`${instances.length} devices`];
+    if (needsPlacement) bits.push(`${needsPlacement} need placement`);
+    if (unlabeledSym)   bits.push(`${unlabeledSym} unlabeled symbol(s)`);
+    const doneMsg = bits.length > 1 ? `${bits[0]} (${bits.slice(1).join(", ")})` : `${bits[0]} found`;
+    const pageUpdate = { run_status: "done", run_status_msg: doneMsg };
+    if (leader_overrides !== undefined) pageUpdate.leader_overrides = leader_overrides;  // redo replaces
+    await tdb.from("pages").update(pageUpdate).eq("id", page_id);
+
+
+    const byType = {};
+    for (const { dt, dev, row } of instances) {
+      const k = dt.legend_id ?? dev.type;
+      byType[k] = byType[k] ?? { legend_id: dt.legend_id ?? null, name: dt.name ?? dev.type, count: 0, tia: 0 };
+      byType[k].count++;
+      if (row.tia_flag) byType[k].tia++;
+    }
+
+    return ok({
+      pass: "batch_page", page_id, eval_page_num,
+      device_count: instances.length, by_type: Object.values(byType),
+      excluded_out_of_scope: excludedCount,   // dropped by an exclude-kind region — audit visibility only, never persisted
+      leader_overrides: leaderOv,   // effective marks (body or persisted) so the UI can pre-fill
+      tia_violations: instances.filter((x) => x.row.tia_flag).length,
+      max_run_ft: Math.max(0, ...instances.map((x) => x.row.route_ft ?? 0)) || null,
+      routing: { mode: routing.mode, multiplier: routing.multiplier, applied_factor: factor },
+      skipped_unverified_types: skippedUnverified,
+      _tier3_debug: tier3Debug,  // TEMPORARY — see comment at tier3Debug's declaration
+      devices: instances.map((x, j) => ({
+        id: inserted?.[j]?.id, device_type_id: x.dt.id ?? null,
+        uin: x.dev.uin, type: x.dev.type, legend_id: x.dt.legend_id ?? null, name: x.dt.name ?? x.dev.type,
+        x_norm: x.row.x_norm, y_norm: x.row.y_norm, x_ft: x.row.x_ft, y_ft: x.row.y_ft,
+        // xy_source tells the client which coordinate FRAME x_norm/y_norm is in —
+        // 'label'/'leader' are normalized against the page's text-content bbox,
+        // 'symbol' against the full rendered page image (pass-symbol.js's frame).
+        // A renderer that ignores this and applies one transform to both will
+        // misplace symbol-sourced devices. See confRedraw/lcRedraw in multi-page.html.
+        xy_source: x.dev.xy_source,
+        symbol_via: x.dev.symbol_via,
+        // Ephemeral, not persisted — the path is fully recomputable from persisted
+        // device x/y + the page's waypoint pool + the assigned demarc, so a reloaded
+        // session recomputes it client-side via buildGreedyPath rather than storing
+        // redundant derived state.
+        routed_via_waypoints: x.routed_via_waypoints,
+        routed_via_tier3: x.row.routed_via_tier3, route_geometry: x.row.route_geometry,
+        raw_labels: x.row.raw_labels,
+        sources: x.dev.sources, confidence: x.dev.confidence, flags: x.row.flags, attributes: x.dev.attributes,
+        total_ft: x.row.route_ft, tia_flag: x.row.tia_flag, tia_reason: x.row.tia_reason, demarc_id: x.row.tr_pin_id,
+        route_method: x.row.route_method, route_ft_raw: x.row.route_ft_raw, source: x.row.source
+      }))
+    });
+
+  } catch (e) {
+    await tdb.from("pages").update({ run_status: "error", run_status_msg: e.message }).eq("id", page_id);
+    return err(e.message, 500);
+  }
+}
+
+export const config = { path: "/api/wf/wf4/batch" };
