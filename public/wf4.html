@@ -134,6 +134,28 @@
         </div>
       </section>
     </div>
+    <section id="areas" hidden style="margin-top: 20px">
+      <div class="row" style="padding: 0 0 10px; border: none; gap: 8px; flex-wrap: wrap">
+        <span id="areas-title" style="font-weight: 700; flex-grow: 1"></span>
+        <button type="button" class="btn muted small" data-azoom="fit">Fit</button>
+        <button type="button" class="btn muted small" data-azoom="1.5">150%</button>
+        <button type="button" class="btn muted small" data-azoom="3">300%</button>
+        <button type="button" class="btn muted small" id="areas-close">Close</button>
+      </div>
+      <div class="split" style="grid-template-columns: minmax(0, 1.6fr) minmax(280px, 0.6fr)">
+        <div class="viewer" id="areas-viewer" style="height: 620px"><canvas id="areas-pdf"></canvas><canvas id="areas-ovl" style="cursor: crosshair"></canvas></div>
+        <section style="display: flex; flex-direction: column; gap: 12px; min-width: 0">
+          <div class="card" style="flex-direction: column; gap: 10px">
+            <div style="font-weight: 700">Exclusion area</div>
+            <div class="small muted" id="areas-step">Click one corner of the box on the drawing, then the opposite corner.</div>
+            <label class="lbl" style="letter-spacing: 0">Note (boxes with the same note make one area)<input class="field" id="areas-note" style="padding: 7px 9px; font-size: 13px" value="Out of scope"></label>
+            <div style="display: flex; gap: 8px"><button type="button" class="btn green small" id="areas-add" disabled>Confirm box</button><button type="button" class="btn muted small" id="areas-clear">Clear corners</button></div>
+          </div>
+          <div class="panel"><div class="row head" id="areas-head">Areas on this sheet</div><div id="areas-list"></div></div>
+          <div class="small muted">Devices inside these boxes are left out of the count from the next count of this sheet. Draw as many boxes as an area needs.</div>
+        </section>
+      </div>
+    </section>
   </div>
 
   <!-- 5 · Review -->
@@ -835,6 +857,7 @@ function pageStatus(p, recount) {
   if (running.has(p.id)) return ['counting…', 'in_review'];
   if (row.run_status === 'error') return /scale/i.test(row.run_status_msg || '') ? ['needs scale', 'stale'] : ['error', 'stale'];
   if (row.run_status === 'done' && recount.has(p.id)) return ['mode changed · re-count', 'stale'];
+  if (row.run_status === 'done' && areasChanged.has(p.id)) return ['areas changed · re-count', 'stale'];
   if (row.run_status === 'done') return ['counted', 'confirmed'];
   return ['not run', 'open'];
 }
@@ -878,6 +901,7 @@ function renderRun() {
       </span>
       <span style="width: 70px">${perPage.get(p.id)?.devices ?? '—'}</span>
       <span style="flex-grow: 1; display: flex; gap: 8px; align-items: center"><span class="pill ${cls}" title="${esc(row.run_status_msg || '')}">${st}</span>
+        <button type="button" class="btn ${areasPageId === p.id ? 'green' : 'muted'} small" data-areas="${p.id}" title="Exclusion areas on this sheet">Areas${areaBoxes(p.id).length ? ' (' + areaBoxes(p.id).length + ')' : ''}</button>
         ${needsScale ? `<input class="cell" style="width: 120px" data-scale="${p.id}" placeholder='1/8" = 1&apos;-0"' value="${esc(scaleInput[p.id] || '')}" aria-label="Scale for ${esc(p.sheet_number || '')}">` : ''}
       </span>
     </div>`;
@@ -885,6 +909,7 @@ function renderRun() {
   document.querySelectorAll('[data-pmode]').forEach((sel) => sel.onchange = () => saveSettings({ page_id: Number(sel.dataset.pmode), route_mode: sel.value || null }));
   document.querySelectorAll('[data-pmult]').forEach((inp) => inp.onchange = () => saveSettings({ page_id: Number(inp.dataset.pmult), route_multiplier: inp.value === '' ? null : Number(inp.value) }));
   document.querySelectorAll('[data-scale]').forEach((inp) => inp.oninput = () => { scaleInput[inp.dataset.scale] = inp.value; });
+  document.querySelectorAll('[data-areas]').forEach((b) => b.onclick = () => openAreas(Number(b.dataset.areas)));
 
   const todo = toCount(), counted = plans.length - todo.length;
   $('run-summary').innerHTML = plans.length ? `${todo.length} sheet${todo.length === 1 ? '' : 's'} to count <span class="muted">· ${counted} counted</span>` : '';
@@ -1018,7 +1043,7 @@ async function runSheets(list) {
     status(`Counting ${p.sheet_number || 'page ' + p.page_number} (${ok + failed + 1} of ${list.length})…`);
     try {
       const j = await countSheet(p, symTypes);
-      ok++;
+      ok++; areasChanged.delete(p.id);
       if (j.skipped_unverified_types?.length) status(`Not counted until re-checked: ${j.skipped_unverified_types.join(', ')}`);
     } catch (e) { failed++; console.warn('[count]', p.sheet_number, e.message); }
     running.delete(p.id);
@@ -1029,6 +1054,113 @@ async function runSheets(list) {
 }
 $('run-go').onclick = () => runSheets(toCount());
 $('run-all').onclick = () => { if (confirm('Re-count every plan sheet? Devices excluded on the map are counted again.')) runSheets(plans.slice()); };
+
+
+// ── Exclusion areas (Count & route) ──
+// Same as the old tool: two clicks at opposite corners make a box; Confirm saves
+// it as an exclude region (full-page fractions); the tool stays open for more
+// boxes. An area can take several boxes — boxes sharing a note are one area.
+// Boxes the confidence map makes when a single device is excluded ("Manual
+// exclude — …") are not listed here.
+let areasPageId = null, areasZoom = 'fit', areasCorners = [];
+const areasChanged = new Set();   // sheets whose areas changed since their last count (this session)
+const isDeviceCull = (r) => String(r.label || '').startsWith('Manual exclude');
+function areaBoxes(pageId) {
+  return (summary?.page_regions || []).filter((r) => r.page_id === pageId && r.kind === 'exclude' && r.x0 != null && !isDeviceCull(r));
+}
+function openAreas(pageId) {
+  areasPageId = areasPageId === pageId ? null : pageId;
+  areasCorners = [];
+  $('areas').hidden = areasPageId == null;
+  renderRun();
+  if (areasPageId != null) { renderAreas(); $('areas').scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+}
+$('areas-close').onclick = () => openAreas(areasPageId);
+document.querySelectorAll('[data-azoom]').forEach((b) => b.onclick = () => { areasZoom = b.dataset.azoom; renderAreas(); });
+$('areas-clear').onclick = () => { areasCorners = []; drawAreas(); areasStep(); };
+function areasStep() {
+  $('areas-step').textContent = areasCorners.length === 0 ? 'Click one corner of the box on the drawing, then the opposite corner.'
+    : areasCorners.length === 1 ? 'Now click the opposite corner.' : 'Box set — Confirm box to save it, or click again to start over.';
+  $('areas-add').disabled = areasCorners.length !== 2;
+}
+let areasToken = 0, areasTask = null;
+async function renderAreas() {
+  const p = plans.find((x) => x.id === areasPageId); if (!p) return;
+  $('areas-title').textContent = `Exclusion areas · ${p.sheet_number || 'page ' + p.page_number}${p.level ? ' · ' + p.level : ''}`;
+  renderAreaList(); areasStep();
+  const token = ++areasToken;
+  if (areasTask) { areasTask.cancel(); areasTask = null; }
+  try {
+    const doc = await loadPdf(p.document_id);
+    const page = await doc.getPage(p.page_number);
+    if (token !== areasToken) return;
+    const base = page.getViewport({ scale: 1 });
+    const z = areasZoom === 'fit' ? ($('areas-viewer').clientWidth - 2) / base.width : Number(areasZoom);
+    const v = page.getViewport({ scale: z });
+    const c = $('areas-pdf'), o = $('areas-ovl');
+    c.width = o.width = Math.floor(v.width); c.height = o.height = Math.floor(v.height);
+    areasTask = page.render({ canvasContext: c.getContext('2d'), viewport: v });
+    await areasTask.promise; areasTask = null;
+    if (token !== areasToken) return;
+    drawAreas();
+  } catch (e) { if (e?.name !== 'RenderingCancelledException') status('Could not show the drawing: ' + e.message, 'err'); }
+}
+function drawAreas() {
+  const o = $('areas-ovl'), g = o.getContext('2d'), W = o.width, H = o.height;
+  g.clearRect(0, 0, W, H);
+  for (const r of areaBoxes(areasPageId)) {
+    g.fillStyle = 'rgba(74,216,106,.16)'; g.strokeStyle = '#2a9a4a'; g.lineWidth = 2;
+    g.fillRect(r.x0 * W, r.y0 * H, (r.x1 - r.x0) * W, (r.y1 - r.y0) * H); g.strokeRect(r.x0 * W, r.y0 * H, (r.x1 - r.x0) * W, (r.y1 - r.y0) * H);
+  }
+  g.fillStyle = '#e07000';
+  for (const c of areasCorners) { g.beginPath(); g.arc(c.x * W, c.y * H, 6, 0, Math.PI * 2); g.fill(); }
+  if (areasCorners.length === 2) {
+    const [a, b] = areasCorners;
+    g.strokeStyle = '#e07000'; g.lineWidth = 2; g.setLineDash([7, 4]);
+    g.strokeRect(Math.min(a.x, b.x) * W, Math.min(a.y, b.y) * H, Math.abs(b.x - a.x) * W, Math.abs(b.y - a.y) * H); g.setLineDash([]);
+  }
+}
+$('areas-ovl').addEventListener('click', (e) => {
+  const r = $('areas-ovl').getBoundingClientRect();
+  const x = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), y = Math.min(1, Math.max(0, (e.clientY - r.top) / r.height));
+  if (areasCorners.length >= 2) areasCorners = [];
+  areasCorners.push({ x, y });
+  drawAreas(); areasStep();
+});
+$('areas-add').onclick = async () => {
+  if (areasCorners.length !== 2) return;
+  const [a, b] = areasCorners;
+  const x0 = Math.min(a.x, b.x), y0 = Math.min(a.y, b.y), x1 = Math.max(a.x, b.x), y1 = Math.max(a.y, b.y);
+  if (x1 - x0 < 0.002 || y1 - y0 < 0.002) { status('That box is too small — click two corners further apart.', 'err'); return; }
+  const label = $('areas-note').value.trim() || 'Out of scope';
+  $('areas-add').disabled = true;
+  try {
+    await post('/api/wf/wf4/regions', { project_id: Number(projectId), page_id: areasPageId, label, polygon: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], x0, y0, x1, y1, kind: 'exclude' });
+    areasCorners = []; areasChanged.add(areasPageId);
+    await refreshSummary();
+    status('Box saved. Draw another, or re-count the sheet to apply.', 'ok');
+  } catch (e) { status(e.message, 'err'); }
+  renderAreaList(); drawAreas(); areasStep(); renderRun();
+};
+function renderAreaList() {
+  const boxes = areaBoxes(areasPageId);
+  const groups = new Map();
+  for (const b of boxes) { const k = b.label || 'Out of scope'; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(b); }
+  $('areas-head').textContent = `Areas on this sheet (${groups.size} · ${boxes.length} box${boxes.length === 1 ? '' : 'es'})`;
+  $('areas-list').innerHTML = boxes.length ? [...groups.entries()].map(([label, list]) => `
+    <div class="row" style="flex-direction: column; align-items: stretch; gap: 6px; padding-top: 10px; padding-bottom: 10px">
+      <div style="font-weight: 700; font-size: 13px">${esc(label)} <span class="muted small">· ${list.length} box${list.length === 1 ? '' : 'es'}</span></div>
+      ${list.map((b, i) => `<div style="display: flex; gap: 8px; align-items: center; font-size: 12px">
+        <span class="muted" style="flex-grow: 1">Box ${i + 1} · (${b.x0.toFixed(3)}, ${b.y0.toFixed(3)}) – (${b.x1.toFixed(3)}, ${b.y1.toFixed(3)})</span>
+        <button type="button" class="btn muted small" data-delbox="${b.id}">Delete</button></div>`).join('')}
+    </div>`).join('') : '<div class="row muted small">No exclusion areas yet.</div>';
+  document.querySelectorAll('[data-delbox]').forEach((btn) => btn.onclick = async () => {
+    if (!confirm('Delete this box?')) return;
+    try { await api('/api/wf/wf4/regions?id=' + btn.dataset.delbox, { method: 'DELETE' }); areasChanged.add(areasPageId); await refreshSummary(); status('Box deleted. Re-count the sheet to apply.', 'ok'); }
+    catch (e) { status(e.message, 'err'); }
+    renderAreaList(); drawAreas(); renderRun();
+  });
+}
 
 // ── 5 · Review ──
 const RTABS = [['level', 'Counts by level'], ['ft', 'Cable lengths'], ['page', 'By page'], ['conf', 'Pages · confidence']];
