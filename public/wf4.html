@@ -679,7 +679,12 @@ let trs = [], pins = [], pinsLoaded = false, autoTried = false, documents = [];
 let pinPageId = null;        // the sheet being worked on
 let pinSel = null;           // { name, tr_id, page_id, x, y, stub, pinId }
 let pinVp = null, pinPage = null, pinZoom = 'fit';
-const mentions = new Map();  // page_id -> [{ name, tr_id, x, y }]  TR names found in that sheet's text (from Find)
+const mentions = new Map();  // page_id -> [{ name, tr_id, x, y, kind: 'room'|'note', text }]  TR names found in that sheet's text (from Find)
+// Notes dismissed on a sheet ("not relevant"), kept per project in this browser.
+const DISMISS_KEY = 'wf4_dismissed_' + projectId;
+const dismissed = (() => { try { return new Set(JSON.parse(localStorage.getItem(DISMISS_KEY) || '[]')); } catch { return new Set(); } })();
+const dismissKey = (pageId, name) => `${pageId}|${name}`;
+function dismiss(pageId, name) { dismissed.add(dismissKey(pageId, name)); try { localStorage.setItem(DISMISS_KEY, JSON.stringify([...dismissed])); } catch {} }
 const typedTrs = new Set();
 const docName = (id) => documents.find((d) => d.id === id)?.filename || `PDF ${id}`;
 const sheetName = (p) => p ? (p.sheet_number || 'page ' + p.page_number) : '—';
@@ -725,9 +730,11 @@ function renderPinPage() {
   // TRs on this sheet: placed, then found in its text but not placed
   const placed = onSheet(page.id);
   const placedNames = new Set(placed.map((d) => d.name));
-  const found = (mentions.get(page.id) || []).filter((m) => !placedNames.has(m.name));
+  const exitNames = new Set(exitsOn(page.id).map((d) => d.name));
+  const found = (mentions.get(page.id) || []).filter((m) => m.kind === 'room' && !placedNames.has(m.name));
+  const notes = (mentions.get(page.id) || []).filter((m) => m.kind === 'note' && !placedNames.has(m.name) && !exitNames.has(m.name) && !dismissed.has(dismissKey(page.id, m.name)));
   const exits = exitsOn(page.id);
-  $('pins-head').textContent = `TRs for ${sheetName(page)} (${placed.length} on the sheet${exits.length ? ` · ${exits.length} off the sheet` : ''}${found.length ? ` · ${found.length} found, not placed` : ''})`;
+  $('pins-head').textContent = `TRs for ${sheetName(page)} (${placed.length} on the sheet${exits.length ? ` · ${exits.length} off the sheet` : ''}${found.length ? ` · ${found.length} found, not placed` : ''}${notes.length ? ` · ${notes.length} in notes` : ''})`;
   const row = (name, pin, extra) => {
     const sel = pinSel && pinSel.name === name;
     const [st, cls] = !pin ? ['found here', 'in_review'] : pin.source === 'user_pin' ? ['placed by hand', 'stale'] : ['at room label', 'confirmed'];
@@ -740,6 +747,11 @@ function renderPinPage() {
       <span class="pill in_review">exit pin</span><button type="button" class="btn blue small" data-exit="${esc(d.name)}">Move</button></div>`;
   $('pins-list').innerHTML = (placed.map((d) => row(d.name, d, `<button type="button" class="btn blue small" data-pin="${esc(d.name)}">Move</button>`)).join('')
     + exits.map(exitRow).join('')
+    + notes.map((m) => `<div class="row" style="font-size: 13px; padding-top: 9px; padding-bottom: 9px; gap: 10px; flex-wrap: wrap">
+        <span style="flex-grow: 1; min-width: 0"><b>${esc(m.name)}</b> <span class="small muted">named in a note</span>
+          <div class="small muted" style="white-space: normal">“${esc(m.text)}”</div></span>
+        <button type="button" class="btn blue small" data-noteexit="${esc(m.name)}" title="This sheet's cable goes to that TR on another sheet">Exit pin to ${esc(m.name)}</button>
+        <button type="button" class="btn muted small" data-dismiss="${esc(m.name)}">Dismiss</button></div>`).join('')
     + found.map((m) => {
         const elsewhere = pinOf(m.name);
         return row(m.name, null, elsewhere
@@ -749,6 +761,13 @@ function renderPinPage() {
     || `<div class="row muted small">${mentions.size ? 'No TR is named on this sheet.' : 'Reading the sheets for TR names…'} Add one below if a TR serves it.</div>`;
   document.querySelectorAll('[data-pin]').forEach((b) => b.onclick = () => selectPin(b.dataset.pin));
   document.querySelectorAll('[data-exit]').forEach((b) => b.onclick = () => selectExit(b.dataset.exit));
+  document.querySelectorAll('[data-noteexit]').forEach((b) => b.onclick = () => {
+    const m = (mentions.get(pinPageId) || []).find((x) => x.name === b.dataset.noteexit);
+    selectExit(b.dataset.noteexit);
+    if (m) { pinSel.x = m.x; pinSel.y = m.y; renderPinEdit(); drawPins(true); }
+    status(`Move the exit pin to where ${b.dataset.noteexit}'s cable leaves this sheet, enter the feet from there to the TR as the stub, then Save pin.`);
+  });
+  document.querySelectorAll('[data-dismiss]').forEach((b) => b.onclick = () => { dismiss(pinPageId, b.dataset.dismiss); renderPinPage(); });
   $('exit-sel').innerHTML = `<option value="">TR…</option>${allTrNames().filter((n) => !exits.some((d) => d.name === n)).map((n) => `<option>${esc(n)}</option>`).join('')}`;
   document.querySelectorAll('[data-place]').forEach((b) => b.onclick = () => {
     const m = (mentions.get(pinPageId) || []).find((x) => x.name === b.dataset.place);
@@ -849,7 +868,7 @@ function drawPins(scrollTo = false) {
     g.font = `700 ${big ? 14 : 12}px "JetBrains Mono", monospace`; g.lineWidth = 3; g.strokeStyle = 'rgba(255,255,255,.9)';
     g.strokeText(label, px + 12, py - 8); g.fillStyle = color; g.fillText(label, px + 12, py - 8);
   };
-  for (const m of mentions.get(pinPageId) || []) if (!onSheet(pinPageId).some((d) => d.name === m.name) && m.name !== pinSel?.name) dot(m.x, m.y, '#b07800', m.name, false, true);
+  for (const m of mentions.get(pinPageId) || []) if (m.kind === 'room' && !onSheet(pinPageId).some((d) => d.name === m.name) && m.name !== pinSel?.name) dot(m.x, m.y, '#b07800', m.name, false, true);
   for (const d of onSheet(pinPageId)) if (!(pinSel && pinSel.kind !== 'exit' && d.name === pinSel.name)) dot(d.x_norm, d.y_norm, '#2a6ab0', d.name, false, false);
   for (const d of exitsOn(pinPageId)) {
     if (pinSel && pinSel.kind === 'exit' && d.name === pinSel.name) continue;
@@ -920,20 +939,45 @@ async function findTrs() {
       const v1 = page.getViewport({ scale: 1 });
       const tc = await page.getTextContent();
       const onPage = new Map();   // tr_number -> biggest occurrence on this sheet
+      // Text boxes on this sheet, for the "inside a line of text?" check below.
+      const boxes = tc.items.filter((t) => (t.str || '').trim()).map((t) => {
+        const hh = Math.hypot(t.transform[2], t.transform[3]) || 1;
+        return { str: t.str.trim(), x0: t.transform[4], x1: t.transform[4] + (t.width || 0), y: t.transform[5], h: hh };
+      });
+      // Words right beside a box on the same line (PDFs that store one word per item).
+      const inLine = (it) => {
+        const hh = Math.hypot(it.transform[2], it.transform[3]) || 1, x0 = it.transform[4], x1 = x0 + (it.width || 0), y = it.transform[5];
+        let words = 0;
+        for (const b of boxes) {
+          if (Math.abs(b.y - y) > hh * 0.35 || Math.abs(b.h - hh) > hh * 0.3) continue;
+          if (b.x0 === x0 && b.str === String(it.str).trim()) continue;
+          const gap = b.x0 >= x1 ? b.x0 - x1 : x0 - b.x1;
+          if (gap >= -hh * 0.2 && gap <= hh * 1.2 && /[A-Z]{2,}/i.test(b.str)) words++;
+        }
+        return words;
+      };
       for (const it of tc.items) {
-        for (const tok of String(it.str || '').split(/\s+/)) {
+        // A room label is text that is just the TR name (optionally "TR ..."); a
+        // name inside a sentence ("SERVED FROM TR H133-1 REFER TO …") is a note:
+        // it points at a TR elsewhere and must never place a pin by itself.
+        const words = String(it.str || '').trim().split(/\s+/).filter(Boolean);
+        const isRoom = words.length <= 2 && inLine(it) < 2;
+        for (const tok of words) {
           // TR-like tokens only: has a digit, and a letter or a hyphen (A502-1, EB51A, 110-12)
           if (tok.length < 3 || !/\d/.test(tok) || !(/[A-Z]/i.test(tok) || tok.includes('-'))) continue;
           const m = resolveTrMatch(tok.replace(/[.,;:()]+$/, ''), trs);
           if (!m.match) continue;
           const h = Math.hypot(it.transform[2], it.transform[3]);
           const [px, py] = v1.convertToViewportPoint(it.transform[4] + (it.width || 0) / 2, it.transform[5] + h / 2);
-          const occ = { page_id: p.id, x: Math.min(1, Math.max(0, px / v1.width)), y: Math.min(1, Math.max(0, py / v1.height)), h };
-          if (!onPage.has(m.match) || h > onPage.get(m.match).h) onPage.set(m.match, occ);
-          if (!best.has(m.match) || h > best.get(m.match).h) best.set(m.match, occ);
+          const occ = { page_id: p.id, x: Math.min(1, Math.max(0, px / v1.width)), y: Math.min(1, Math.max(0, py / v1.height)), h,
+            kind: isRoom ? 'room' : 'note', text: String(it.str || '').trim() };
+          const prev = onPage.get(m.match);
+          // on a sheet, a room label beats a note; then bigger text wins
+          if (!prev || (occ.kind === 'room' && prev.kind === 'note') || (occ.kind === prev.kind && h > prev.h)) onPage.set(m.match, occ);
+          if (isRoom && (!best.has(m.match) || h > best.get(m.match).h)) best.set(m.match, occ);
         }
       }
-      mentions.set(p.id, [...onPage.entries()].map(([name, o]) => ({ name, tr_id: trIdOf(name), x: o.x, y: o.y })));
+      mentions.set(p.id, [...onPage.entries()].map(([name, o]) => ({ name, tr_id: trIdOf(name), x: o.x, y: o.y, kind: o.kind, text: o.text })));
       page.cleanup();
     }
     let placed = 0;
@@ -944,8 +988,10 @@ async function findTrs() {
       placed++;
     }
     pins = await api('/api/wf/wf4/pins?project_id=' + projectId);
-    const named = new Set([...mentions.values()].flat().map((m) => m.name)).size;
-    status(`${named} TR${named === 1 ? '' : 's'} named on the loaded plans${placed ? ` · ${placed} pin${placed === 1 ? '' : 's'} placed` : ''}.`, 'ok');
+    const all = [...mentions.values()].flat();
+    const rooms = new Set(all.filter((m) => m.kind === 'room').map((m) => m.name)).size;
+    const inNotes = new Set(all.filter((m) => m.kind === 'note').map((m) => m.name)).size;
+    status(`${rooms} TR room label${rooms === 1 ? '' : 's'} on the loaded plans${inNotes ? ` · ${inNotes} TR${inNotes === 1 ? '' : 's'} named in notes` : ''}${placed ? ` · ${placed} pin${placed === 1 ? '' : 's'} placed` : ''}.`, 'ok');
     pinSel = null; renderPinPage();
   } catch (e) { status(e.message, 'err'); }
   $('pins-find').disabled = false;
