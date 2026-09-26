@@ -85,7 +85,23 @@
 
   <!-- 3 · TR pins -->
   <div data-stage="3" hidden>
-    <section class="panel placeholder"><div class="muted">TR pins — next build. Each TR is picked from the WF2 list; its pin is placed at the room centre and can be moved.</div></section>
+    <div class="row" style="padding: 0 0 14px; border: none; gap: 12px; flex-wrap: wrap">
+      <div class="muted" style="flex-grow: 1; min-width: 300px" id="pins-intro">Every device routes to a TR. Each TR from the WF2 list is found on the plans by its room label, and its pin is placed there. Move a pin if it is off.</div>
+      <button type="button" class="btn blue small" id="pins-find">Find TRs on the plans</button>
+      <input class="field" id="pins-new" placeholder="Type a TR not in WF2" style="padding: 7px 10px; font-size: 12px; width: 200px" aria-label="Add a TR by name">
+      <button type="button" class="btn muted small" id="pins-add">Add TR</button>
+    </div>
+    <div class="split">
+      <section class="panel" style="align-self: start">
+        <div class="row head"><span style="width: 110px">TR</span><span style="width: 150px">Where</span><span style="flex-grow: 1">Pin</span><span style="width: 120px">Status</span><span style="width: 90px"></span></div>
+        <div id="pins-list"></div>
+      </section>
+      <section>
+        <div id="pin-edit" class="card" style="margin-bottom: 10px"></div>
+        <div class="viewer" id="pin-viewer" style="height: 560px"><canvas id="pin-pdf"></canvas><canvas id="pin-ovl"></canvas></div>
+        <div class="small muted" style="margin-top: 6px">Click the drawing to place the pin for the selected TR, then Save pin. Pins are kept in the full-page frame the batch measures cable from.</div>
+      </section>
+    </div>
   </div>
 
   <!-- 4 · Count & route -->
@@ -111,6 +127,7 @@
 <script type="module">
 import { mountIntake, api, post } from './lib/wf-intake-ui.js';
 import { contentFrame, extractFilledSubpaths, filterByFill, groupSubpaths, polyArea } from './lib/geometry.js';
+import { resolveTrMatch } from './lib/normalize-tr-name.js';
 
 const projectId = new URLSearchParams(location.search).get('project_id');
 if (!projectId) location.replace('wf-projects.html');
@@ -138,7 +155,7 @@ function renderStages() {
   document.querySelectorAll('[data-stage]').forEach((s) => s.hidden = Number(s.dataset.stage) !== stage);
   renderFooter();
 }
-function go(n) { stage = n; renderStages(); if (n === 2) renderViewer(); }
+function go(n) { stage = n; renderStages(); if (n === 2) renderViewer(); if (n === 3) openPins(); }
 
 // ── data ──
 mountIntake($('intake'), { projectId, stepCode: 'WF4', showLocation: true, onData: (d) => { intake = d; buildPlans(); } });
@@ -450,6 +467,209 @@ async function removeType(id) {
   }
 }
 
+
+// ── 3 · TR pins ──
+// Pins are stored as fractions of the FULL rendered page, top-left origin —
+// the frame the old screen used and the batch measures cable from.
+let trs = [], pins = [], pinsLoaded = false, autoTried = false;
+let pinSel = null;   // { name, tr_id, page_id, x, y, stub, pinId }
+let pinVp = null, pinPage = null;
+const pinFor = (name) => pins.find((p) => p.name === name && p.pin_kind !== 'exit' && p.source !== 'off_sheet');
+async function loadPins() {
+  const [w2, pl] = await Promise.all([
+    api('/api/wf/wf2?project_id=' + projectId).catch(() => ({ trs: [] })),
+    api('/api/wf/wf4/pins?project_id=' + projectId),
+  ]);
+  trs = (w2.trs || []).slice().sort((a, b) => String(a.tr_number).localeCompare(String(b.tr_number), undefined, { numeric: true }));
+  pins = pl || [];
+  pinsLoaded = true;
+}
+async function openPins() {
+  try {
+    if (!pinsLoaded) await loadPins();
+    $('pins-intro').textContent = trs.length
+      ? 'Every device routes to a TR. Each TR from the WF2 list is found on the plans by its room label, and its pin is placed there. Move a pin if it is off.'
+      : 'No WF2 schedule yet — type each TR name, then place its pin on the plan.';
+    renderPins();
+    // First visit with a WF2 list and no pins yet: find them automatically (free — PDF text only).
+    if (!autoTried && trs.length && !pins.length && plans.length) { autoTried = true; await findTrs(); }
+    if (!pinSel) { const first = rowsForPins()[0]; if (first) selectPin(first.name); }
+  } catch (e) { status(e.message, 'err'); }
+}
+function rowsForPins() {
+  const names = new Map();
+  for (const t of trs) names.set(t.tr_number, { name: t.tr_number, tr_id: t.id, level: t.level, building: t.building, wf2: true });
+  for (const p of pins) {
+    if (p.pin_kind === 'exit' || p.source === 'off_sheet') continue;
+    if (![...names.keys()].some((n) => n === p.name)) names.set(p.name, { name: p.name, tr_id: p.tr_id ?? null, wf2: false });
+  }
+  for (const n of typedTrs) if (!names.has(n)) names.set(n, { name: n, tr_id: null, wf2: false });
+  return [...names.values()];
+}
+const typedTrs = new Set();
+function sheetName(pageId) { const p = plans.find((x) => x.id === pageId); return p ? (p.sheet_number || 'page ' + p.page_number) : 'sheet ' + pageId; }
+function renderPins() {
+  const rows = rowsForPins();
+  if (!rows.length) { $('pins-list').innerHTML = '<div class="row muted">No TRs yet. Confirm WF2, or type a TR name above.</div>'; renderFooter(); return; }
+  $('pins-list').innerHTML = rows.map((r) => {
+    const pin = pinFor(r.name);
+    const onPlan = pin && pin.page_id && plans.some((p) => p.id === pin.page_id);
+    const where = pin ? (onPlan ? `${esc(sheetName(pin.page_id))} · on sheet` : 'sheet not in WF4') : 'not on any loaded plan';
+    const pinTxt = !pin ? '—' : pin.source === 'user_pin' ? 'placed by hand' : `at room label (${pin.x_norm?.toFixed(3)}, ${pin.y_norm?.toFixed(3)})`;
+    const [st, cls] = !pin ? ['needs a sheet', 'in_review'] : pin.source === 'user_pin' ? ['edited', 'stale'] : ['placed', 'confirmed'];
+    const sel = pinSel && pinSel.name === r.name;
+    return `<div class="row" style="font-size: 13px; padding-top: 10px; padding-bottom: 10px;${sel ? ' background: var(--green-bg);' : ''}">
+      <span style="width: 110px; font-weight: 700">${esc(r.name)}${r.wf2 ? '' : ' <span class="small muted" title="Typed here — not in the WF2 schedule">typed</span>'}</span>
+      <span style="width: 150px">${where}</span>
+      <span style="flex-grow: 1; color: var(--muted)">${pinTxt}${pin && Number(pin.stub_ft) ? ` · +${Number(pin.stub_ft)} ft stub` : ''}</span>
+      <span style="width: 120px"><span class="pill ${cls}">${st}</span></span>
+      <span style="width: 90px; text-align: right"><button type="button" class="btn blue small" data-pin="${esc(r.name)}">${pin ? 'Move pin' : 'Place'}</button></span>
+    </div>`;
+  }).join('');
+  document.querySelectorAll('[data-pin]').forEach((b) => b.onclick = () => selectPin(b.dataset.pin));
+  renderFooter();
+}
+function selectPin(name) {
+  const r = rowsForPins().find((x) => x.name === name); if (!r) return;
+  const pin = pinFor(name);
+  const pageId = pin?.page_id && plans.some((p) => p.id === pin.page_id) ? pin.page_id : (pinSel?.page_id || current?.id || plans[0]?.id);
+  pinSel = { name, tr_id: r.tr_id, page_id: pageId, x: pin?.x_norm ?? null, y: pin?.y_norm ?? null, stub: Number(pin?.stub_ft) || 0, pinId: pin?.id ?? null, dirty: false };
+  renderPins(); renderPinEdit(); renderPinViewer();
+}
+function renderPinEdit() {
+  if (!pinSel) { $('pin-edit').innerHTML = '<div class="muted small">Pick a TR on the left.</div>'; return; }
+  $('pin-edit').innerHTML = `<div style="display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; width: 100%">
+    <div style="font-weight: 700; font-size: 15px; align-self: center; min-width: 90px">${esc(pinSel.name)}</div>
+    <label class="lbl" style="letter-spacing: 0">Sheet<select class="field" id="pin-sheet" style="padding: 6px 8px; font-size: 13px">${plans.map((p) => `<option value="${p.id}"${p.id === pinSel.page_id ? ' selected' : ''}>${esc(p.sheet_number || 'page ' + p.page_number)}${p.level ? ' · ' + esc(p.level) : ''}</option>`).join('')}</select></label>
+    <label class="lbl" style="letter-spacing: 0" title="Fixed extra cable to the TR, e.g. a jumper or a run off this sheet">Stub ft<input class="field" id="pin-stub" type="number" min="0" step="1" style="padding: 6px 8px; font-size: 13px; width: 80px" value="${pinSel.stub}"></label>
+    <span class="small muted" style="align-self: center; flex-grow: 1">${pinSel.x == null ? 'Click the drawing to place it.' : `(${pinSel.x.toFixed(3)}, ${pinSel.y.toFixed(3)})`}</span>
+    <button type="button" class="btn green small" id="pin-save"${pinSel.x == null ? ' disabled' : ''}>Save pin</button>
+    ${pinSel.pinId ? '<button type="button" class="btn muted small" id="pin-clear">Remove pin</button>' : ''}
+  </div>`;
+  $('pin-sheet').onchange = () => { pinSel.page_id = Number($('pin-sheet').value); pinSel.x = pinSel.y = null; pinSel.dirty = true; renderPinEdit(); renderPinViewer(); };
+  $('pin-stub').oninput = (e) => { pinSel.stub = Math.max(0, Number(e.target.value) || 0); pinSel.dirty = true; };
+  $('pin-save').onclick = savePin;
+  if ($('pin-clear')) $('pin-clear').onclick = clearPin;
+}
+let pinToken = 0, pinTask = null;
+async function renderPinViewer() {
+  if (!pinSel) return;
+  const p = plans.find((x) => x.id === pinSel.page_id); if (!p) return;
+  const token = ++pinToken;
+  if (pinTask) { pinTask.cancel(); pinTask = null; }
+  try {
+    const doc = await loadPdf(p.document_id);
+    const page = await doc.getPage(p.page_number);
+    if (token !== pinToken) return;
+    const base = page.getViewport({ scale: 1 });
+    pinVp = page.getViewport({ scale: ($('pin-viewer').clientWidth - 2) / base.width * 1.6 });
+    pinPage = p;
+    const c = $('pin-pdf'), o = $('pin-ovl');
+    c.width = o.width = Math.floor(pinVp.width); c.height = o.height = Math.floor(pinVp.height);
+    pinTask = page.render({ canvasContext: c.getContext('2d'), viewport: pinVp });
+    await pinTask.promise; pinTask = null;
+    if (token !== pinToken) return;
+    drawPins(true);
+  } catch (e) { if (e?.name !== 'RenderingCancelledException') status('Could not show the drawing: ' + e.message, 'err'); }
+}
+function drawPins(scrollTo = false) {
+  const o = $('pin-ovl'), g = o.getContext('2d');
+  g.clearRect(0, 0, o.width, o.height);
+  const dot = (x, y, color, label, big) => {
+    const px = x * o.width, py = y * o.height;
+    g.fillStyle = color; g.beginPath(); g.arc(px, py, big ? 9 : 6, 0, Math.PI * 2); g.fill();
+    g.font = `700 ${big ? 14 : 12}px "JetBrains Mono", monospace`; g.lineWidth = 3; g.strokeStyle = 'rgba(255,255,255,.9)';
+    g.strokeText(label, px + 12, py - 8); g.fillStyle = color; g.fillText(label, px + 12, py - 8);
+  };
+  for (const p of pins) if (p.page_id === pinPage?.id && p.x_norm != null && p.name !== pinSel?.name) dot(p.x_norm, p.y_norm, '#2a6ab0', p.name, false);
+  if (pinSel && pinSel.x != null && pinSel.page_id === pinPage?.id) {
+    dot(pinSel.x, pinSel.y, '#0b7a2a', pinSel.name, true);
+    if (scrollTo) { const v = $('pin-viewer'); v.scrollTo({ left: pinSel.x * o.width - v.clientWidth / 2, top: pinSel.y * o.height - v.clientHeight / 2 }); }
+  }
+}
+$('pin-ovl').addEventListener('click', (e) => {
+  if (!pinSel) return;
+  const r = $('pin-ovl').getBoundingClientRect();
+  pinSel.x = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+  pinSel.y = Math.min(1, Math.max(0, (e.clientY - r.top) / r.height));
+  pinSel.dirty = true;
+  renderPinEdit(); drawPins();
+});
+async function savePin() {
+  const s = pinSel; if (!s || s.x == null) return;
+  $('pin-save').disabled = true;
+  try {
+    await post('/api/wf/wf4/pins', { project_id: Number(projectId), page_id: s.page_id, name: s.name, tr_id: s.tr_id, source: 'user_pin', x_norm: s.x, y_norm: s.y, stub_ft: s.stub });
+    pins = await api('/api/wf/wf4/pins?project_id=' + projectId);
+    status(`Pin saved for ${s.name}.`, 'ok');
+    selectPin(s.name);
+  } catch (e) { status(e.message, 'err'); if ($('pin-save')) $('pin-save').disabled = false; }
+}
+async function clearPin() {
+  const s = pinSel; if (!s?.pinId) return;
+  if (!confirm(`Remove the pin for ${s.name}?`)) return;
+  try {
+    await api('/api/wf/wf4/pins?id=' + s.pinId, { method: 'DELETE' });
+    pins = await api('/api/wf/wf4/pins?project_id=' + projectId);
+    status(`Pin removed for ${s.name}.`, 'ok'); selectPin(s.name);
+  } catch (e) { status(e.message, 'err'); }
+}
+$('pins-add').onclick = () => {
+  const n = $('pins-new').value.trim().toUpperCase();
+  if (!n) return;
+  typedTrs.add(n); $('pins-new').value = '';
+  renderPins(); selectPin(n);
+};
+
+// Find each WF2 TR on the plans from the PDF text (free). A token matches a TR
+// the same way WF2 links names (exact, then punctuation-stripped, then the
+// "-1" instance suffix). The biggest matching text on the plans wins — room
+// tags are larger than notes. Only TRs without a pin are placed; pins someone
+// moved by hand are never touched.
+async function findTrs() {
+  if (!trs.length) { status('No WF2 TR list to search for — type TR names instead.', 'err'); return; }
+  $('pins-find').disabled = true;
+  const best = new Map();   // tr_number -> { page_id, x, y, h }
+  try {
+    let i = 0;
+    for (const p of plans) {
+      status(`Reading ${p.sheet_number || 'page ' + p.page_number} (${++i} of ${plans.length})…`);
+      const doc = await loadPdf(p.document_id);
+      const page = await doc.getPage(p.page_number);
+      const v1 = page.getViewport({ scale: 1 });
+      const tc = await page.getTextContent();
+      for (const it of tc.items) {
+        for (const tok of String(it.str || '').split(/\s+/)) {
+          // TR-like tokens only: has a digit, and a letter or a hyphen (A502-1, EB51A, 110-12)
+          if (tok.length < 3 || !/\d/.test(tok) || !(/[A-Z]/i.test(tok) || tok.includes('-'))) continue;
+          const m = resolveTrMatch(tok.replace(/[.,;:()]+$/, ''), trs);
+          if (!m.match) continue;
+          const h = Math.hypot(it.transform[2], it.transform[3]);
+          const [px, py] = v1.convertToViewportPoint(it.transform[4] + (it.width || 0) / 2, it.transform[5] + h / 2);
+          const prev = best.get(m.match);
+          if (!prev || h > prev.h) best.set(m.match, { page_id: p.id, x: px / v1.width, y: py / v1.height, h });
+        }
+      }
+      page.cleanup();
+    }
+    let placed = 0;
+    for (const t of trs) {
+      const b = best.get(t.tr_number);
+      if (!b || pinFor(t.tr_number)) continue;
+      await post('/api/wf/wf4/pins', { project_id: Number(projectId), page_id: b.page_id, name: t.tr_number, tr_id: t.id, source: 'auto',
+        x_norm: Math.min(1, Math.max(0, b.x)), y_norm: Math.min(1, Math.max(0, b.y)), stub_ft: 0 });
+      placed++;
+    }
+    pins = await api('/api/wf/wf4/pins?project_id=' + projectId);
+    const missing = trs.filter((t) => !pinFor(t.tr_number)).length;
+    status(`${placed} pin${placed === 1 ? '' : 's'} placed from the plans${missing ? ` · ${missing} TR${missing === 1 ? '' : 's'} not found on any loaded plan` : ''}.`, 'ok');
+    renderPins();
+    if (pinSel) selectPin(pinSel.name);
+  } catch (e) { status(e.message, 'err'); }
+  $('pins-find').disabled = false;
+}
+$('pins-find').onclick = findTrs;
+
 // ── step status + footer ──
 let stepInfo = null;
 function renderFooter() {
@@ -458,7 +678,8 @@ function renderFooter() {
   const msgs = {
     1: `${plans.length} plan sheet${plans.length === 1 ? '' : 's'} indexed`,
     2: `${types.length} device type${types.length === 1 ? '' : 's'} in the library${unverified ? ` · ${unverified} to re-check` : ''}`,
-    3: 'TR pins — next build',
+    3: (() => { const rows = pinsLoaded ? rowsForPins() : []; const placed = rows.filter((r) => pinFor(r.name)).length; const missing = rows.length - placed;
+               return pinsLoaded ? `${placed} TR pin${placed === 1 ? '' : 's'} placed${missing ? ` · ${missing} TR${missing === 1 ? '' : 's'} with no sheet` : ''}` : 'TR pins'; })(),
     4: 'Count & route — layout to confirm',
     5: 'Review — layout to confirm',
   };
