@@ -11,7 +11,7 @@ export const STEPS = [
   { code: 'WF1', name: 'Legend & notes', roles: ['legend', 'notes'], page: 'wf1.html' },
   { code: 'WF2', name: 'Schedule', roles: ['schedule'], page: 'wf2.html' },
   { code: 'WF3', name: 'OSP site fiber', roles: ['osp_route', 'osp_overview'], page: 'wf3.html' },
-  { code: 'WF4', name: 'Floor plans', roles: ['plan', 'key_plan'], page: 'wf-soon.html' },
+  { code: 'WF4', name: 'Floor plans', roles: ['plan', 'key_plan'], page: 'wf4.html' },
   { code: 'WF5', name: 'TR rooms', roles: ['tr_room'], page: 'wf-soon.html' },
   { code: 'WF6', name: 'Rack & details', roles: ['rack', 'detail'], page: 'wf-soon.html' },
   { code: 'WF7', name: 'Riser', roles: ['riser'], page: 'wf-soon.html' },

@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WF4 · Floor plans — Take-off</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="auth.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
+<link rel="stylesheet" href="wf.css">
+<style>
+.wf-page { max-width: 1500px; }
+.stages { display: flex; gap: 8px; flex-wrap: wrap; }
+.stage { font-family: inherit; font-size: 14px; padding: 10px 16px; border-radius: 3px; cursor: pointer; border: 1px solid var(--line); background: var(--bg); color: var(--muted); }
+.stage.done { background: var(--panel); color: var(--text); }
+.stage[aria-current="step"] { border-color: var(--green-bd); background: var(--green-bg); color: var(--green); font-weight: 700; }
+.split { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 20px; }
+.viewer { position: relative; overflow: auto; border: 1px solid var(--line); border-radius: 4px; background: #f4f2ec; height: 640px; }
+.viewer canvas { position: absolute; left: 0; top: 0; }
+#ovl { cursor: crosshair; }
+.chip { font-family: inherit; font-size: 13px; padding: 8px 12px; border-radius: 3px; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; }
+.chip[aria-pressed="true"] { border-color: var(--green-bd); background: var(--green-bg); color: var(--green); font-weight: 700; }
+.card { border: 1px solid var(--line); background: var(--panel); border-radius: 4px; padding: 16px 18px; display: flex; gap: 16px; }
+.card.active { border-color: var(--green-bd); background: #111a14; }
+.crop { width: 96px; height: 72px; flex-shrink: 0; border: 1px dashed #3a443f; border-radius: 3px; object-fit: contain; background: #f4f2ec; }
+.thumb { width: 40px; height: 30px; flex-shrink: 0; border: 1px solid #3a443f; border-radius: 3px; object-fit: contain; background: #f4f2ec; }
+.samples { display: flex; gap: 6px; }
+.samples span { width: 30px; height: 30px; border: 1px solid var(--green-bd); border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 11px; color: var(--green); }
+.small { font-size: 12px; }
+.lib-row .mode { font-size: 12px; color: var(--muted); }
+.placeholder { padding: 28px 24px; }
+@media (max-width: 1000px) { .split { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<nav id="to-nav"></nav>
+<script src="nav.js"></script>
+
+<main class="wf-page">
+  <div class="wf-head">
+    <div>
+      <a class="wf-crumb" id="crumb" href="wf-projects.html">← Project</a>
+      <h1 class="wf-title"><span class="code">WF4</span> · Floor plans</h1>
+      <div class="wf-sub" id="sub">Device counts and cable lengths from the plan sheets.</div>
+    </div>
+    <span class="pill" id="step-pill">…</span>
+  </div>
+
+  <nav class="stages" aria-label="WF4 stages" id="stages"></nav>
+
+  <!-- 1 · Sheets -->
+  <div data-stage="1" hidden>
+    <div id="intake"></div>
+  </div>
+
+  <!-- 2 · Device library -->
+  <div data-stage="2" hidden>
+    <div class="muted" style="margin-bottom: 14px">Drag a box around a device symbol on any plan. The label printed beside it names it; the legend suggests the full name. A symbol with no label needs 3 marked instances, then its matches are checked on every plan.</div>
+    <div id="lib-empty" class="banner orange" hidden><div><div class="kicker">NO PLAN SHEETS YET</div><div class="msg">Add the floor plan PDFs under 1 Sheets first.</div></div></div>
+    <div class="split" id="lib-work" hidden>
+      <section>
+        <div class="row" style="padding: 0 0 10px; border: none; gap: 8px; flex-wrap: wrap">
+          <label class="small muted" for="page-sel">Plan</label>
+          <select id="page-sel" class="field" style="padding: 6px 8px; font-size: 13px; min-width: 260px"></select>
+          <span style="flex-grow: 1"></span>
+          <button type="button" class="btn muted small" data-zoom="fit">Fit</button>
+          <button type="button" class="btn muted small" data-zoom="1">100%</button>
+          <button type="button" class="btn muted small" data-zoom="2">200%</button>
+        </div>
+        <div class="viewer" id="viewer"><canvas id="pdf"></canvas><canvas id="ovl"></canvas></div>
+        <div class="small muted" style="margin-top: 6px" id="legend-note"></div>
+      </section>
+
+      <section style="display: flex; flex-direction: column; gap: 14px; min-width: 0">
+        <div id="card"></div>
+        <div class="panel">
+          <div class="row head" id="lib-head">Library</div>
+          <div id="lib-list"></div>
+        </div>
+        <div class="small muted">Types copied from another project are marked <b>re-check</b>: they are not counted until confirmed on this drawing set.</div>
+      </section>
+    </div>
+  </div>
+
+  <!-- 3 · TR pins -->
+  <div data-stage="3" hidden>
+    <section class="panel placeholder"><div class="muted">TR pins — next build. Each TR is picked from the WF2 list; its pin is placed at the room centre and can be moved.</div></section>
+  </div>
+
+  <!-- 4 · Count & route -->
+  <div data-stage="4" hidden>
+    <section class="panel placeholder"><div class="muted">Count &amp; route — layout to confirm before it is built (no approval step; cost is shown only on the admin page).</div></section>
+  </div>
+
+  <!-- 5 · Review -->
+  <div data-stage="5" hidden>
+    <section class="panel placeholder"><div class="muted">Review — layout to confirm before it is built (routing mode and one multiplier per mode replace the mockup's routed/fallback boxes).</div></section>
+  </div>
+
+  <section class="panel">
+    <div class="row">
+      <span id="footer-msg" style="flex-grow: 1"></span>
+      <button type="button" class="btn muted" id="reopen" hidden>Reopen</button>
+      <button type="button" class="btn green" id="confirm" style="font-weight: 700">Confirm floor plans</button>
+    </div>
+  </section>
+  <div class="status-line" id="status" role="status"></div>
+</main>
+
+<script type="module">
+import { mountIntake, api, post } from './lib/wf-intake-ui.js';
+import { contentFrame, extractFilledSubpaths, filterByFill, groupSubpaths, polyArea } from './lib/geometry.js';
+
+const projectId = new URLSearchParams(location.search).get('project_id');
+if (!projectId) location.replace('wf-projects.html');
+try { sessionStorage.setItem('to_project_id', projectId); } catch {}
+document.getElementById('crumb').href = 'wf-project.html?project_id=' + projectId;
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const status = (m, c = '') => { $('status').className = 'status-line ' + c; $('status').textContent = m; };
+
+const CROP_SCALE = 2.5;          // crops are always rendered at this scale (same as the old tool), whatever the zoom
+const SYMBOL_MIN_SAMPLES = 3;
+const STAGES = ['Sheets', 'Device library', 'TR pins', 'Count & route', 'Review'];
+
+let stage = 2, intake = null, allPages = [], plans = [], legendImg = null, legendLabel = '';
+let summary = null, current = null, zoom = 'fit', vp = null;
+let sel = null, busy = false, analysis = null, cropB64 = null, symbol = null;
+let armed = null; // { id, cascade } — two-click delete
+const pdfCache = new Map(), geomCache = new Map();
+
+// ── stages ──
+function renderStages() {
+  $('stages').innerHTML = STAGES.map((n, i) => `<button type="button" class="stage${i + 1 < stage ? ' done' : ''}" data-go="${i + 1}"${i + 1 === stage ? ' aria-current="step"' : ''}>${i + 1} ${esc(n)}</button>`).join('');
+  document.querySelectorAll('[data-go]').forEach((b) => b.onclick = () => go(Number(b.dataset.go)));
+  document.querySelectorAll('[data-stage]').forEach((s) => s.hidden = Number(s.dataset.stage) !== stage);
+  renderFooter();
+}
+function go(n) { stage = n; renderStages(); if (n === 2) renderViewer(); }
+
+// ── data ──
+mountIntake($('intake'), { projectId, stepCode: 'WF4', showLocation: true, onData: (d) => { intake = d; buildPlans(); } });
+
+async function loadAll() {
+  const [docs, sum] = await Promise.all([
+    api('/api/wf/documents?project_id=' + projectId),
+    api('/api/wf/wf4/summary?project_id=' + projectId),
+  ]);
+  allPages = docs.pages || [];
+  summary = sum;
+  await loadLegend();
+  buildPlans();
+  renderLibrary();
+}
+const isCurrent = (p) => !p.is_duplicate && p.revision && p.revision.status === 'accepted' && p.revision.is_current;
+function buildPlans() {
+  const src = intake?.pages?.length ? intake.pages : allPages;
+  plans = src.filter((p) => p.role === 'plan' && isCurrent(p))
+    .sort((a, b) => String(a.sheet_number).localeCompare(String(b.sheet_number), undefined, { numeric: true }));
+  $('lib-empty').hidden = plans.length > 0;
+  $('lib-work').hidden = plans.length === 0;
+  $('sub').textContent = plans.length ? `${plans.length} plan sheet${plans.length === 1 ? '' : 's'}` : 'Device counts and cable lengths from the plan sheets.';
+  $('page-sel').innerHTML = plans.map((p) => `<option value="${p.id}">${esc(p.sheet_number || 'page ' + p.page_number)}${p.level ? ' · ' + esc(p.level) : ''}${p.title_text ? ' · ' + esc(p.title_text) : ''}</option>`).join('');
+  if (current && !plans.some((p) => p.id === current.id)) current = null;
+  if (!current && plans.length) current = plans[0];
+  if (current) $('page-sel').value = String(current.id);
+  renderStages();
+  if (stage === 2) renderViewer();
+}
+$('page-sel').onchange = () => { current = plans.find((p) => p.id === Number($('page-sel').value)); sel = null; renderViewer(); };
+document.querySelectorAll('[data-zoom]').forEach((b) => b.onclick = () => { zoom = b.dataset.zoom; renderViewer(); });
+
+async function loadPdf(docId) {
+  if (!pdfCache.has(docId)) {
+    const { url } = await post('/api/wf/documents', { action: 'file_url', document_id: docId });
+    pdfCache.set(docId, await pdfjsLib.getDocument(url).promise);
+  }
+  return pdfCache.get(docId);
+}
+
+// Legend: the first current legend page from WF1 (it only suggests names).
+async function loadLegend() {
+  const leg = allPages.filter((p) => p.role === 'legend' && isCurrent(p))
+    .sort((a, b) => String(a.sheet_number).localeCompare(String(b.sheet_number), undefined, { numeric: true }))[0];
+  if (!leg) { legendImg = null; $('legend-note').textContent = 'No legend sheet in WF1 — names come from the label and the crop only.'; return; }
+  try {
+    const doc = await loadPdf(leg.document_id);
+    const page = await doc.getPage(leg.page_number);
+    const v = page.getViewport({ scale: 1.4 });   // same resolution as the old tool
+    const c = document.createElement('canvas'); c.width = v.width; c.height = v.height;
+    await page.render({ canvasContext: c.getContext('2d'), viewport: v }).promise;
+    legendImg = c.toDataURL('image/jpeg', 0.82).split(',')[1];
+    legendLabel = leg.sheet_number || 'legend';
+    $('legend-note').textContent = `Legend ${legendLabel} suggests names. Drag on the plan to crop a symbol.`;
+  } catch (e) { legendImg = null; $('legend-note').textContent = 'Could not read the legend sheet: ' + e.message; }
+}
+
+// ── viewer ──
+let renderToken = 0, renderTask = null;
+async function renderViewer() {
+  const p = current; if (!p || stage !== 2) return;
+  const token = ++renderToken;
+  if (renderTask) { renderTask.cancel(); renderTask = null; }
+  try {
+    const doc = await loadPdf(p.document_id);
+    const page = await doc.getPage(p.page_number);
+    if (token !== renderToken) return;
+    const base = page.getViewport({ scale: 1 });
+    const z = zoom === 'fit' ? ($('viewer').clientWidth - 2) / base.width : Number(zoom);
+    vp = page.getViewport({ scale: z });
+    const c = $('pdf'), o = $('ovl');
+    c.width = o.width = Math.floor(vp.width); c.height = o.height = Math.floor(vp.height);
+    renderTask = page.render({ canvasContext: c.getContext('2d'), viewport: vp });
+    await renderTask.promise; renderTask = null;
+    if (token !== renderToken) return;
+    drawOverlay();
+  } catch (e) {
+    if (e && e.name === 'RenderingCancelledException') return;
+    status('Could not show the drawing: ' + e.message, 'err');
+  }
+}
+function drawOverlay() {
+  const o = $('ovl'), g = o.getContext('2d');
+  g.clearRect(0, 0, o.width, o.height);
+  // marked instances of a symbol being collected, on this page
+  if (symbol) {
+    g.strokeStyle = '#0b7a2a'; g.lineWidth = 2;
+    symbol.samples.forEach((s, i) => {
+      if (s.page_id !== current.id) return;
+      const [x, y] = vp.convertToViewportPoint(s.pdfX, s.pdfY);
+      g.beginPath(); g.arc(x, y, 14, 0, Math.PI * 2); g.stroke();
+      g.fillStyle = '#0b7a2a'; g.font = '700 12px "JetBrains Mono", monospace'; g.fillText(String(i + 1), x + 16, y - 10);
+    });
+  }
+  if (sel) {
+    const x = Math.min(sel.x0, sel.x1), y = Math.min(sel.y0, sel.y1), w = Math.abs(sel.x1 - sel.x0), h = Math.abs(sel.y1 - sel.y0);
+    g.fillStyle = 'rgba(126,224,138,.15)'; g.fillRect(x, y, w, h);
+    g.strokeStyle = '#0b7a2a'; g.lineWidth = 2; g.setLineDash([6, 4]); g.strokeRect(x, y, w, h); g.setLineDash([]);
+  }
+}
+const pos = (e) => { const r = $('ovl').getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+$('ovl').addEventListener('pointerdown', (e) => { if (busy) return; const p = pos(e); sel = { x0: p.x, y0: p.y, x1: p.x, y1: p.y, active: true }; $('ovl').setPointerCapture(e.pointerId); });
+$('ovl').addEventListener('pointermove', (e) => { if (!sel?.active) return; const p = pos(e); sel.x1 = p.x; sel.y1 = p.y; drawOverlay(); });
+$('ovl').addEventListener('pointerup', () => {
+  if (!sel?.active) return;
+  sel.active = false;
+  if (Math.abs(sel.x1 - sel.x0) < 8 || Math.abs(sel.y1 - sel.y0) < 8) { sel = null; drawOverlay(); return; }
+  if (symbol) { addSample(); return; }   // another instance of the symbol being collected — no model call
+  analyze();
+});
+
+// Crop the selection from the PDF at CROP_SCALE (independent of zoom, so the
+// same symbol always produces the same image — which lets reuse work).
+async function cropSelection() {
+  const doc = await loadPdf(current.document_id);
+  const page = await doc.getPage(current.page_number);
+  const k = CROP_SCALE / vp.scale, pad = 8;
+  const x = Math.min(sel.x0, sel.x1) * k - pad, y = Math.min(sel.y0, sel.y1) * k - pad;
+  const w = Math.abs(sel.x1 - sel.x0) * k + pad * 2, h = Math.abs(sel.y1 - sel.y0) * k + pad * 2;
+  const cvp = page.getViewport({ scale: CROP_SCALE, offsetX: -Math.max(0, x), offsetY: -Math.max(0, y) });
+  const c = document.createElement('canvas'); c.width = Math.round(w); c.height = Math.round(h);
+  const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+  await page.render({ canvasContext: g, viewport: cvp }).promise;
+  return c.toDataURL('image/jpeg', 0.92).split(',')[1];
+}
+function selCenterPdf() {
+  const x = (sel.x0 + sel.x1) / 2, y = (sel.y0 + sel.y1) / 2;
+  const [pdfX, pdfY] = vp.convertToPdfPoint(x, y);
+  return { pdfX, pdfY };
+}
+
+// ── analyze a crop ──
+async function analyze() {
+  busy = true;
+  try {
+    cropB64 = await cropSelection();
+    renderCard('analyzing');
+    analysis = await post('/api/wf/wf4/discover', { action: 'analyze_crop', project_id: Number(projectId), page_id: current.id, crop_image: cropB64, legend_image: legendImg });
+    // No label beside the glyph -> a shape-only type: collect 3 instances (same rule as the old tool).
+    if (!analysis.nearby_text || !analysis.nearby_text.length) {
+      const name = analysis.legend_name || analysis.device_guess || 'Unnamed symbol';
+      symbol = { name, description: analysis.legend_description || analysis.visual_description || analysis.match_reason || '', crop: cropB64, samples: [{ page_id: current.id, ...selCenterPdf() }] };
+      sel = null; drawOverlay(); renderCard('symbol');
+    } else renderCard('label');
+  } catch (e) { renderCard('error', e.message); }
+  busy = false;
+}
+
+function renderCard(kind, msg = '') {
+  const crop = cropB64 ? `<img class="crop" alt="Cropped symbol" src="data:image/jpeg;base64,${cropB64}">` : '<div class="crop"></div>';
+  if (kind === 'hint' || (!cropB64 && !symbol)) {
+    $('card').innerHTML = `<div class="card"><div class="crop" style="display: flex; align-items: center; justify-content: center; font-size: 10px; color: var(--muted)">crop</div><div class="muted small" style="align-self: center">Drag a box around one device symbol on the plan.</div></div>`;
+    return;
+  }
+  if (kind === 'analyzing') { $('card').innerHTML = `<div class="card active">${crop}<div class="muted" style="align-self: center">Reading the symbol…</div></div>`; return; }
+  if (kind === 'error') { $('card').innerHTML = `<div class="card">${crop}<div style="display: flex; flex-direction: column; gap: 8px"><div class="small" style="color: var(--red)">Could not read this crop: ${esc(msg)}</div><div><button type="button" class="btn muted small" id="c-discard">Discard</button></div></div></div>`; $('c-discard').onclick = discard; return; }
+  if (kind === 'label') {
+    const a = analysis, name = a.legend_name || a.device_guess || '';
+    const conf = a.legend_name ? ({ high: 'legend match', medium: 'legend match — check it', low: 'weak legend match — check it' }[a.match_confidence] || 'legend match') : (legendImg ? 'no legend match' : 'no legend loaded');
+    $('card').innerHTML = `<div class="card active">${crop}<div style="display: flex; flex-direction: column; gap: 8px; flex-grow: 1">
+      <div class="small muted">Label found: <b style="color: var(--text)">${esc(a.nearby_text.join(', '))}</b> · ${esc(conf)}${a.reused ? ' · seen before' : ''}</div>
+      <label class="lbl" style="letter-spacing: 0">Name<input class="field" id="c-name" style="padding: 8px 10px" value="${esc(name)}"></label>
+      <div style="display: flex; gap: 8px"><button type="button" class="btn green" id="c-add">Add to library</button><button type="button" class="btn muted" id="c-discard">Discard</button></div></div></div>`;
+    $('c-add').onclick = addLabelType; $('c-discard').onclick = discard;
+    return;
+  }
+  if (kind === 'symbol' || kind === 'validated') {
+    const n = symbol.samples.length, need = Math.max(0, SYMBOL_MIN_SAMPLES - n);
+    const v = symbol.validation;
+    $('card').innerHTML = `<div class="card active"><img class="crop" alt="Cropped symbol" src="data:image/jpeg;base64,${symbol.crop}"><div style="display: flex; flex-direction: column; gap: 8px; flex-grow: 1">
+      <div class="small muted">No label beside this symbol — it is found by shape.</div>
+      <label class="lbl" style="letter-spacing: 0">Name<input class="field" id="c-name" style="padding: 8px 10px" value="${esc(symbol.name)}"></label>
+      <div class="samples">${symbol.samples.map((_, i) => `<span>${i + 1}</span>`).join('')}</div>
+      <div class="small">${v ? `Matches <b>${v.total}</b> across ${v.perPage.length} plan${v.perPage.length === 1 ? '' : 's'}: ${esc(v.perPage.map((p) => p.sheet + ' ' + p.count).join(', '))}. Check that this is right before saving.`
+        : need ? `Mark ${need} more instance${need === 1 ? '' : 's'} of this same symbol — on this plan or another.` : 'Enough marked. Check matches, or mark more for a stronger signature.'}</div>
+      <div style="display: flex; gap: 8px; flex-wrap: wrap">
+        ${v ? '<button type="button" class="btn green" id="c-save">Add to library</button>' : `<button type="button" class="btn blue" id="c-derive"${n < SYMBOL_MIN_SAMPLES ? ' disabled' : ''}>Check matches</button>`}
+        <button type="button" class="btn muted" id="c-cancel">Cancel</button></div></div></div>`;
+    $('c-name').oninput = (e) => { symbol.name = e.target.value; };
+    if ($('c-derive')) $('c-derive').onclick = deriveAndValidate;
+    if ($('c-save')) $('c-save').onclick = saveSymbolType;
+    $('c-cancel').onclick = () => { symbol = null; discard(); };
+  }
+}
+function discard() { cropB64 = null; analysis = null; sel = null; drawOverlay(); renderCard('hint'); }
+
+async function addLabelType() {
+  const name = $('c-name').value.trim();
+  if (!name) { status('Enter a name.', 'err'); return; }
+  const a = analysis, crop = cropB64;
+  $('c-add').disabled = true;
+  try {
+    await post('/api/wf/wf4/discover', {
+      action: 'build_device', project_id: Number(projectId),
+      legend_entry: { name, short_description: a.device_guess || '', legend_description: a.legend_description || '', text_anchors: a.nearby_text || [], category: 'telecom' },
+      all_instances: [{ x_frac: 0.5, y_frac_full_page: 0.5, nearby_text: a.nearby_text || [], visual_notes: a.visual_description || '' }],
+      drawing_crop_base64: crop, legend_crop_base64: null,
+    });
+    status(`${name} added to the library.`, 'ok');
+    discard(); await refreshLibrary();
+  } catch (e) { status(e.message, 'err'); if ($('c-add')) $('c-add').disabled = false; }
+}
+
+// ── shape-only types: 3 samples -> vector signature -> checked on every plan ──
+function addSample() {
+  symbol.samples.push({ page_id: current.id, ...selCenterPdf() });
+  symbol.validation = null;
+  sel = null; drawOverlay(); renderCard('symbol');
+}
+async function pageGeometry(p) {
+  if (geomCache.has(p.id)) return geomCache.get(p.id);
+  const doc = await loadPdf(p.document_id);
+  const page = await doc.getPage(p.page_number);
+  const v1 = page.getViewport({ scale: 1 });
+  const tc = await page.getTextContent();
+  const frame = contentFrame(tc.items.map((it) => ({ cx: it.transform[4] + (it.width || 0) / 2, cy: it.transform[5] + (it.height || 0) / 2 })), v1.width, v1.height);
+  const raw = await extractFilledSubpaths(page, pdfjsLib.OPS);
+  const out = { frame, normed: raw.map((s) => ({ ...s, points: s.points.map(([x, y]) => frame.norm(x, y)) })) };
+  geomCache.set(p.id, out);
+  return out;
+}
+// Same derivation and validation as the old Discover tool (discover.html).
+async function deriveAndValidate() {
+  $('c-derive').disabled = true;
+  status('Reading vector geometry…');
+  try {
+    const found = [];
+    for (const s of symbol.samples) {
+      const p = plans.find((x) => x.id === s.page_id); if (!p) continue;
+      const { frame, normed } = await pageGeometry(p);
+      const blobs = groupSubpaths(normed, { bodyArea: 1e-7 });
+      if (!blobs.length) continue;
+      const [nx, ny] = frame.norm(s.pdfX, s.pdfY);
+      let best = null, bd = Infinity;
+      for (const b of blobs) { const d = Math.hypot(b.x - nx, b.y - ny); if (d < bd) { bd = d; best = b; } }
+      if (best) found.push({ fill_rgb: best.fill_rgb, area: polyArea(best.paths[0].points) });
+    }
+    if (found.length < 2) { status('No consistent vector shapes at the marked points — mark cleaner instances, closer to the solid fill.', 'err'); $('c-derive').disabled = false; return; }
+    const avgFill = [0, 1, 2].map((i) => Math.round(found.reduce((a, f) => a + (f.fill_rgb?.[i] ?? 0), 0) / found.length));
+    const bodyArea = Math.min(...found.map((f) => f.area)) * 0.7;
+    const fillTol = 20;
+    status('Checking matches on every plan…');
+    const perPage = []; let total = 0;
+    for (const p of plans) {
+      const { normed } = await pageGeometry(p);
+      const blobs = groupSubpaths(filterByFill(normed, avgFill, fillTol), { bodyArea });
+      if (blobs.length) { perPage.push({ sheet: p.sheet_number || 'p' + p.page_number, count: blobs.length }); total += blobs.length; }
+    }
+    symbol.symbol_template = { fill_rgb: avgFill, fill_tol: fillTol, body_area: bodyArea, single_type: symbol.name };
+    symbol.validation = { total, perPage };
+    status('');
+    renderCard('validated');
+  } catch (e) { status(e.message, 'err'); if ($('c-derive')) $('c-derive').disabled = false; }
+}
+async function saveSymbolType() {
+  const name = (symbol.name || '').trim();
+  if (!name) { status('Enter a name.', 'err'); return; }
+  $('c-save').disabled = true;
+  try {
+    await post('/api/wf/wf4/discover', {
+      action: 'build_symbol_device', project_id: Number(projectId), name, description: symbol.description,
+      drawing_crop_base64: symbol.crop, symbol_template: { ...symbol.symbol_template, single_type: name }, match_count: symbol.validation.total,
+    });
+    status(`${name} added to the library.`, 'ok');
+    symbol = null; discard(); await refreshLibrary();
+  } catch (e) { status(e.message, 'err'); if ($('c-save')) $('c-save').disabled = false; }
+}
+
+// ── library ──
+async function refreshLibrary() { summary = await api('/api/wf/wf4/summary?project_id=' + projectId); renderLibrary(); }
+function modeText(t) {
+  const dc = t.detection_config || {};
+  if (t.detect_mode === 'shape' || (dc.sources || []).includes('symbol')) {
+    const n = dc.validated_match_count;
+    return `by shape${n != null ? ` · ${n} matches checked` : ''}`;
+  }
+  const label = t.label_text || dc.anchor;
+  return `by label${label ? ' ' + label : ''}`;
+}
+function renderLibrary() {
+  const types = summary?.device_types || [];
+  $('lib-head').textContent = `Library (${types.length})`;
+  $('lib-list').innerHTML = types.length ? types.map((t) => {
+    const arm = armed && armed.id === t.id;
+    return `<div class="row lib-row" style="padding-top: 10px; padding-bottom: 10px; gap: 14px">
+      ${t.example_image_base64 ? `<img class="thumb" alt="" src="data:image/jpeg;base64,${t.example_image_base64}">` : '<span class="thumb"></span>'}
+      <span style="flex-grow: 1; min-width: 0"><div style="font-weight: 600">${esc(t.name)}</div><div class="mode">${esc(modeText(t))}</div></span>
+      ${t.verified ? '' : '<span class="pill stale" title="Copied from another project — confirm on this drawing set before it is counted">re-check</span>'}
+      <button type="button" class="btn ${arm ? 'amber' : 'muted'} small" data-del="${t.id}">${arm ? (armed.cascade ? 'Delete with counts' : 'Confirm remove') : 'Remove'}</button>
+    </div>`;
+  }).join('') : '<div class="row muted">No device types yet.</div>';
+  document.querySelectorAll('[data-del]').forEach((b) => b.onclick = () => removeType(Number(b.dataset.del)));
+  renderFooter();
+}
+async function removeType(id) {
+  if (!armed || armed.id !== id) {
+    armed = { id, cascade: false }; renderLibrary();
+    setTimeout(() => { if (armed && armed.id === id && !armed.cascade) { armed = null; renderLibrary(); } }, 5000);
+    return;
+  }
+  try {
+    await post('/api/wf/wf4/discover', { action: 'delete_device_type', project_id: Number(projectId), id, cascade: armed.cascade });
+    armed = null; status('Removed.', 'ok'); await refreshLibrary();
+  } catch (e) {
+    // 409: it still has counted devices — a third click deletes them too.
+    if (/counted instance/.test(e.message)) { armed = { id, cascade: true }; status(e.message, 'err'); renderLibrary(); }
+    else { armed = null; status(e.message, 'err'); renderLibrary(); }
+  }
+}
+
+// ── step status + footer ──
+let stepInfo = null;
+function renderFooter() {
+  const types = summary?.device_types || [];
+  const unverified = types.filter((t) => !t.verified).length;
+  const msgs = {
+    1: `${plans.length} plan sheet${plans.length === 1 ? '' : 's'} indexed`,
+    2: `${types.length} device type${types.length === 1 ? '' : 's'} in the library${unverified ? ` · ${unverified} to re-check` : ''}`,
+    3: 'TR pins — next build',
+    4: 'Count & route — layout to confirm',
+    5: 'Review — layout to confirm',
+  };
+  const done = stepInfo?.status === 'confirmed';
+  $('footer-msg').textContent = done ? 'Floor plans confirmed. Counts go to the BOM.' : msgs[stage];
+}
+async function loadStep() {
+  const d = await api('/api/wf/projects?id=' + projectId);
+  $('crumb').textContent = '← ' + d.project.name;
+  stepInfo = d.steps.find((x) => x.step_code === 'WF4');
+  if (!stepInfo) return;
+  $('step-pill').className = 'pill ' + stepInfo.status;
+  $('step-pill').textContent = stepInfo.status === 'stale' ? 'changed' : stepInfo.status.replace('_', ' ');
+  const done = stepInfo.status === 'confirmed';
+  $('confirm').hidden = done; $('reopen').hidden = !done;
+  renderFooter();
+}
+$('confirm').onclick = async () => {
+  if (!confirm('Counting and review are not built yet. Confirm floor plans anyway?')) return;
+  try { await post('/api/wf/projects', { action: 'confirm_step', project_id: Number(projectId), step_code: 'WF4' }); status('Floor plans confirmed.', 'ok'); loadStep(); }
+  catch (e) { status(e.message, 'err'); }
+};
+$('reopen').onclick = async () => {
+  try { await post('/api/wf/projects', { action: 'reopen_step', project_id: Number(projectId), step_code: 'WF4' }); loadStep(); }
+  catch (e) { status(e.message, 'err'); }
+};
+
+renderStages();
+renderCard('hint');
+loadStep().catch((e) => status(e.message, 'err'));
+loadAll().catch((e) => status(e.message, 'err'));
+</script>
+</body>
+</html>
