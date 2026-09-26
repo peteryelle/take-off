@@ -184,7 +184,7 @@ import { contentFrame, extractFilledSubpaths, filterByFill, groupSubpaths, polyA
 import { resolveTrMatch } from './lib/normalize-tr-name.js';
 import { extractCameraBlobs } from './lib/geometry.js';
 import { classifySheetClass, deriveSheetClassSignals } from './lib/sheet-class.js';
-import { planSymbolDetection, locateVector } from './lib/locate.js';
+import { planSymbolDetection, locateVector, blobsToInstances } from './lib/locate.js';
 import { effectiveRouting, DEFAULT_MULTIPLIERS } from './lib/route-modes.js';
 import { toIdentityXY } from './lib/frame.js';
 
@@ -310,6 +310,17 @@ function drawOverlay() {
       g.fillStyle = '#0b7a2a'; g.font = '700 12px "JetBrains Mono", monospace'; g.fillText(String(i + 1), x + 16, y - 10);
     });
   }
+  if (symbol?.validation && current) {
+    const v = symbol.validation, pg = v.pages.find((x) => x.page_id === current.id);
+    if (pg) {
+      g.strokeStyle = '#e07000'; g.lineWidth = 2;
+      for (const m of pg[v.ring ? 'ring' : 'plain']) {
+        const px = pg.frame.xMin + m.x * pg.frame.cW, py = pg.frame.yMin + (1 - m.y) * pg.frame.cH;   // content frame -> PDF points
+        const [x, y] = vp.convertToViewportPoint(px, py);
+        g.beginPath(); g.arc(x, y, 11, 0, Math.PI * 2); g.stroke();
+      }
+    }
+  }
   if (sel) {
     const x = Math.min(sel.x0, sel.x1), y = Math.min(sel.y0, sel.y1), w = Math.abs(sel.x1 - sel.x0), h = Math.abs(sel.y1 - sel.y0);
     g.fillStyle = 'rgba(126,224,138,.15)'; g.fillRect(x, y, w, h);
@@ -385,18 +396,38 @@ function renderCard(kind, msg = '') {
   if (kind === 'symbol' || kind === 'validated') {
     const n = symbol.samples.length, need = Math.max(0, SYMBOL_MIN_SAMPLES - n);
     const v = symbol.validation;
-    $('card').innerHTML = `<div class="card active"><img class="crop" alt="Cropped symbol" src="data:image/jpeg;base64,${symbol.crop}"><div style="display: flex; flex-direction: column; gap: 8px; flex-grow: 1">
+    let result = '';
+    if (v) {
+      const set = v.ring ? 'ring' : 'plain';
+      const tot = v.totals[set], sheets = v.pages.filter((pg) => pg[set].length);
+      const lab = v.labels[set];
+      const topLabels = Object.entries(lab.tally).sort((x, y) => y[1] - x[1]).slice(0, 5);
+      const labelledShare = tot ? lab.withLabel / tot : 0;
+      result = `
+        <label class="check small" style="gap: 8px"><input type="checkbox" id="c-ring"${v.ring ? ' checked' : ''}${v.ringFound ? '' : ''}>
+          Must have a circle around it${v.ringFound ? ' <span class="muted">(your marked instances have one)</span>' : ' <span class="muted">(not found around your marked instances)</span>'}</label>
+        <div class="small">Count &amp; route will find <b>${tot}</b> on ${sheets.length} plan${sheets.length === 1 ? '' : 's'}${v.ring ? ` <span class="muted">· ${v.totals.plain} without the circle check</span>` : ''}.</div>
+        <div class="small" style="display: flex; flex-wrap: wrap; gap: 6px">${v.pages.map((pg) => `<button type="button" class="chip" style="padding: 4px 8px; font-size: 12px" data-vpage="${pg.page_id}" aria-pressed="${current?.id === pg.page_id}">${esc(pg.sheet)} ${pg[set].length}</button>`).join('')}</div>
+        <div class="small muted">Matches are marked in orange on the plan — pick a sheet above to check it.</div>
+        ${topLabels.length ? `<div class="small">Printed next to them: ${topLabels.map(([t, c]) => `${esc(t)} ×${c}`).join(', ')}</div>` : ''}
+        ${labelledShare >= 0.5 ? `<div class="small" style="color: var(--orange)">Most of these matches have a label printed beside them. If this symbol normally carries a label, crop it again with the label so each labelled type is counted separately.</div>` : ''}`;
+    }
+    $('card').innerHTML = `<div class="card active"><img class="crop" alt="Cropped symbol" src="data:image/jpeg;base64,${symbol.crop}"><div style="display: flex; flex-direction: column; gap: 8px; flex-grow: 1; min-width: 0">
       <div class="small muted">No label beside this symbol — it is found by shape.</div>
       <label class="lbl" style="letter-spacing: 0">Name<input class="field" id="c-name" style="padding: 8px 10px" value="${esc(symbol.name)}"></label>
       <div class="samples">${symbol.samples.map((_, i) => `<span>${i + 1}</span>`).join('')}</div>
-      <div class="small">${v ? `Matches <b>${v.total}</b> across ${v.perPage.length} plan${v.perPage.length === 1 ? '' : 's'}: ${esc(v.perPage.map((p) => p.sheet + ' ' + p.count).join(', '))}. Check that this is right before saving.`
-        : need ? `Mark ${need} more instance${need === 1 ? '' : 's'} of this same symbol — on this plan or another.` : 'Enough marked. Check matches, or mark more for a stronger signature.'}</div>
+      ${v ? result : `<div class="small">${need ? `Mark ${need} more instance${need === 1 ? '' : 's'} of this same symbol — on this plan or another.` : 'Enough marked. Check matches, or mark more for a stronger signature.'}</div>`}
       <div style="display: flex; gap: 8px; flex-wrap: wrap">
         ${v ? '<button type="button" class="btn green" id="c-save">Add to library</button>' : `<button type="button" class="btn blue" id="c-derive"${n < SYMBOL_MIN_SAMPLES ? ' disabled' : ''}>Check matches</button>`}
         <button type="button" class="btn muted" id="c-cancel">Cancel</button></div></div></div>`;
     $('c-name').oninput = (e) => { symbol.name = e.target.value; };
     if ($('c-derive')) $('c-derive').onclick = deriveAndValidate;
     if ($('c-save')) $('c-save').onclick = saveSymbolType;
+    if ($('c-ring')) $('c-ring').onchange = (e) => { symbol.validation.ring = e.target.checked; renderCard('validated'); drawOverlay(); };
+    document.querySelectorAll('[data-vpage]').forEach((b) => b.onclick = () => {
+      current = plans.find((x) => x.id === Number(b.dataset.vpage)); $('page-sel').value = String(current.id); sel = null;
+      renderViewer(); renderCard('validated');
+    });
     $('c-cancel').onclick = () => { symbol = null; discard(); };
   }
 }
@@ -438,6 +469,11 @@ async function pageGeometry(p) {
   return out;
 }
 // Same derivation and validation as the old Discover tool (discover.html).
+// Derive the fill/size signature from the marked instances (same as the old
+// Discover tool), then count with the SAME code Count & route uses
+// (extractCameraBlobs + blobsToInstances), with and without the ring check.
+// The ring check is switched on when the marked instances have a circle
+// around them — the WAP case: without it, grey outlet triangles match too.
 async function deriveAndValidate() {
   $('c-derive').disabled = true;
   status('Reading vector geometry…');
@@ -457,17 +493,54 @@ async function deriveAndValidate() {
     const avgFill = [0, 1, 2].map((i) => Math.round(found.reduce((a, f) => a + (f.fill_rgb?.[i] ?? 0), 0) / found.length));
     const bodyArea = Math.min(...found.map((f) => f.area)) * 0.7;
     const fillTol = 20;
-    status('Checking matches on every plan…');
-    const perPage = []; let total = 0;
+    const base = { fill_rgb: avgFill, fill_tol: fillTol, body_area: bodyArea, single_type: symbol.name };
+
+    const pages = [], labels = { plain: { tally: {}, withLabel: 0 }, ring: { tally: {}, withLabel: 0 } };
+    let i = 0;
     for (const p of plans) {
-      const { normed } = await pageGeometry(p);
-      const blobs = groupSubpaths(filterByFill(normed, avgFill, fillTol), { bodyArea });
-      if (blobs.length) { perPage.push({ sheet: p.sheet_number || 'p' + p.page_number, count: blobs.length }); total += blobs.length; }
+      status(`Checking matches: ${p.sheet_number || 'page ' + p.page_number} (${++i} of ${plans.length})…`);
+      const doc = await loadPdf(p.document_id);
+      const page = await doc.getPage(p.page_number);
+      const v1 = page.getViewport({ scale: 1 });
+      const tc = await page.getTextContent({ includeMarkedContent: false });
+      // text centres exactly as the counting run builds them
+      const texts = [];
+      for (const it of tc.items) {
+        const s = (it.str || '').trim().replace(/[^\x20-\x7E]/g, '').trim(); if (!s) continue;
+        const fs = Math.abs(it.transform[3]), tw = it.width ?? 0, th = it.height ?? fs;
+        texts.push({ s, cx: it.transform[4] + tw / 2, cy: it.transform[5] + th / 2 });
+      }
+      const textCenters = texts.map((t) => ({ cx: t.cx, cy: t.cy }));
+      const { blobs, frame, strokeSubpaths } = await extractCameraBlobs(page, pdfjsLib.OPS, textCenters,
+        { vpW: v1.width, vpH: v1.height, fill: base.fill_rgb, fillTol: base.fill_tol, bodyArea: base.body_area });
+      const plain = blobsToInstances(blobs, { ...base, requires_ring: false }, { strokeSubpaths });
+      const ring = blobsToInstances(blobs, { ...base, requires_ring: true }, { strokeSubpaths });
+      // short labels printed beside each match (2D, 4D, WAP…), in the same frame
+      const shortTexts = texts.filter((t) => t.s.length <= 6 && /[A-Z0-9]/i.test(t.s) && /^[A-Z0-9-]+$/i.test(t.s))
+        .map((t) => { const [x, y] = frame.norm(t.cx, t.cy); return { s: t.s.toUpperCase(), x, y }; });
+      for (const [key, list] of [['plain', plain], ['ring', ring]]) {
+        for (const m of list) {
+          let best = null, bd = 0.012;
+          for (const t of shortTexts) { const d = Math.hypot(t.x - m.x, t.y - m.y); if (d < bd) { bd = d; best = t; } }
+          if (best) { labels[key].withLabel++; labels[key].tally[best.s] = (labels[key].tally[best.s] || 0) + 1; }
+        }
+      }
+      pages.push({ page_id: p.id, sheet: p.sheet_number || 'p' + p.page_number, frame, plain, ring });
+      page.cleanup();
     }
-    symbol.symbol_template = { fill_rgb: avgFill, fill_tol: fillTol, body_area: bodyArea, single_type: symbol.name };
-    symbol.validation = { total, perPage };
+    // Do the marked instances have a circle around them?
+    let ringHits = 0;
+    for (const s of symbol.samples) {
+      const pg = pages.find((x) => x.page_id === s.page_id); if (!pg) continue;
+      const [nx, ny] = pg.frame.norm(s.pdfX, s.pdfY);
+      if (pg.ring.some((m) => Math.hypot(m.x - nx, m.y - ny) < 0.01)) ringHits++;
+    }
+    const ringFound = ringHits >= Math.max(2, Math.ceil(symbol.samples.length / 2));
+    const totals = { plain: pages.reduce((a, pg) => a + pg.plain.length, 0), ring: pages.reduce((a, pg) => a + pg.ring.length, 0) };
+    symbol.symbol_template = base;
+    symbol.validation = { pages, totals, labels, ringFound, ring: ringFound };
     status('');
-    renderCard('validated');
+    renderCard('validated'); drawOverlay();
   } catch (e) { status(e.message, 'err'); if ($('c-derive')) $('c-derive').disabled = false; }
 }
 async function saveSymbolType() {
@@ -477,7 +550,9 @@ async function saveSymbolType() {
   try {
     await post('/api/wf/wf4/discover', {
       action: 'build_symbol_device', project_id: Number(projectId), name, description: symbol.description,
-      drawing_crop_base64: symbol.crop, symbol_template: { ...symbol.symbol_template, single_type: name }, match_count: symbol.validation.total,
+      drawing_crop_base64: symbol.crop,
+      symbol_template: { ...symbol.symbol_template, single_type: name, requires_ring: !!symbol.validation.ring, requires_line_through_center: false },
+      match_count: symbol.validation.totals[symbol.validation.ring ? 'ring' : 'plain'],
     });
     status(`${name} added to the library.`, 'ok');
     symbol = null; discard(); await refreshLibrary();
