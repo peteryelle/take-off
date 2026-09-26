@@ -144,6 +144,28 @@
     </div>
     <div class="panel" style="overflow-x: auto" id="review"></div>
     <div class="small muted" style="margin-top: 6px" id="review-note"></div>
+    <div id="map" hidden>
+      <div class="row" style="padding: 0 0 10px; border: none; gap: 8px; flex-wrap: wrap">
+        <button type="button" class="btn muted small" id="map-back">← All sheets</button>
+        <span id="map-title" style="font-weight: 700; flex-grow: 1"></span>
+        <select class="cell" id="map-type" aria-label="Show one device type"></select>
+        <button type="button" class="btn muted small" data-mzoom="fit">Fit</button>
+        <button type="button" class="btn muted small" data-mzoom="1.5">150%</button>
+        <button type="button" class="btn muted small" data-mzoom="3">300%</button>
+        <button type="button" class="btn blue small" id="map-recount">Re-count this sheet</button>
+      </div>
+      <div class="split" style="grid-template-columns: minmax(0, 1.6fr) minmax(280px, 0.6fr)">
+        <div class="viewer" id="map-viewer" style="height: 660px"><canvas id="map-pdf"></canvas><canvas id="map-ovl" style="cursor: crosshair"></canvas></div>
+        <section style="display: flex; flex-direction: column; gap: 12px; min-width: 0">
+          <div class="card" id="map-card" style="flex-direction: column; gap: 10px"></div>
+          <div class="panel small" style="padding: 12px 16px; display: flex; flex-direction: column; gap: 6px">
+            <span><span style="color: #1a8a3a">●</span> high &nbsp; <span style="color: #b07800">●</span> medium &nbsp; <span style="color: #d03030">●</span> low &nbsp; <span style="color: #6a3ab0">●</span> added by hand &nbsp; <span style="color: #777">✕</span> excluded</span>
+            <span><span style="color: #e01818">★</span> TR pin &nbsp; <span style="color: #2090d0">●</span> waypoint</span>
+            <span class="muted">Click a device to see its path and exclude it. Click empty space to add a device the count missed.</span>
+          </div>
+        </section>
+      </div>
+    </div>
   </div>
 
   <section class="panel">
@@ -164,6 +186,7 @@ import { extractCameraBlobs } from './lib/geometry.js';
 import { classifySheetClass, deriveSheetClassSignals } from './lib/sheet-class.js';
 import { planSymbolDetection, locateVector } from './lib/locate.js';
 import { effectiveRouting, DEFAULT_MULTIPLIERS } from './lib/route-modes.js';
+import { toIdentityXY } from './lib/frame.js';
 
 const projectId = new URLSearchParams(location.search).get('project_id');
 if (!projectId) location.replace('wf-projects.html');
@@ -943,6 +966,9 @@ function methodsText(m) {
 }
 function renderReview() {
   if (!summary) return;
+  const mapOpen = mapPageId != null;
+  $('map').hidden = !mapOpen; $('review').hidden = mapOpen; $('review-note').hidden = mapOpen;
+  if (mapOpen) { renderMapCard(); return; }
   const R = summary.rollup, types = R.types || [];
   const r = summary.routing || {};
   $('routing-note').innerHTML = `${esc(modeLabel(r.mode))} × ${Number(r.multipliers?.[r.mode] ?? 1).toFixed(2)} · <a href="#" id="to-route">change</a>`;
@@ -980,7 +1006,7 @@ function renderReview() {
     $('review').innerHTML = `<table class="grid"><tr><th>Sheet</th><th>Level</th>${types.map((t) => `<th class="num">${esc(t)}</th>`).join('')}<th class="num">Devices</th><th class="num">Cable ft</th><th></th></tr>
       ${rows.map((x) => { const sh = sheetOf(x.page_id);
         return `<tr><td style="font-weight: 700">${esc(sh?.sheet_number || 'page ' + x.page_number)}</td><td>${esc(sh?.level || x.level || '—')}</td>${typeCols(x.by_type, n)}
-          <td class="num" style="font-weight: 700">${n(x.devices)}</td><td class="num">${ft(x.cable_ft)}</td><td class="small muted" title="The confidence map is the next build">map: next build</td></tr>`; }).join('')}
+          <td class="num" style="font-weight: 700">${n(x.devices)}</td><td class="num">${ft(x.cable_ft)}</td><td><button type="button" class="btn blue small" data-map="${x.page_id}">Open map</button></td></tr>`; }).join('')}
       <tr class="total"><td>Total</td><td></td>${tot.map((v) => `<td class="num">${n(v)}</td>`).join('')}<td class="num">${n(R.totals.devices)}</td><td class="num">${ft(R.totals.cable_ft)}</td><td></td></tr></table>`;
     $('review-note').textContent = "Counted plan sheets only; excluded devices are left out. The totals match Counts by level and Cable lengths. Cable feet use each sheet's mode and multiplier, plus any TR stub.";
   } else {
@@ -992,10 +1018,226 @@ function renderReview() {
         return `<tr><td style="font-weight: 700">${esc(p.sheet_number || 'page ' + p.page_number)}</td>
           <td><span style="color: var(--green)">● ${c.high}</span> &nbsp;<span style="color: var(--amber)">● ${c.medium}</span> &nbsp;<span style="color: var(--red)">● ${c.low}</span></td>
           <td class="small muted">${x ? `${x.no_length ? x.no_length + ' no length' : 'all measured'}${x.tia ? ` · ${x.tia} over TIA limit` : ''}` : '—'}</td>
-          <td><span class="pill ${cls}">${st}</span></td><td class="small muted">confidence map: next build</td></tr>`; }).join('')}</table>` : '<div class="row muted">No plan sheets yet.</div>';
-    $('review-note').textContent = 'High / medium / low detection confidence per sheet. The confidence map (exclude a device, add one, see its path) is the next build.';
+          <td><span class="pill ${cls}">${st}</span></td><td>${row.run_status === 'done' ? `<button type="button" class="btn blue small" data-map="${p.id}">Open confidence map</button>` : ''}</td></tr>`; }).join('')}</table>` : '<div class="row muted">No plan sheets yet.</div>';
+    $('review-note').textContent = 'High / medium / low detection confidence per sheet. Open a sheet\'s map to exclude a device, add one the count missed, or see a device\'s path.';
   }
+  document.querySelectorAll('[data-map]').forEach((b) => b.onclick = () => openMap(Number(b.dataset.map)));
   renderFooter();
+}
+
+
+// ── Confidence map (per sheet) ──
+// Frames: a device's stored x/y is in the content-bounds frame (label, vector
+// symbols) or the full-page frame (model-found symbols, manual adds) — frame.js
+// converts. TR pins, waypoints and exclude boxes are full-page fractions;
+// route_geometry is in page points (full page, top-left origin).
+const CULL_PAD_FRAC = 0.012;          // exclude-box half-size, same as the old map
+const CONF_COLOR = { high: '#1a8a3a', medium: '#b07800', low: '#d03030' };
+let mapPageId = null, mapZoom = 'fit', mapVp = null, mapW = 1, mapH = 1, mapSel = null, mapAdd = null, mapType = '';
+let mapHits = [];   // [{ d, x, y }] screen positions for click testing
+
+function mapPage() { return plans.find((p) => p.id === mapPageId); }
+function contentBBoxOf(pageId) {
+  const r = pageRow(pageId);
+  return r.content_w_frac ? { xmin_frac: r.content_xmin_frac, ymin_frac: r.content_ymin_frac, w_frac: r.content_w_frac, h_frac: r.content_h_frac } : null;
+}
+function deviceIdentityXY(d) {
+  // Manual rows carry xy_source 'manual' once a count has run; before that it is empty — they are full-page either way.
+  const dev = { x: d.x_norm, y: d.y_norm, xy_source: d.source === 'manual' ? 'manual' : d.xy_source, symbol_via: d.symbol_via };
+  return toIdentityXY(dev, contentBBoxOf(d.page_id));
+}
+function mapDevices() {
+  return (summary?.device_instances || []).filter((d) => d.page_id === mapPageId).sort((a, b) => a.id - b.id)
+    .map((d, i) => ({ ...d, _num: i + 1 }));
+}
+function openMap(pageId) {
+  mapPageId = pageId; mapSel = null; mapAdd = null; mapType = '';
+  renderReview(); renderMap();
+}
+$('map-back').onclick = () => { mapPageId = null; mapSel = null; mapAdd = null; renderReview(); };
+document.querySelectorAll('[data-mzoom]').forEach((b) => b.onclick = () => { mapZoom = b.dataset.mzoom; renderMap(); });
+$('map-type').onchange = () => { mapType = $('map-type').value; drawMap(); };
+$('map-recount').onclick = async () => {
+  const p = mapPage(); if (!p) return;
+  await runSheets([p]);
+  mapSel = null; mapAdd = null; renderMap(); renderMapCard();
+};
+
+let mapToken = 0, mapTask = null;
+async function renderMap() {
+  const p = mapPage(); if (!p) return;
+  const devs = mapDevices();
+  const types = [...new Set(devs.map((d) => d.name).filter(Boolean))].sort();
+  $('map-title').textContent = `${p.sheet_number || 'page ' + p.page_number}${p.level ? ' · ' + p.level : ''} · ${devs.filter((d) => !d.excluded).length} devices`;
+  $('map-type').innerHTML = `<option value="">all types</option>${types.map((t) => `<option${t === mapType ? ' selected' : ''}>${esc(t)}</option>`).join('')}`;
+  const token = ++mapToken;
+  if (mapTask) { mapTask.cancel(); mapTask = null; }
+  try {
+    const doc = await loadPdf(p.document_id);
+    const page = await doc.getPage(p.page_number);
+    if (token !== mapToken) return;
+    const base = page.getViewport({ scale: 1 });
+    mapW = base.width; mapH = base.height;
+    const z = mapZoom === 'fit' ? ($('map-viewer').clientWidth - 2) / base.width : Number(mapZoom);
+    mapVp = page.getViewport({ scale: z });
+    const c = $('map-pdf'), o = $('map-ovl');
+    c.width = o.width = Math.floor(mapVp.width); c.height = o.height = Math.floor(mapVp.height);
+    mapTask = page.render({ canvasContext: c.getContext('2d'), viewport: mapVp });
+    await mapTask.promise; mapTask = null;
+    if (token !== mapToken) return;
+    drawMap();
+  } catch (e) { if (e?.name !== 'RenderingCancelledException') status('Could not show the drawing: ' + e.message, 'err'); }
+  renderMapCard();
+}
+function drawMap() {
+  const o = $('map-ovl'), g = o.getContext('2d'), W = o.width, H = o.height;
+  g.clearRect(0, 0, W, H);
+  mapHits = [];
+  const text = (t, x, y, color, px = 11) => {
+    g.font = `700 ${px}px "JetBrains Mono", monospace`; g.lineWidth = 3; g.strokeStyle = 'rgba(255,255,255,.9)';
+    g.strokeText(t, x, y); g.fillStyle = color; g.fillText(t, x, y);
+  };
+  // exclude boxes
+  for (const z of (summary.page_regions || []).filter((r) => r.page_id === mapPageId && r.kind === 'exclude' && r.x0 != null)) {
+    g.fillStyle = 'rgba(74,216,106,.12)'; g.strokeStyle = '#3aa85a'; g.lineWidth = 1.5;
+    g.fillRect(z.x0 * W, z.y0 * H, (z.x1 - z.x0) * W, (z.y1 - z.y0) * H); g.strokeRect(z.x0 * W, z.y0 * H, (z.x1 - z.x0) * W, (z.y1 - z.y0) * H);
+  }
+  // selected device's path (drawn under the markers)
+  if (mapSel) {
+    const d = mapDevices().find((x) => x.id === mapSel);
+    const pts = Array.isArray(d?.route_geometry) ? d.route_geometry : null;
+    if (pts && pts.length >= 2) {
+      g.strokeStyle = 'rgba(32,110,220,.9)'; g.lineWidth = 3; g.setLineDash([8, 5]);
+      g.beginPath(); pts.forEach(([px, py], i) => { const x = px / mapW * W, y = py / mapH * H; i ? g.lineTo(x, y) : g.moveTo(x, y); }); g.stroke(); g.setLineDash([]);
+    }
+  }
+  // waypoints
+  for (const w of (summary.waypoints || []).filter((w) => w.page_id === mapPageId)) {
+    g.fillStyle = '#2090d0'; g.beginPath(); g.arc(w.x_norm * W, w.y_norm * H, 5, 0, Math.PI * 2); g.fill();
+  }
+  // TR pins
+  for (const dm of (summary.demarcs || []).filter((d) => d.page_id === mapPageId && d.x_norm != null)) {
+    const x = dm.x_norm * W, y = dm.y_norm * H;
+    g.font = '22px sans-serif'; g.fillStyle = '#e01818'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('★', x, y);
+    g.textAlign = 'start'; g.textBaseline = 'alphabetic'; text(dm.name, x + 12, y - 10, '#b01010', 12);
+  }
+  // devices
+  for (const d of mapDevices()) {
+    if (d.x_norm == null || d.y_norm == null) continue;
+    if (mapType && d.name !== mapType) continue;
+    const [ix, iy] = deviceIdentityXY(d);
+    if (ix == null) continue;
+    const x = ix * W, y = iy * H, sel = d.id === mapSel;
+    if (d.excluded) {
+      g.strokeStyle = '#777'; g.lineWidth = 2.5; g.beginPath(); g.moveTo(x - 6, y - 6); g.lineTo(x + 6, y + 6); g.moveTo(x + 6, y - 6); g.lineTo(x - 6, y + 6); g.stroke();
+    } else {
+      g.fillStyle = d.source === 'manual' ? '#6a3ab0' : (CONF_COLOR[d.confidence] || '#888');
+      g.beginPath(); g.arc(x, y, sel ? 9 : 6, 0, Math.PI * 2); g.fill();
+      if (sel) { g.strokeStyle = '#111'; g.lineWidth = 2; g.stroke(); }
+    }
+    text(String(d._num), x + 8, y - 7, d.excluded ? '#777' : '#222', 10);
+    mapHits.push({ d, x, y });
+  }
+  if (mapAdd) {
+    const x = mapAdd.x * W, y = mapAdd.y * H;
+    g.strokeStyle = '#6a3ab0'; g.lineWidth = 2; g.beginPath(); g.arc(x, y, 10, 0, Math.PI * 2); g.stroke();
+    g.beginPath(); g.moveTo(x - 14, y); g.lineTo(x + 14, y); g.moveTo(x, y - 14); g.lineTo(x, y + 14); g.stroke();
+  }
+}
+$('map-ovl').addEventListener('click', (e) => {
+  const r = $('map-ovl').getBoundingClientRect();
+  const cx = (e.clientX - r.left) * ($('map-ovl').width / r.width), cy = (e.clientY - r.top) * ($('map-ovl').height / r.height);
+  let best = null, bd = 12;
+  for (const h of mapHits) { const d = Math.hypot(h.x - cx, h.y - cy); if (d < bd) { bd = d; best = h; } }
+  if (best) { mapSel = best.d.id; mapAdd = null; }
+  else { mapSel = null; mapAdd = { x: Math.min(1, Math.max(0, cx / $('map-ovl').width)), y: Math.min(1, Math.max(0, cy / $('map-ovl').height)) }; }
+  drawMap(); renderMapCard();
+});
+
+function renderMapCard() {
+  if (mapPageId == null) return;
+  const card = $('map-card');
+  if (mapAdd) {
+    const types = (summary.device_types || []).filter((t) => t.verified);
+    card.innerHTML = `<div style="font-weight: 700">Add a device here</div>
+      <label class="lbl" style="letter-spacing: 0">Type<select class="field" id="add-type" style="padding: 7px 8px; font-size: 13px">${types.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select></label>
+      <div class="small muted">Its cable length is measured at the next count of this sheet. Added devices are kept when the sheet is re-counted.</div>
+      <div style="display: flex; gap: 8px"><button type="button" class="btn green small" id="add-go"${types.length ? '' : ' disabled'}>Add device</button><button type="button" class="btn muted small" id="add-cancel">Cancel</button></div>`;
+    $('add-go').onclick = addManualDevice;
+    $('add-cancel').onclick = () => { mapAdd = null; drawMap(); renderMapCard(); };
+    return;
+  }
+  const d = mapSel != null ? mapDevices().find((x) => x.id === mapSel) : null;
+  if (!d) { card.innerHTML = '<div class="small muted">Click a device on the drawing to see it here.</div>'; return; }
+  const how = d.route_method && d.route_method !== 'none'
+    ? `${modeLabel(d.route_method)} × ${Number(d.route_multiplier ?? 1).toFixed(2)}${d.routed_via_tier3 ? ' · wall-aware' : ''}` : 'no length (no TR pin on this sheet, or no scale)';
+  card.innerHTML = `<div style="display: flex; justify-content: space-between; gap: 10px"><span style="font-weight: 700">#${d._num} ${esc(d.name || 'device')}</span>
+      <span class="pill ${d.excluded ? 'open' : d.source === 'manual' ? 'in_review' : d.confidence === 'low' ? 'stale' : 'confirmed'}">${d.excluded ? 'excluded' : d.source === 'manual' ? 'added by hand' : (d.confidence || 'no confidence') + ' confidence'}</span></div>
+    <div class="small">Labels: ${esc((d.raw_labels || []).join(', ') || '—')}</div>
+    <div class="small">Cable: <b>${d.route_ft != null ? ft(d.route_ft) + ' ft' : '—'}</b> to ${esc(d.tr_name || '—')} · ${esc(how)}</div>
+    ${d.tia_flag ? `<div class="small" style="color: var(--red)">${esc(d.tia_reason || 'Over the TIA limit')}</div>` : ''}
+    ${d.excluded && d.cull_reason ? `<div class="small muted">Excluded: ${esc(d.cull_reason)}</div>` : ''}
+    <div style="display: flex; gap: 8px; flex-wrap: wrap">
+      ${d.excluded ? '<button type="button" class="btn green small" id="dev-restore">Restore</button>'
+        : d.source === 'manual' ? '<button type="button" class="btn muted small" id="dev-unadd">Remove (added by mistake)</button>'
+        : `<button type="button" class="btn muted small" id="dev-junk">Not a device</button>
+           <input class="cell" id="dev-reason" placeholder="Excluded because…" style="width: 150px">
+           <button type="button" class="btn muted small" id="dev-excl">Exclude</button>`}
+    </div>`;
+  if ($('dev-junk')) $('dev-junk').onclick = () => excludeDevice(d, 'junk', null);
+  if ($('dev-excl')) $('dev-excl').onclick = () => excludeDevice(d, 'excluded', $('dev-reason').value.trim() || 'excluded by reviewer');
+  if ($('dev-restore')) $('dev-restore').onclick = () => restoreDevice(d);
+  if ($('dev-unadd')) $('dev-unadd').onclick = () => removeManual(d);
+}
+
+// Exclude = a small exclude box around the device (the count ignores anything
+// inside it, so the exclusion survives re-counts) + the flag on the row now.
+async function excludeDevice(d, category, reason) {
+  const [ix, iy] = deviceIdentityXY(d);
+  if (ix == null) return;
+  const x0 = Math.max(0, ix - CULL_PAD_FRAC), x1 = Math.min(1, ix + CULL_PAD_FRAC);
+  const y0 = Math.max(0, iy - CULL_PAD_FRAC), y1 = Math.min(1, iy + CULL_PAD_FRAC);
+  const label = category === 'junk' ? `Manual exclude — ${d.name ?? 'device'} #${d._num} — junk (not a real detection)`
+    : `Manual exclude — ${d.name ?? 'device'} #${d._num} — excluded: ${reason}`;
+  try {
+    await post('/api/wf/wf4/regions', { project_id: Number(projectId), page_id: d.page_id, label, polygon: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], x0, y0, x1, y1, kind: 'exclude' });
+    const flags = [...new Set([...(d.flags || []), 'manual_excluded'])];
+    await api('/api/wf/wf4/device', { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: d.id, flags, cull_category: category, cull_reason: category === 'excluded' ? reason : null }) });
+    await refreshSummary(); status(`#${d._num} excluded.`, 'ok');
+  } catch (e) { status('Exclude failed: ' + e.message, 'err'); }
+  drawMap(); renderMapCard();
+}
+// Restore: remove the manual exclude box(es) around this device (found by
+// position, so it works after a reload), then clear the flag.
+async function restoreDevice(d) {
+  const [ix, iy] = deviceIdentityXY(d);
+  const boxes = (summary.page_regions || []).filter((r) => r.page_id === d.page_id && r.kind === 'exclude'
+    && String(r.label || '').startsWith('Manual exclude') && ix >= r.x0 && ix <= r.x1 && iy >= r.y0 && iy <= r.y1);
+  try {
+    for (const b of boxes) await api('/api/wf/wf4/regions?id=' + b.id, { method: 'DELETE' });
+    const flags = (d.flags || []).filter((f) => f !== 'manual_excluded');
+    await api('/api/wf/wf4/device', { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: d.id, flags, cull_category: null, cull_reason: null }) });
+    await refreshSummary(); status(`#${d._num} restored.`, 'ok');
+  } catch (e) { status('Restore failed: ' + e.message, 'err'); }
+  drawMap(); renderMapCard();
+}
+async function addManualDevice() {
+  const typeId = Number($('add-type').value); if (!typeId || !mapAdd) return;
+  $('add-go').disabled = true;
+  try {
+    await post('/api/wf/wf4/manual', { project_id: Number(projectId), page_id: mapPageId, device_type_id: typeId, x_norm: mapAdd.x, y_norm: mapAdd.y });
+    await refreshSummary(); status('Device added. Re-count this sheet to measure its cable.', 'ok');
+    mapAdd = null;
+  } catch (e) { status(e.message, 'err'); if ($('add-go')) $('add-go').disabled = false; }
+  drawMap(); renderMapCard();
+}
+async function removeManual(d) {
+  if (!confirm(`Remove #${d._num}, added by hand?`)) return;
+  try { await api('/api/wf/wf4/manual?id=' + d.id, { method: 'DELETE' }); await refreshSummary(); mapSel = null; status('Removed.', 'ok'); }
+  catch (e) { status(e.message, 'err'); }
+  drawMap(); renderMapCard();
 }
 
 // ── step status + footer ──
