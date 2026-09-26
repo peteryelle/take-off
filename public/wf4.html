@@ -30,6 +30,16 @@
 .small { font-size: 12px; }
 .lib-row .mode { font-size: 12px; color: var(--muted); }
 .placeholder { padding: 28px 24px; }
+.rtab { font-family: inherit; font-size: 14px; padding: 10px 14px; background: none; border: none; border-bottom: 2px solid transparent; color: var(--muted); cursor: pointer; }
+.rtab[aria-selected="true"] { color: var(--green); border-bottom-color: var(--green); font-weight: 700; }
+.grid { width: 100%; border-collapse: collapse; font-size: 13px; }
+.grid th { text-align: left; font-weight: 400; font-size: 12px; color: var(--muted); letter-spacing: .06em; padding: 11px 14px; border-bottom: 1px solid var(--line-soft); white-space: nowrap; }
+.grid td { padding: 10px 14px; border-bottom: 1px solid var(--line-soft); white-space: nowrap; }
+.grid td.num, .grid th.num { text-align: right; }
+.grid tr.total td { font-weight: 700; border-top: 1px solid var(--line); }
+.modebtn { font-family: inherit; font-size: 16px; width: 44px; height: 44px; border-radius: 3px; cursor: pointer; border: 1px solid #3a443f; background: var(--bg); color: var(--muted); flex-shrink: 0; }
+.modebtn[aria-pressed="true"] { border-color: var(--green-bd); background: var(--green-bg); color: var(--green); }
+.cell { font-family: inherit; font-size: 12px; background: var(--bg); color: var(--text); border: 1px solid #3a443f; border-radius: 3px; padding: 5px 6px; }
 @media (max-width: 1000px) { .split { grid-template-columns: 1fr; } }
 </style>
 </head>
@@ -106,12 +116,34 @@
 
   <!-- 4 · Count & route -->
   <div data-stage="4" hidden>
-    <section class="panel placeholder"><div class="muted">Count &amp; route — layout to confirm before it is built (no approval step; cost is shown only on the admin page).</div></section>
+    <div class="muted" style="margin-bottom: 14px">Counts every library device on each plan, then measures each one to its TR pin. Counting and routing run in the browser; each sheet's scale is read automatically the first time.</div>
+    <div class="split" style="grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr)">
+      <section class="panel" style="align-self: start">
+        <div class="row head">Cable length, for the whole project</div>
+        <div id="modes"></div>
+        <div class="row small muted" id="routed-info" hidden></div>
+        <div class="row small muted">A sheet can use a different mode or multiplier in the sheet list. The mode and multiplier used go to the BOM's Notes &amp; Assumptions.</div>
+      </section>
+      <section class="panel" style="align-self: start">
+        <div class="row head"><span style="width: 100px">Sheet</span><span style="width: 80px">Level</span><span style="width: 230px">Mode</span><span style="width: 70px">Devices</span><span style="flex-grow: 1">Status</span></div>
+        <div id="run-list"></div>
+        <div class="row" style="border-top: 1px solid var(--line)">
+          <span id="run-summary" style="flex-grow: 1"></span>
+          <button type="button" class="btn muted small" id="run-all">Re-count all</button>
+          <button type="button" class="btn green" id="run-go" style="font-weight: 700">Count &amp; route</button>
+        </div>
+      </section>
+    </div>
   </div>
 
   <!-- 5 · Review -->
   <div data-stage="5" hidden>
-    <section class="panel placeholder"><div class="muted">Review — layout to confirm before it is built (routing mode and one multiplier per mode replace the mockup's routed/fallback boxes).</div></section>
+    <div class="row" style="padding: 0 0 10px; border: none; gap: 20px">
+      <nav style="display: flex; gap: 4px; border-bottom: 1px solid var(--line); flex-grow: 1" role="tablist" id="rtabs"></nav>
+      <span class="small muted" id="routing-note"></span>
+    </div>
+    <div class="panel" style="overflow-x: auto" id="review"></div>
+    <div class="small muted" style="margin-top: 6px" id="review-note"></div>
   </div>
 
   <section class="panel">
@@ -128,6 +160,10 @@
 import { mountIntake, api, post } from './lib/wf-intake-ui.js';
 import { contentFrame, extractFilledSubpaths, filterByFill, groupSubpaths, polyArea } from './lib/geometry.js';
 import { resolveTrMatch } from './lib/normalize-tr-name.js';
+import { extractCameraBlobs } from './lib/geometry.js';
+import { classifySheetClass, deriveSheetClassSignals } from './lib/sheet-class.js';
+import { planSymbolDetection, locateVector } from './lib/locate.js';
+import { effectiveRouting, DEFAULT_MULTIPLIERS } from './lib/route-modes.js';
 
 const projectId = new URLSearchParams(location.search).get('project_id');
 if (!projectId) location.replace('wf-projects.html');
@@ -155,7 +191,7 @@ function renderStages() {
   document.querySelectorAll('[data-stage]').forEach((s) => s.hidden = Number(s.dataset.stage) !== stage);
   renderFooter();
 }
-function go(n) { stage = n; renderStages(); if (n === 2) renderViewer(); if (n === 3) openPins(); }
+function go(n) { stage = n; renderStages(); if (n === 2) renderViewer(); if (n === 3) openPins(); if (n === 4) renderRun(); if (n === 5) renderReview(); }
 
 // ── data ──
 mountIntake($('intake'), { projectId, stepCode: 'WF4', showLocation: true, onData: (d) => { intake = d; buildPlans(); } });
@@ -670,6 +706,298 @@ async function findTrs() {
 }
 $('pins-find').onclick = findTrs;
 
+
+// ── 4 · Count & route ──
+const MODE_INFO = {
+  straight:    ['Straight line', 'Device to its TR pin, straight across the plan. No setup.'],
+  right_angle: ['Right-angle', 'One horizontal and one vertical leg to the pin. No setup.'],
+  routed:      ['Routed', 'Follows walls and corridors (wall calibration, waypoints).'],
+};
+const modeLabel = (m) => MODE_INFO[m]?.[0] ?? m;
+const pageRow = (id) => (summary?.pages || []).find((p) => p.id === id) || {};
+const effFor = (id) => effectiveRouting(projectRouting(), pageRow(id));
+function projectRouting() {
+  const r = summary?.routing || {};
+  return { route_mode: r.mode, straight_multiplier: r.multipliers?.straight, right_angle_multiplier: r.multipliers?.right_angle, routed_multiplier: r.multipliers?.routed };
+}
+const running = new Set();   // page ids being counted now
+const scaleInput = {};       // page id -> typed scale text
+
+// Sheets whose devices were measured in a different mode than the sheet now uses.
+function recountPages() {
+  const out = new Set();
+  for (const d of summary?.device_instances || []) {
+    if (!d.route_method || d.route_method === 'none' || d.route_method === 'fallback') continue;
+    if (d.route_method !== effFor(d.page_id).mode) out.add(d.page_id);
+  }
+  return out;
+}
+function pageStatus(p, recount) {
+  const row = pageRow(p.id);
+  if (running.has(p.id)) return ['counting…', 'in_review'];
+  if (row.run_status === 'error') return /scale/i.test(row.run_status_msg || '') ? ['needs scale', 'stale'] : ['error', 'stale'];
+  if (row.run_status === 'done' && recount.has(p.id)) return ['mode changed · re-count', 'stale'];
+  if (row.run_status === 'done') return ['counted', 'confirmed'];
+  return ['not run', 'open'];
+}
+const hasScale = (id) => Number(pageRow(id).scale_pts_per_ft) > 0;
+function toCount() {
+  const recount = recountPages();
+  return plans.filter((p) => { const st = pageStatus(p, recount)[0]; return st !== 'counted' && st !== 'counting…'; });
+}
+
+function renderRun() {
+  if (!summary) return;
+  const r = summary.routing || { mode: 'straight', multipliers: {} };
+  $('modes').innerHTML = Object.keys(MODE_INFO).map((m) => `
+    <div class="row" style="gap: 14px;${r.mode === m ? ' background: #111a14;' : ''}">
+      <button type="button" class="modebtn" data-mode="${m}" aria-pressed="${r.mode === m}" aria-label="Use ${modeLabel(m)}">${r.mode === m ? '●' : '○'}</button>
+      <span style="flex-grow: 1; min-width: 0"><div style="font-weight: 700">${modeLabel(m)}</div><div class="small muted">${MODE_INFO[m][1]}</div></span>
+      <label class="small muted" style="display: flex; gap: 6px; align-items: center">×<input class="cell" style="width: 64px; font-size: 13px" type="number" step="0.05" min="0.05" max="5" data-mult="${m}" value="${Number(r.multipliers?.[m] ?? DEFAULT_MULTIPLIERS[m]).toFixed(2)}" aria-label="${modeLabel(m)} multiplier"></label>
+    </div>`).join('');
+  document.querySelectorAll('[data-mode]').forEach((b) => b.onclick = () => saveSettings({ route_mode: b.dataset.mode }));
+  document.querySelectorAll('[data-mult]').forEach((i) => i.onchange = () => saveSettings({ [`${i.dataset.mult}_multiplier`]: Number(i.value) }));
+  const cal = summary.wall_calibration, wps = summary.waypoints || [];
+  $('routed-info').hidden = r.mode !== 'routed';
+  $('routed-info').textContent = cal
+    ? `Wall calibration ${cal.status} (${cal.pages_agreeing} of ${cal.pages_evaluated} sheets agree) · ${wps.length} waypoint${wps.length === 1 ? '' : 's'}. Routed sheets without a confirmed calibration use waypoints, then a straight line.`
+    : `No wall calibration yet · ${wps.length} waypoint${wps.length === 1 ? '' : 's'}. Until walls are calibrated, routed devices use waypoints, then a straight line.`;
+
+  const recount = recountPages();
+  const perPage = new Map((summary.rollup?.per_page || []).map((x) => [x.page_id, x]));
+  $('run-list').innerHTML = plans.length ? plans.map((p) => {
+    const row = pageRow(p.id), [st, cls] = pageStatus(p, recount);
+    const ov = row.route_mode || row.route_multiplier != null;
+    const needsScale = st === 'needs scale';
+    return `<div class="row" style="font-size: 13px; padding-top: 9px; padding-bottom: 9px; flex-wrap: wrap">
+      <span style="width: 100px; font-weight: 700">${esc(p.sheet_number || 'page ' + p.page_number)}</span>
+      <span style="width: 80px">${esc(p.level || '—')}</span>
+      <span style="width: 230px; display: flex; gap: 6px; align-items: center">
+        <select class="cell" data-pmode="${p.id}" aria-label="Mode for ${esc(p.sheet_number || '')}" style="${ov ? 'color: var(--amber); border-color: var(--amber-bd)' : ''}">
+          <option value="">project default</option>${Object.keys(MODE_INFO).map((m) => `<option value="${m}"${row.route_mode === m ? ' selected' : ''}>${modeLabel(m)}</option>`).join('')}
+        </select>
+        <input class="cell" type="number" step="0.05" min="0.05" max="5" style="width: 60px" data-pmult="${p.id}" placeholder="× ${effFor(p.id).multiplier.toFixed(2)}" value="${row.route_multiplier ?? ''}" aria-label="Multiplier for ${esc(p.sheet_number || '')}" title="Leave empty to use the mode's project multiplier">
+      </span>
+      <span style="width: 70px">${perPage.get(p.id)?.devices ?? '—'}</span>
+      <span style="flex-grow: 1; display: flex; gap: 8px; align-items: center"><span class="pill ${cls}" title="${esc(row.run_status_msg || '')}">${st}</span>
+        ${needsScale ? `<input class="cell" style="width: 120px" data-scale="${p.id}" placeholder='1/8" = 1&apos;-0"' value="${esc(scaleInput[p.id] || '')}" aria-label="Scale for ${esc(p.sheet_number || '')}">` : ''}
+      </span>
+    </div>`;
+  }).join('') : '<div class="row muted">No plan sheets yet — add them under 1 Sheets.</div>';
+  document.querySelectorAll('[data-pmode]').forEach((sel) => sel.onchange = () => saveSettings({ page_id: Number(sel.dataset.pmode), route_mode: sel.value || null }));
+  document.querySelectorAll('[data-pmult]').forEach((inp) => inp.onchange = () => saveSettings({ page_id: Number(inp.dataset.pmult), route_multiplier: inp.value === '' ? null : Number(inp.value) }));
+  document.querySelectorAll('[data-scale]').forEach((inp) => inp.oninput = () => { scaleInput[inp.dataset.scale] = inp.value; });
+
+  const todo = toCount(), counted = plans.length - todo.length;
+  $('run-summary').innerHTML = plans.length ? `${todo.length} sheet${todo.length === 1 ? '' : 's'} to count <span class="muted">· ${counted} counted</span>` : '';
+  $('run-go').textContent = `Count & route ${todo.length} sheet${todo.length === 1 ? '' : 's'}`;
+  $('run-go').disabled = !todo.length || running.size > 0;
+  $('run-all').disabled = !plans.length || running.size > 0;
+  renderFooter();
+}
+async function saveSettings(body) {
+  try {
+    const r = await post('/api/wf/wf4/settings', { project_id: Number(projectId), ...body });
+    await refreshSummary();
+    status(r.recount_pages.length
+      ? `Saved. ${r.recount_pages.length} sheet${r.recount_pages.length === 1 ? '' : 's'} measured in another mode need a re-count.`
+      : `Saved${r.rescaled ? ` · ${r.rescaled} cable length${r.rescaled === 1 ? '' : 's'} updated` : ''}.`, 'ok');
+  } catch (e) { status(e.message, 'err'); }
+  renderRun();
+}
+async function refreshSummary() { summary = await api('/api/wf/wf4/summary?project_id=' + projectId); }
+
+// Scale typed as  1/8" = 1'-0"  |  3/32"=1'  |  1" = 20'  ->  { paper_value (in), real_value (ft) }
+function parseScale(t) {
+  const m = String(t || '').replace(/[\u2019\u2032]/g, "'").replace(/[\u201d\u2033]/g, '"')
+    .match(/^\s*(\d+(?:\.\d+)?(?:\s*\/\s*\d+)?|\d+\s+\d+\/\d+)\s*"\s*=\s*(\d+(?:\.\d+)?)\s*'(?:\s*-?\s*(\d+(?:\.\d+)?)\s*")?\s*$/);
+  if (!m) return null;
+  const frac = (x) => x.trim().split(/\s+/).reduce((a, part) => { const [n, d] = part.split('/').map(Number); return a + (d ? n / d : n); }, 0);
+  const paper = frac(m[1].replace(/\s*\/\s*/, '/')), real = Number(m[2]) + (m[3] ? Number(m[3]) / 12 : 0);
+  return paper > 0 && real > 0 ? { paper_value: paper, real_value: real } : null;
+}
+
+// ── the page runner: the old batch loop (multi-page.html runBatch), per sheet ──
+async function countSheet(p, symTypes) {
+  const doc = await loadPdf(p.document_id);
+  const pdfPage = await doc.getPage(p.page_number);
+
+  // 1. Scale: read once by Pass B (metered, logged for the admin page) when the sheet has none.
+  let scaleOverride = null;
+  if (!hasScale(p.id)) {
+    const typed = scaleInput[p.id] ? parseScale(scaleInput[p.id]) : null;
+    if (scaleInput[p.id] && !typed) throw new Error(`Could not read the scale "${scaleInput[p.id]}" — type it like 1/8" = 1'-0"`);
+    if (typed) scaleOverride = typed;
+    else {
+      const vp = pdfPage.getViewport({ scale: 1.5 });                   // same image as the old Pass B
+      const cv = document.createElement('canvas'); cv.width = vp.width; cv.height = vp.height;
+      await pdfPage.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+      await post('/api/wf/wf4/pass-b', { project_id: Number(projectId), page_id: p.id, page_image_base64: cv.toDataURL('image/jpeg', 0.75).split(',')[1] });
+    }
+  }
+
+  // 2. Text, normalized by the content bounds (unchanged from the old loop).
+  const viewport = pdfPage.getViewport({ scale: 1.0 });
+  const tContent = await pdfPage.getTextContent({ includeMarkedContent: false });
+  const W = viewport.width, H = viewport.height;
+  const allRaw = [];
+  for (const item of tContent.items) {
+    const raw = item.str?.trim(); if (!raw) continue;
+    const s = raw.replace(/[^\x20-\x7E]/g, '').trim(); if (!s) continue;
+    const tx = item.transform[4], ty = item.transform[5];
+    const fs = Math.abs(item.transform[3]);
+    const tw = item.width ?? 0, th = item.height ?? fs;
+    allRaw.push({ s, cx: tx + tw / 2, cy: ty + th / 2, left: tx, right: tx + tw, fs });
+  }
+  const xVals = allRaw.map((i) => i.cx), yVals = allRaw.map((i) => i.cy);
+  const xMin = xVals.length ? Math.min(...xVals) : 0, xMax = xVals.length ? Math.max(...xVals) : W;
+  const yMin = yVals.length ? Math.min(...yVals) : 0, yMax = yVals.length ? Math.max(...yVals) : H;
+  const cW = Math.max(xMax - xMin, W), cH = Math.max(yMax - yMin, H);
+  const contentBBox = { xmin_frac: parseFloat((xMin / W).toFixed(4)), ymin_frac: parseFloat((yMin / H).toFixed(4)), w_frac: parseFloat((cW / W).toFixed(4)), h_frac: parseFloat((cH / H).toFixed(4)) };
+  const textItems = [];
+  for (const { s, cx, cy } of allRaw) {
+    if (s.length > 24 || !/[A-Za-z0-9]/.test(s)) continue;
+    textItems.push({ str: s, cx_norm: parseFloat(((cx - xMin) / cW).toFixed(4)), cy_norm: parseFloat((1 - (cy - yMin) / cH).toFixed(4)), color_hex: '#999999', font_size: 10 });
+  }
+
+  // 3. TR pins on this sheet (full-page frame), with the schematic box a pin owns, if any.
+  const regions = summary.page_regions || [];
+  const demarcPins = (summary.demarcs || []).filter((d) => d.page_id === p.id && d.x_norm != null && d.y_norm != null).map((d) => {
+    const box = regions.find((rg) => rg.page_id === p.id && rg.demarc_id === d.id && rg.x0 != null);
+    return { demarc_id: d.id, name: d.name, x_norm: d.x_norm, y_norm: d.y_norm, stub_ft: Number(d.stub_ft) || 0,
+      scope_box: box ? { x0: box.x0, y0: box.y0, x1: box.x1, y1: box.y1 } : undefined };
+  });
+
+  // 4. Symbols: vector first (free), model fallback (metered) — unchanged routing.
+  let symbolInstances = [], sheetClass = null;
+  try {
+    try { sheetClass = classifySheetClass(await deriveSheetClassSignals(pdfPage, pdfjsLib.OPS, { extractFilledSubpaths })); } catch (e) { console.warn('[sheet_class]', e.message); }
+    if (symTypes.length) {
+      const textCenters = allRaw.map((r) => ({ cx: r.cx, cy: r.cy }));
+      const byId = Object.fromEntries(symTypes.map((dt) => [dt.id, dt]));
+      let pageImg = null;
+      const renderForLLM = async () => {
+        if (pageImg) return pageImg;
+        const v = pdfPage.getViewport({ scale: 1.8 });                   // same image as the old symbol pass
+        const c = document.createElement('canvas'); c.width = v.width; c.height = v.height;
+        await pdfPage.render({ canvasContext: c.getContext('2d'), viewport: v }).promise;
+        return (pageImg = c.toDataURL('image/jpeg', 0.85).split(',')[1]);
+      };
+      const llmLocate = async (dt) => {
+        try { const j = await post('/api/wf/wf4/symbol', { page_id: p.id, device_type_id: dt.id, page_image_base64: await renderForLLM() }); return j.symbol_instances ?? []; }
+        catch { return []; }
+      };
+      const steps = sheetClass ? planSymbolDetection(sheetClass, symTypes) : symTypes.map((dt) => ({ route: 'llm', device_type_id: dt.id, name: dt.name }));
+      for (const step of steps) {
+        if (step.route === 'vector') {
+          let res = { instances: [], degraded: true };
+          try { res = await locateVector(pdfPage, pdfjsLib.OPS, textCenters, step.group, { extractCameraBlobs }, { vpW: W, vpH: H }); }
+          catch (e) { console.warn('[vector locate]', e.message); }
+          if (res.degraded) { for (const id of step.device_type_ids) symbolInstances.push(...await llmLocate(byId[id])); }
+          else symbolInstances.push(...res.instances);
+        } else symbolInstances.push(...await llmLocate(byId[step.device_type_id]));
+      }
+    }
+  } catch (e) { console.warn('[symbol-detect]', e.message); }
+
+  // 5. Count + route (free).
+  const body = { project_id: Number(projectId), page_id: p.id, eval_page_num: p.page_number, text_items: textItems,
+    symbol_instances: symbolInstances, sheet_class: sheetClass, page_width_pts: W, page_height_pts: H, demarc_pins: demarcPins, content_bbox: contentBBox };
+  if (scaleOverride) body.scale_override = scaleOverride;
+  const j = await post('/api/wf/wf4/batch', body);
+  pdfPage.cleanup();
+  return j;
+}
+async function runSheets(list) {
+  if (!list.length) return;
+  const types = (summary.device_types || []).filter((t) => t.verified);
+  if (!types.length) { status('No verified device types yet — build the library first (2 Device library).', 'err'); return; }
+  const symTypes = types.filter((dt) => (dt.detection_config?.sources ?? []).includes('symbol') && (dt.llm_description || '').trim().length > 20);
+  let ok = 0, failed = 0; const t0 = Date.now();
+  for (const p of list) running.add(p.id);
+  renderRun();
+  for (const p of list) {
+    status(`Counting ${p.sheet_number || 'page ' + p.page_number} (${ok + failed + 1} of ${list.length})…`);
+    try {
+      const j = await countSheet(p, symTypes);
+      ok++;
+      if (j.skipped_unverified_types?.length) status(`Not counted until re-checked: ${j.skipped_unverified_types.join(', ')}`);
+    } catch (e) { failed++; console.warn('[count]', p.sheet_number, e.message); }
+    running.delete(p.id);
+    await refreshSummary().catch(() => {});
+    renderRun();
+  }
+  status(`${ok} sheet${ok === 1 ? '' : 's'} counted${failed ? ` · ${failed} need attention (see status)` : ''} in ${Math.round((Date.now() - t0) / 1000)}s.`, failed ? 'err' : 'ok');
+}
+$('run-go').onclick = () => runSheets(toCount());
+$('run-all').onclick = () => { if (confirm('Re-count every plan sheet? Devices excluded on the map are counted again.')) runSheets(plans.slice()); };
+
+// ── 5 · Review ──
+const RTABS = [['level', 'Counts by level'], ['ft', 'Cable lengths'], ['page', 'By page'], ['conf', 'Pages · confidence']];
+let rtab = 'level';
+const n = (v) => (v == null ? '—' : Number(v).toLocaleString('en-US'));
+const ft = (v) => (v == null ? '—' : Number(v).toLocaleString('en-US', { maximumFractionDigits: 1 }));
+function methodsText(m) {
+  const parts = Object.entries(m || {}).map(([k, c]) => { const [mode, mult] = k.split('@'); return `${c} ${modeLabel(mode).toLowerCase()} × ${Number(mult).toFixed(2)}`; });
+  return parts.join(' · ') || '—';
+}
+function renderReview() {
+  if (!summary) return;
+  const R = summary.rollup, types = R.types || [];
+  const r = summary.routing || {};
+  $('routing-note').innerHTML = `${esc(modeLabel(r.mode))} × ${Number(r.multipliers?.[r.mode] ?? 1).toFixed(2)} · <a href="#" id="to-route">change</a>`;
+  $('to-route').onclick = (e) => { e.preventDefault(); go(4); };
+  $('rtabs').innerHTML = RTABS.map(([id, label]) => `<button type="button" class="rtab" role="tab" aria-selected="${rtab === id}" data-rtab="${id}">${label}</button>`).join('');
+  document.querySelectorAll('[data-rtab]').forEach((b) => b.onclick = () => { rtab = b.dataset.rtab; renderReview(); });
+
+  const sheetOf = (id) => plans.find((p) => p.id === id);
+  if (!R.totals.devices && rtab !== 'conf') {
+    $('review').innerHTML = '<div class="row muted">Nothing counted yet — run 4 Count &amp; route.</div>';
+    $('review-note').textContent = ''; renderFooter(); return;
+  }
+  const typeCols = (obj, fmt) => types.map((t) => `<td class="num">${fmt(obj?.[t] ?? (fmt === ft ? null : 0))}</td>`).join('');
+  const sumBy = (rows, get) => types.map((t) => rows.reduce((s, x) => s + (Number(get(x)?.[t]) || 0), 0));
+
+  if (rtab === 'level') {
+    const levelSheets = (lvl) => plans.filter((p) => (p.level || '—') === lvl);
+    const tot = sumBy(R.by_level, (l) => l.by_type);
+    $('review').innerHTML = `<table class="grid"><tr><th>Level</th>${types.map((t) => `<th class="num">${esc(t)}</th>`).join('')}<th class="num">Devices</th><th>Sheets</th></tr>
+      ${R.by_level.map((l) => { const sh = levelSheets(l.level); const done = sh.filter((p) => pageRow(p.id).run_status === 'done').length;
+        return `<tr><td style="font-weight: 700">${esc(l.level)}</td>${typeCols(l.by_type, n)}<td class="num" style="font-weight: 700">${n(l.devices)}</td>
+          <td><span class="pill ${done === sh.length ? 'confirmed' : 'stale'}">${done} of ${sh.length || done} counted</span></td></tr>`; }).join('')}
+      <tr class="total"><td>Total</td>${tot.map((v) => `<td class="num">${n(v)}</td>`).join('')}<td class="num">${n(R.totals.devices)}</td><td></td></tr></table>`;
+    $('review-note').textContent = `Counted plan sheets only. ${R.totals.excluded} excluded on the map, ${R.totals.manual} added by hand.`;
+  } else if (rtab === 'ft') {
+    const tot = sumBy(R.by_level, (l) => l.cable_by_type);
+    $('review').innerHTML = `<table class="grid"><tr><th>Level</th>${types.map((t) => `<th class="num">${esc(t)} ft</th>`).join('')}<th class="num">Total ft</th><th>How measured</th></tr>
+      ${R.by_level.map((l) => `<tr><td style="font-weight: 700">${esc(l.level)}</td>${typeCols(l.cable_by_type, ft)}<td class="num" style="font-weight: 700">${ft(l.cable_ft)}</td>
+        <td class="small muted">${esc(methodsText(l.methods))}${l.no_length ? ` · ${l.no_length} no length` : ''}</td></tr>`).join('')}
+      <tr class="total"><td>Total</td>${tot.map((v) => `<td class="num">${ft(v)}</td>`).join('')}<td class="num">${ft(R.totals.cable_ft)}</td><td></td></tr></table>`;
+    $('review-note').textContent = 'Plan length to the TR pin × the multiplier for the mode, plus any TR stub. "No length" = the device has no TR pin on its sheet or the sheet has no scale.';
+  } else if (rtab === 'page') {
+    const rows = R.per_page;
+    const tot = sumBy(rows, (x) => x.by_type);
+    $('review').innerHTML = `<table class="grid"><tr><th>Sheet</th><th>Level</th>${types.map((t) => `<th class="num">${esc(t)}</th>`).join('')}<th class="num">Devices</th><th class="num">Cable ft</th><th></th></tr>
+      ${rows.map((x) => { const sh = sheetOf(x.page_id);
+        return `<tr><td style="font-weight: 700">${esc(sh?.sheet_number || 'page ' + x.page_number)}</td><td>${esc(sh?.level || x.level || '—')}</td>${typeCols(x.by_type, n)}
+          <td class="num" style="font-weight: 700">${n(x.devices)}</td><td class="num">${ft(x.cable_ft)}</td><td class="small muted" title="The confidence map is the next build">map: next build</td></tr>`; }).join('')}
+      <tr class="total"><td>Total</td><td></td>${tot.map((v) => `<td class="num">${n(v)}</td>`).join('')}<td class="num">${n(R.totals.devices)}</td><td class="num">${ft(R.totals.cable_ft)}</td><td></td></tr></table>`;
+    $('review-note').textContent = "Counted plan sheets only; excluded devices are left out. The totals match Counts by level and Cable lengths. Cable feet use each sheet's mode and multiplier, plus any TR stub.";
+  } else {
+    const perPage = new Map(R.per_page.map((x) => [x.page_id, x]));
+    $('review').innerHTML = plans.length ? `<table class="grid"><tr><th>Sheet</th><th>Confidence</th><th>Lengths</th><th>Status</th><th></th></tr>
+      ${plans.map((p) => { const x = perPage.get(p.id), row = pageRow(p.id);
+        const c = x?.confidence || { high: 0, medium: 0, low: 0 };
+        const [st, cls] = row.run_status !== 'done' ? ['not counted', 'open'] : (c.low || x?.no_length || x?.tia) ? ['to review', 'in_review'] : ['looks right', 'confirmed'];
+        return `<tr><td style="font-weight: 700">${esc(p.sheet_number || 'page ' + p.page_number)}</td>
+          <td><span style="color: var(--green)">● ${c.high}</span> &nbsp;<span style="color: var(--amber)">● ${c.medium}</span> &nbsp;<span style="color: var(--red)">● ${c.low}</span></td>
+          <td class="small muted">${x ? `${x.no_length ? x.no_length + ' no length' : 'all measured'}${x.tia ? ` · ${x.tia} over TIA limit` : ''}` : '—'}</td>
+          <td><span class="pill ${cls}">${st}</span></td><td class="small muted">confidence map: next build</td></tr>`; }).join('')}</table>` : '<div class="row muted">No plan sheets yet.</div>';
+    $('review-note').textContent = 'High / medium / low detection confidence per sheet. The confidence map (exclude a device, add one, see its path) is the next build.';
+  }
+  renderFooter();
+}
+
 // ── step status + footer ──
 let stepInfo = null;
 function renderFooter() {
@@ -680,8 +1008,9 @@ function renderFooter() {
     2: `${types.length} device type${types.length === 1 ? '' : 's'} in the library${unverified ? ` · ${unverified} to re-check` : ''}`,
     3: (() => { const rows = pinsLoaded ? rowsForPins() : []; const placed = rows.filter((r) => pinFor(r.name)).length; const missing = rows.length - placed;
                return pinsLoaded ? `${placed} TR pin${placed === 1 ? '' : 's'} placed${missing ? ` · ${missing} TR${missing === 1 ? '' : 's'} with no sheet` : ''}` : 'TR pins'; })(),
-    4: 'Count & route — layout to confirm',
-    5: 'Review — layout to confirm',
+    4: (() => { if (!summary) return 'Count & route'; const t = toCount().length; const r = summary.routing || {};
+               return `${t} sheet${t === 1 ? '' : 's'} to count · ${modeLabel(r.mode).toLowerCase()} × ${Number(r.multipliers?.[r.mode] ?? 1).toFixed(2)}`; })(),
+    5: (() => { const T = summary?.rollup?.totals; return T ? `${n(T.devices)} devices · ${ft(T.cable_ft)} ft of cable${T.no_length ? ` · ${T.no_length} without a length` : ''}` : 'Review'; })(),
   };
   const done = stepInfo?.status === 'confirmed';
   $('footer-msg').textContent = done ? 'Floor plans confirmed. Counts go to the BOM.' : msgs[stage];
@@ -698,7 +1027,8 @@ async function loadStep() {
   renderFooter();
 }
 $('confirm').onclick = async () => {
-  if (!confirm('Counting and review are not built yet. Confirm floor plans anyway?')) return;
+  const todo = summary ? toCount().length : 0;
+  if (todo && !confirm(`${todo} plan sheet${todo === 1 ? ' is' : 's are'} not counted yet. Confirm floor plans anyway?`)) return;
   try { await post('/api/wf/projects', { action: 'confirm_step', project_id: Number(projectId), step_code: 'WF4' }); status('Floor plans confirmed.', 'ok'); loadStep(); }
   catch (e) { status(e.message, 'err'); }
 };

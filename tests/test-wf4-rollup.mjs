@@ -29,7 +29,7 @@ const devices = [
 const r = rollup(devices, pages, types);
 eq('countable pages', [...countablePageIds(pages)], ['1', '2']);
 eq('totals', r.totals, { devices: 5, cable_ft: 565.5, no_length: 1, excluded: 1, tia: 1, manual: 1, needs_placement: 1 });
-eq('by level', r.by_level, [
+eq('by level', r.by_level.map(({ level, devices, by_type }) => ({ level, devices, by_type })), [
   { level: 'L1', devices: 3, by_type: { DD2: 2, WAP: 1 } },
   { level: 'L2', devices: 2, by_type: { DD2: 1, WAP: 1 } },
 ]);
@@ -41,6 +41,22 @@ eq('per page', r.per_page.map((p) => [p.page_number, p.devices, p.excluded, p.no
 eq('skipped pages', r.skipped_pages, 2);
 eq('device level wins over page level', rollup([{ id: 1, page_id: 1, device_type_id: 10, level: 'L1-East', route_ft: 1 }], pages, types).by_level[0].level, 'L1-East');
 eq('empty', rollup([], [], []).totals, { devices: 0, cable_ft: 0, no_length: 0, excluded: 0, tia: 0, manual: 0, needs_placement: 0 });
+
+// by page: counts per type, cable feet, confidence, how measured
+const pg = Object.fromEntries(r.per_page.map((p) => [p.page_number, p]));
+eq('page 3 by type', pg[3].by_type, { DD2: 2, WAP: 1 });
+eq('page 3 cable ft', pg[3].cable_ft, 200.5);
+eq('page 4 by type (excluded left out)', pg[4].by_type, { DD2: 1, WAP: 1 });
+eq('page 4 cable ft', pg[4].cable_ft, 365);
+eq('page methods', pg[4].methods, { 'routed@1.10': 1, 'straight@1.35': 1 });
+eq('page confidence buckets', pg[3].confidence, { high: 0, medium: 0, low: 0, none: 3 });
+// by level: cable feet per type, and totals that tie out with the page totals
+eq('level cable by type', r.by_level.map((l) => [l.level, l.cable_ft, l.cable_by_type, l.no_length]),
+  [['L1', 200.5, { DD2: 200.5 }, 1], ['L2', 365, { DD2: 310, WAP: 55 }, 0]]);
+eq('page totals tie to level totals', r.per_page.reduce((s, p) => s + p.cable_ft, 0), r.by_level.reduce((s, l) => s + l.cable_ft, 0));
+eq('page counts tie to level counts', r.per_page.reduce((s, p) => s + p.devices, 0), r.by_level.reduce((s, l) => s + l.devices, 0));
+eq('types present', r.types, ['DD2', 'WAP']);
+eq('confidence values bucketed', rollup([{ id: 1, page_id: 1, device_type_id: 10, confidence: 'high', route_ft: 1 }, { id: 2, page_id: 1, device_type_id: 10, confidence: 'weird' }], pages, types).per_page[0].confidence, { high: 1, medium: 0, low: 0, none: 1 });
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

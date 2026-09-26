@@ -67,3 +67,43 @@ export function lengthsFt(distPts, ptsPerFt, multiplier, stubFt = 0) {
   const run = round(distPts * multiplier / ptsPerFt);
   return { route_ft_raw: round(distPts / ptsPerFt), run_ft: run, route_ft: round(run + (Number(stubFt) || 0)) };
 }
+
+// New length when only the MULTIPLIER changes (same mode): the stored raw
+// length x the new multiplier + the TR stub, rounded like lengthsFt. Lets a
+// multiplier edit update lengths without re-counting (which would also reset
+// devices excluded on the map). Within 0.1 ft of a fresh run, because the raw
+// length is stored rounded to 0.1 ft.
+export function rescaleFt(rawFt, multiplier, stubFt = 0) {
+  const raw = Number(rawFt), m = Number(multiplier);
+  if (rawFt == null || !Number.isFinite(raw) || !(m > 0)) return null;
+  const round = (v) => parseFloat(v.toFixed(1));
+  return round(round(raw * m) + (Number(stubFt) || 0));
+}
+
+// Which stored device rows a settings change affects. Returns
+//   { rescale: [{ id, route_ft, route_multiplier }], recount_pages: [page_id] }
+// A device whose stored mode still matches its sheet's effective mode but whose
+// multiplier differs is rescaled; a device measured in a different mode than
+// its sheet now uses marks that sheet for a re-count (geometry must be re-measured).
+// tiaLimitFor(device) -> ft limit for that device's type (the batch's rule:
+// route_ft over the limit sets tia_flag with the same reason text).
+export function planSettingsChange(project, pages, devices, stubByPin = new Map(), tiaLimitFor = () => null) {
+  const pageById = new Map(pages.map((p) => [String(p.id), p]));
+  const rescale = [], recount = new Set();
+  for (const d of devices) {
+    if (!d.route_method || d.route_method === 'none' || d.route_method === 'fallback') continue;
+    const page = pageById.get(String(d.page_id));
+    if (!page) continue;
+    const eff = effectiveRouting(project, page);
+    if (d.route_method !== eff.mode) { recount.add(page.id); continue; }
+    if (d.route_ft_raw == null) continue;
+    if (Math.abs(Number(d.route_multiplier) - eff.multiplier) < 1e-9) continue;
+    const stub = d.tr_pin_id != null ? Number(stubByPin.get(String(d.tr_pin_id)) ?? 0) : 0;
+    const ft = rescaleFt(d.route_ft_raw, eff.multiplier, stub);
+    const limit = tiaLimitFor(d);
+    const over = Number.isFinite(limit) && ft != null && ft > limit;
+    rescale.push({ id: d.id, route_ft: ft, route_multiplier: eff.multiplier,
+      tia_flag: over, tia_reason: over ? `${ft}ft exceeds ${limit}ft TIA limit` : null });
+  }
+  return { rescale, recount_pages: [...recount] };
+}

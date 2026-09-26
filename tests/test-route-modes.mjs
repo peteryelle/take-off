@@ -1,6 +1,6 @@
 // tests/test-route-modes.mjs — WF4 cable-length modes (one multiplier per mode)
 // Run: node tests/test-route-modes.mjs
-import { effectiveRouting, measure, lengthsFt, DEFAULT_MULTIPLIERS } from '../public/lib/route-modes.js';
+import { effectiveRouting, measure, lengthsFt, DEFAULT_MULTIPLIERS, rescaleFt, planSettingsChange } from '../public/lib/route-modes.js';
 
 let pass = 0, fail = 0;
 const eq = (name, got, want) => {
@@ -54,6 +54,37 @@ for (let i = 0; i < 5000; i++) {
   if (L.run_ft !== oldRun || L.route_ft !== oldTotal) mismatches++;
 }
 eq('straight default == old formula (5000 random cases)', mismatches, 0);
+
+// multiplier-only change: rescale stored lengths without re-counting
+eq('rescale', rescaleFt(100, 1.2, 10), 130);
+eq('rescale rounding', rescaleFt(33.3, 1.35, 0), 45);
+eq('rescale no raw', rescaleFt(null, 1.2, 0), null);
+// rescale stays within 0.1 ft of a fresh run (raw is stored rounded to 0.1)
+let worst = 0; seed = 11;
+for (let i = 0; i < 5000; i++) {
+  const dist = rnd() * 20000, ppf = 1 + rnd() * 30, stub = Math.round(rnd() * 50), m = 1 + rnd();
+  const fresh = lengthsFt(dist, ppf, m, stub).route_ft;
+  const raw = lengthsFt(dist, ppf, 1, 0).route_ft_raw;
+  worst = Math.max(worst, Math.abs(rescaleFt(raw, m, stub) - fresh));
+}
+eq('rescale within 0.1 ft of a fresh run', worst <= 0.1 + 1e-9, true);
+
+const proj2 = { route_mode: 'straight', straight_multiplier: 1.5, right_angle_multiplier: 1.2, routed_multiplier: 1.1 };
+const pages2 = [{ id: 1 }, { id: 2, route_mode: 'right_angle' }, { id: 3, route_multiplier: 2 }];
+const devs2 = [
+  { id: 10, page_id: 1, route_method: 'straight', route_ft_raw: 100, route_multiplier: 1.35, tr_pin_id: 7 },   // multiplier changed -> rescale
+  { id: 11, page_id: 1, route_method: 'straight', route_ft_raw: 50, route_multiplier: 1.5 },                   // already current
+  { id: 12, page_id: 2, route_method: 'straight', route_ft_raw: 80, route_multiplier: 1.35 },                  // sheet now right-angle -> recount
+  { id: 13, page_id: 3, route_method: 'straight', route_ft_raw: 10, route_multiplier: 1.35 },                  // sheet multiplier override 2
+  { id: 14, page_id: 1, route_method: 'none', route_ft_raw: null },                                           // no length: ignored
+];
+const plan = planSettingsChange(proj2, pages2, devs2, new Map([['7', 20]]));
+eq('plan rescale', plan.rescale.map(({ id, route_ft, route_multiplier }) => ({ id, route_ft, route_multiplier })),
+  [{ id: 10, route_ft: 170, route_multiplier: 1.5 }, { id: 13, route_ft: 20, route_multiplier: 2 }]);
+const planTia = planSettingsChange(proj2, pages2, devs2, new Map([['7', 20]]), () => 150);
+eq('TIA flag follows the new length', planTia.rescale.map((r) => [r.id, r.tia_flag, r.tia_reason]),
+  [[10, true, '170ft exceeds 150ft TIA limit'], [13, false, null]]);
+eq('plan recount', plan.recount_pages, [2]);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

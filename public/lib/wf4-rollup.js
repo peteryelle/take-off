@@ -29,6 +29,7 @@ export function rollup(devices = [], pages = [], types = []) {
   const counted = countablePageIds(pages);
 
   const byLevelType = new Map();   // level -> type -> count
+  const byLevelFt = new Map();     // level -> { ft, no_length, by_type: {type: ft}, methods: {method@mult: n} }
   const byTr = new Map();          // tr -> { tr_name, devices, cable_ft, no_length, by_type }
   const perPage = new Map();       // page_id -> summary
   const modes = new Map();         // "mode@multiplier" -> device count
@@ -42,7 +43,8 @@ export function rollup(devices = [], pages = [], types = []) {
     if (!counted.has(pid)) continue;
 
     const ps = perPage.get(pid) || { page_id: page.id, page_number: page.page_number ?? null, title: page.title_text ?? null,
-      level: page.level ?? null, devices: 0, excluded: 0, no_length: 0, tia: 0, manual: 0 };
+      level: page.level ?? null, devices: 0, excluded: 0, no_length: 0, tia: 0, manual: 0,
+      by_type: {}, cable_ft: 0, confidence: { high: 0, medium: 0, low: 0, none: 0 }, methods: {} };
     perPage.set(pid, ps);
 
     if (d.excluded) { ps.excluded++; excluded.push(d.id); continue; }
@@ -52,6 +54,11 @@ export function rollup(devices = [], pages = [], types = []) {
     const tr = d.tr_name ?? NONE;
 
     total++; ps.devices++;
+    ps.by_type[type] = (ps.by_type[type] || 0) + 1;
+    const confKey = ['high', 'medium', 'low'].includes(d.confidence) ? d.confidence : 'none';
+    ps.confidence[confKey]++;
+    const lf = byLevelFt.get(level) || { ft: 0, no_length: 0, by_type: {}, methods: {} };
+    byLevelFt.set(level, lf);
     if (d.source === 'manual') { manual++; ps.manual++; }
     if (Array.isArray(d.flags) && d.flags.includes('needs_placement')) needsPlacement++;
 
@@ -63,13 +70,17 @@ export function rollup(devices = [], pages = [], types = []) {
     t.devices++;
     t.by_type[type] = (t.by_type[type] || 0) + 1;
     const len = Number(d.route_ft);
-    if (d.route_ft != null && Number.isFinite(len)) { t.cable_ft += len; cableFt += len; }
-    else { t.no_length++; noLength++; ps.no_length++; }
+    if (d.route_ft != null && Number.isFinite(len)) {
+      t.cable_ft += len; cableFt += len; ps.cable_ft += len;
+      lf.ft += len; lf.by_type[type] = (lf.by_type[type] || 0) + len;
+    } else { t.no_length++; noLength++; ps.no_length++; lf.no_length++; }
     byTr.set(tr, t);
 
     if (d.route_method && d.route_method !== 'none') {
       const key = `${d.route_method}@${Number(d.route_multiplier ?? 0).toFixed(2)}`;
       modes.set(key, (modes.get(key) || 0) + 1);
+      ps.methods[key] = (ps.methods[key] || 0) + 1;
+      lf.methods[key] = (lf.methods[key] || 0) + 1;
     }
     if (d.tia_flag) { tia.push({ id: d.id, page_id: d.page_id, tr_name: tr, type, route_ft: d.route_ft }); ps.tia++; }
   }
@@ -78,11 +89,18 @@ export function rollup(devices = [], pages = [], types = []) {
   return {
     totals: { devices: total, cable_ft: round1(cableFt), no_length: noLength, excluded: excluded.length,
       tia: tia.length, manual, needs_placement: needsPlacement },
-    by_level: [...byLevelType.entries()].sort(([a], [b]) => sortKey(a, b)).map(([level, m]) => ({
-      level,
-      devices: [...m.values()].reduce((s, n) => s + n, 0),
-      by_type: Object.fromEntries([...m.entries()].sort(([a], [b]) => sortKey(a, b))),
-    })),
+    by_level: [...byLevelType.entries()].sort(([a], [b]) => sortKey(a, b)).map(([level, m]) => {
+      const lf = byLevelFt.get(level) || { ft: 0, no_length: 0, by_type: {}, methods: {} };
+      return {
+        level,
+        devices: [...m.values()].reduce((s, n) => s + n, 0),
+        by_type: Object.fromEntries([...m.entries()].sort(([a], [b]) => sortKey(a, b))),
+        cable_ft: round1(lf.ft),
+        cable_by_type: Object.fromEntries(Object.entries(lf.by_type).map(([k, v]) => [k, round1(v)])),
+        no_length: lf.no_length,
+        methods: lf.methods,
+      };
+    }),
     by_tr: [...byTr.values()].sort((a, b) => sortKey(a.tr_name, b.tr_name))
       .map((t) => ({ ...t, cable_ft: round1(t.cable_ft) })),
     // Mode + multiplier actually used, for the BOM's Notes & Assumptions.
@@ -90,7 +108,10 @@ export function rollup(devices = [], pages = [], types = []) {
       const [mode, m] = k.split('@');
       return { mode, multiplier: Number(m), devices: n };
     }).sort((a, b) => b.devices - a.devices),
-    per_page: [...perPage.values()].sort((a, b) => (a.page_number ?? 0) - (b.page_number ?? 0)),
+    per_page: [...perPage.values()].map((p) => ({ ...p, cable_ft: round1(p.cable_ft) }))
+      .sort((a, b) => (a.page_number ?? 0) - (b.page_number ?? 0)),
+    types: [...new Set(devices.filter((d) => counted.has(String(d.page_id)) && !d.excluded)
+      .map((d) => typeName.get(String(d.device_type_id)) ?? 'Unknown type'))].sort((a, b) => sortKey(a, b)),
     tia_violations: tia,
     excluded_ids: excluded,
     skipped_pages: pages.filter((p) => !counted.has(String(p.id))).length,
