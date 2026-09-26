@@ -19,6 +19,13 @@ import { requireOrg } from './utils/auth.js';
 import { td, assertWfProjectInOrg } from './utils/takeoff-db.js';
 import { demarcBodyToPinRow, pinToDemarc, pinKind, wfPageProject } from './utils/wf4-map.js';
 
+// Placing, moving or removing a TR pin changes a sheet's setup: un-confirm it.
+async function clearReady(db, pageId) {
+  if (pageId == null) return;
+  const { error } = await db.from('pages').update({ wf4_ready_at: null, wf4_ready_by: null }).eq('id', pageId);
+  if (error) console.warn('[wf4-pins] clear ready failed:', error.message);
+}
+
 export default async function handler(req) {
   if (req.method === 'OPTIONS') return new Response('', { headers: CORS });
   const gate = await requireOrg(req);
@@ -73,13 +80,14 @@ export default async function handler(req) {
       ? await db.from('tr_pins').update(row).eq('id', existingId).select('*').single()
       : await db.from('tr_pins').insert(row).select('*').single();
     if (error) return err(error.message, 500);
+    await clearReady(db, data.page_id);
     return ok(pinToDemarc(data));
   }
 
   if (req.method === 'DELETE') {
     const id = new URL(req.url).searchParams.get('id');
     if (!id) return err('id required');
-    const { data: pin, error: findErr } = await db.from('tr_pins').select('id, project_id, tr_name').eq('id', id).maybeSingle();
+    const { data: pin, error: findErr } = await db.from('tr_pins').select('id, project_id, page_id, tr_name').eq('id', id).maybeSingle();
     if (findErr) return err(findErr.message, 500);
     if (!pin) return err('TR pin not found', 404);
     if (!(await assertWfProjectInOrg(supabase, pin.project_id, orgId))) return err('Project not found', 404);
@@ -99,6 +107,7 @@ export default async function handler(req) {
     }
     const { error } = await db.from('tr_pins').delete().eq('id', id);
     if (error) return err(error.message, 500);
+    await clearReady(db, pin.page_id);
     return ok({ deleted: true, id: Number(id) });
   }
 

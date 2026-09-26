@@ -21,7 +21,7 @@ import { rollup } from '../../public/lib/wf4-rollup.js';
 const PAGE_COLS = 'id, document_id, page_number, title_text, sheet_id, role, role_source, building, level, zone, phase, is_duplicate, ' +
   'content_hash, run_status, run_status_msg, scale_label, scale_paper_in, scale_real_ft, scale_pts_per_ft, ' +
   'drawing_x0, drawing_y0, drawing_x1, drawing_y1, content_xmin_frac, content_ymin_frac, content_w_frac, content_h_frac, ' +
-  'sheet_class, leader_overrides, route_mode, route_multiplier';
+  'sheet_class, leader_overrides, route_mode, route_multiplier, wf4_ready_at';
 
 const TYPE_COLS = 'id, name, legend_id, legend_suggestion, human_description, llm_description, text_anchors, ' +
   'detection_config, example_image_base64, tia_limit_ft, verified, detect_mode, crop_path';

@@ -158,6 +158,7 @@
             <div style="display: flex; gap: 8px"><button type="button" class="btn green small" id="areas-add" disabled>Confirm box</button><button type="button" class="btn muted small" id="areas-clear">Clear corners</button></div>
           </div>
           <div class="panel"><div class="row head" id="areas-head">Areas on this sheet</div><div id="areas-list"></div></div>
+          <div class="card" id="areas-confirm" style="flex-direction: column; gap: 10px"></div>
           <div class="small muted">Devices inside these boxes are left out of the count from the next count of this sheet. Draw as many boxes as an area needs.</div>
         </section>
       </div>
@@ -261,7 +262,14 @@ function renderStages() {
   document.querySelectorAll('[data-stage]').forEach((s) => s.hidden = Number(s.dataset.stage) !== stage);
   renderFooter();
 }
-function go(n) { stage = n; renderStages(); if (n === 2) renderViewer(); if (n === 3) openPins(); if (n === 4) renderRun(); if (n === 5) renderReview(); }
+function go(n) {
+  stage = n; renderStages();
+  if (n === 2) renderViewer();
+  if (n === 3) openPins();
+  // Count & route and Review reload first: pin or area changes elsewhere can reopen a sheet.
+  if (n === 4) { renderRun(); refreshSummary().then(renderRun).catch((e) => status(e.message, 'err')); }
+  if (n === 5) { renderReview(); refreshSummary().then(renderReview).catch((e) => status(e.message, 'err')); }
+}
 
 // ── data ──
 mountIntake($('intake'), { projectId, stepCode: 'WF4', showLocation: true, onData: (d) => { intake = d; buildPlans(); } });
@@ -891,10 +899,13 @@ function pageStatus(p, recount) {
   return ['not run', 'open'];
 }
 const hasScale = (id) => Number(pageRow(id).scale_pts_per_ft) > 0;
+const isReady = (id) => !!pageRow(id).wf4_ready_at;
+// Sheets are counted once their setup is confirmed (exclusion areas, TR pin).
 function toCount() {
   const recount = recountPages();
-  return plans.filter((p) => { const st = pageStatus(p, recount)[0]; return st !== 'counted' && st !== 'counting…'; });
+  return plans.filter((p) => { if (!isReady(p.id)) return false; const st = pageStatus(p, recount)[0]; return st !== 'counted' && st !== 'counting…'; });
 }
+const unconfirmed = () => plans.filter((p) => !isReady(p.id));
 
 function renderRun() {
   if (!summary) return;
@@ -930,7 +941,8 @@ function renderRun() {
       </span>
       <span style="width: 70px">${perPage.get(p.id)?.devices ?? '—'}</span>
       <span style="flex-grow: 1; display: flex; gap: 8px; align-items: center"><span class="pill ${cls}" title="${esc(row.run_status_msg || '')}">${st}</span>
-        <button type="button" class="btn ${areasPageId === p.id ? 'green' : 'muted'} small" data-areas="${p.id}" title="Exclusion areas on this sheet">Areas${areaBoxes(p.id).length ? ' (' + areaBoxes(p.id).length + ')' : ''}</button>
+        <span class="pill ${isReady(p.id) ? 'confirmed' : 'open'}" title="${isReady(p.id) ? 'Setup confirmed ' + new Date(pageRow(p.id).wf4_ready_at).toLocaleString() : 'Draw its exclusion areas, then Confirm sheet'}">${isReady(p.id) ? 'sheet confirmed' : 'to set up'}</span>
+        <button type="button" class="btn ${areasPageId === p.id ? 'green' : 'muted'} small" data-areas="${p.id}" title="Exclusion areas and sheet confirmation">Areas${areaBoxes(p.id).length ? ' (' + areaBoxes(p.id).length + ')' : ''}</button>
         ${needsScale ? `<input class="cell" style="width: 120px" data-scale="${p.id}" placeholder='1/8" = 1&apos;-0"' value="${esc(scaleInput[p.id] || '')}" aria-label="Scale for ${esc(p.sheet_number || '')}">` : ''}
       </span>
     </div>`;
@@ -938,13 +950,17 @@ function renderRun() {
   document.querySelectorAll('[data-pmode]').forEach((sel) => sel.onchange = () => saveSettings({ page_id: Number(sel.dataset.pmode), route_mode: sel.value || null }));
   document.querySelectorAll('[data-pmult]').forEach((inp) => inp.onchange = () => saveSettings({ page_id: Number(inp.dataset.pmult), route_multiplier: inp.value === '' ? null : Number(inp.value) }));
   document.querySelectorAll('[data-scale]').forEach((inp) => inp.oninput = () => { scaleInput[inp.dataset.scale] = inp.value; });
-  document.querySelectorAll('[data-areas]').forEach((b) => b.onclick = () => openAreas(Number(b.dataset.areas)));
+  document.querySelectorAll('[data-areas]').forEach((b) => b.onclick = () => openAreas(Number(b.dataset.areas), true));
 
-  const todo = toCount(), counted = plans.length - todo.length;
-  $('run-summary').innerHTML = plans.length ? `${todo.length} sheet${todo.length === 1 ? '' : 's'} to count <span class="muted">· ${counted} counted</span>` : '';
-  $('run-go').textContent = `Count & route ${todo.length} sheet${todo.length === 1 ? '' : 's'}`;
+  const todo = toCount(), open = unconfirmed();
+  const countedN = plans.filter((p) => pageRow(p.id).run_status === 'done').length;
+  $('run-summary').innerHTML = plans.length
+    ? `${plans.length - open.length} of ${plans.length} sheets confirmed <span class="muted">· ${countedN} counted</span>${open.length ? ` · <a href="#" id="setup-next">set up ${esc(open[0].sheet_number || 'next sheet')}</a>` : ''}`
+    : '';
+  if ($('setup-next')) $('setup-next').onclick = (e) => { e.preventDefault(); openAreas(open[0].id); };
+  $('run-go').textContent = todo.length ? `Count & route ${todo.length} confirmed sheet${todo.length === 1 ? '' : 's'}` : (open.length ? 'Confirm sheets to count them' : 'All confirmed sheets counted');
   $('run-go').disabled = !todo.length || running.size > 0;
-  $('run-all').disabled = !plans.length || running.size > 0;
+  $('run-all').disabled = !plans.some((p) => isReady(p.id)) || running.size > 0;
   renderFooter();
 }
 async function saveSettings(body) {
@@ -1082,7 +1098,10 @@ async function runSheets(list) {
   status(`${ok} sheet${ok === 1 ? '' : 's'} counted${failed ? ` · ${failed} need attention (see status)` : ''} in ${Math.round((Date.now() - t0) / 1000)}s.`, failed ? 'err' : 'ok');
 }
 $('run-go').onclick = () => runSheets(toCount());
-$('run-all').onclick = () => { if (confirm('Re-count every plan sheet? Devices excluded on the map are counted again.')) runSheets(plans.slice()); };
+$('run-all').onclick = () => {
+  const list = plans.filter((p) => isReady(p.id));
+  if (confirm(`Re-count all ${list.length} confirmed sheet${list.length === 1 ? '' : 's'}? Devices added by hand and exclusions are kept.`)) runSheets(list);
+};
 
 
 // ── Exclusion areas (Count & route) ──
@@ -1097,14 +1116,14 @@ const isDeviceCull = (r) => String(r.label || '').startsWith('Manual exclude');
 function areaBoxes(pageId) {
   return (summary?.page_regions || []).filter((r) => r.page_id === pageId && r.kind === 'exclude' && r.x0 != null && !isDeviceCull(r));
 }
-function openAreas(pageId) {
-  areasPageId = areasPageId === pageId ? null : pageId;
+function openAreas(pageId, toggle = false) {
+  areasPageId = toggle && areasPageId === pageId ? null : pageId;
   areasCorners = [];
   $('areas').hidden = areasPageId == null;
   renderRun();
   if (areasPageId != null) { renderAreas(); $('areas').scrollIntoView({ behavior: 'smooth', block: 'start' }); }
 }
-$('areas-close').onclick = () => openAreas(areasPageId);
+$('areas-close').onclick = () => openAreas(areasPageId, true);
 document.querySelectorAll('[data-azoom]').forEach((b) => b.onclick = () => { areasZoom = b.dataset.azoom; renderAreas(); });
 $('areas-clear').onclick = () => { areasCorners = []; drawAreas(); areasStep(); };
 function areasStep() {
@@ -1166,12 +1185,43 @@ $('areas-add').onclick = async () => {
   try {
     await post('/api/wf/wf4/regions', { project_id: Number(projectId), page_id: areasPageId, label, polygon: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], x0, y0, x1, y1, kind: 'exclude' });
     areasCorners = []; areasChanged.add(areasPageId);
-    await refreshSummary();
+    await refreshSummary();   // the server reopened this sheet if it was confirmed
     status('Box saved. Draw another, or re-count the sheet to apply.', 'ok');
   } catch (e) { status(e.message, 'err'); }
   renderAreaList(); drawAreas(); areasStep(); renderRun();
 };
+function renderAreaConfirm() {
+  const p = plans.find((x) => x.id === areasPageId); if (!p) return;
+  const pins = (summary.demarcs || []).filter((d) => d.page_id === p.id && d.x_norm != null);
+  const ready = isReady(p.id);
+  $('areas-confirm').innerHTML = ready
+    ? `<div style="font-weight: 700; color: var(--green)">Sheet confirmed</div>
+       <div class="small muted">Confirmed ${esc(new Date(pageRow(p.id).wf4_ready_at).toLocaleString())}. Changing its exclusion areas or TR pins reopens it.</div>
+       <div style="display: flex; gap: 8px"><button type="button" class="btn muted small" id="sheet-reopen">Reopen</button>${unconfirmed().length ? `<button type="button" class="btn blue small" id="sheet-next">Next sheet to set up</button>` : ''}</div>`
+    : `<div style="font-weight: 700">Confirm this sheet</div>
+       <div class="small">TR pin${pins.length === 1 ? '' : 's'} on this sheet: ${pins.length ? esc(pins.map((d) => d.name).join(', ')) : '<span style="color: var(--orange)">none — its devices get no cable length unless a TR pin is placed (3 TR pins)</span>'}</div>
+       <div class="small muted">Confirm when its exclusion areas are drawn. Counting runs once all sheets are confirmed.</div>
+       <div><button type="button" class="btn green small" id="sheet-confirm" style="font-weight: 700">Confirm sheet</button></div>`;
+  if ($('sheet-confirm')) $('sheet-confirm').onclick = () => setReady(p.id, true);
+  if ($('sheet-reopen')) $('sheet-reopen').onclick = () => setReady(p.id, false);
+  if ($('sheet-next')) $('sheet-next').onclick = () => openAreas(unconfirmed()[0].id);
+}
+async function setReady(pageId, ready) {
+  try {
+    await post('/api/wf/wf4/settings', { project_id: Number(projectId), page_id: pageId, ready });
+    await refreshSummary();
+    const sheet = plans.find((x) => x.id === pageId);
+    if (ready) {
+      const next = unconfirmed()[0];
+      status(`${sheet?.sheet_number || 'Sheet'} confirmed.${next ? ` Next: ${next.sheet_number || 'next sheet'}.` : ' All sheets confirmed — Count & route when ready.'}`, 'ok');
+      if (next) { openAreas(next.id); return; }
+      areasPageId = null; $('areas').hidden = true;
+    } else status(`${sheet?.sheet_number || 'Sheet'} reopened.`, 'ok');
+  } catch (e) { status(e.message, 'err'); }
+  renderRun(); if (areasPageId != null) renderAreaConfirm();
+}
 function renderAreaList() {
+  renderAreaConfirm();
   const boxes = areaBoxes(areasPageId);
   const groups = new Map();
   for (const b of boxes) { const k = b.label || 'Out of scope'; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(b); }
@@ -1486,8 +1536,9 @@ function renderFooter() {
     2: `${types.length} device type${types.length === 1 ? '' : 's'} in the library${unverified ? ` · ${unverified} to re-check` : ''}`,
     3: (() => { const rows = pinsLoaded ? rowsForPins() : []; const placed = rows.filter((r) => pinFor(r.name)).length; const missing = rows.length - placed;
                return pinsLoaded ? `${placed} TR pin${placed === 1 ? '' : 's'} placed${missing ? ` · ${missing} TR${missing === 1 ? '' : 's'} with no sheet` : ''}` : 'TR pins'; })(),
-    4: (() => { if (!summary) return 'Count & route'; const t = toCount().length; const r = summary.routing || {};
-               return `${t} sheet${t === 1 ? '' : 's'} to count · ${modeLabel(r.mode).toLowerCase()} × ${Number(r.multipliers?.[r.mode] ?? 1).toFixed(2)}`; })(),
+    4: (() => { if (!summary) return 'Count & route'; const r = summary.routing || {}; const c = plans.length - unconfirmed().length;
+               const counted = plans.filter((p) => pageRow(p.id).run_status === 'done').length;
+               return `${c} of ${plans.length} sheets confirmed · ${counted} counted · ${modeLabel(r.mode).toLowerCase()} × ${Number(r.multipliers?.[r.mode] ?? 1).toFixed(2)}`; })(),
     5: (() => { const T = summary?.rollup?.totals; return T ? `${n(T.devices)} devices · ${ft(T.cable_ft)} ft of cable${T.no_length ? ` · ${T.no_length} without a length` : ''}` : 'Review'; })(),
   };
   const done = stepInfo?.status === 'confirmed';
@@ -1505,8 +1556,14 @@ async function loadStep() {
   renderFooter();
 }
 $('confirm').onclick = async () => {
-  const todo = summary ? toCount().length : 0;
-  if (todo && !confirm(`${todo} plan sheet${todo === 1 ? ' is' : 's are'} not counted yet. Confirm floor plans anyway?`)) return;
+  // The whole step is confirmed only once every plan sheet is confirmed and counted.
+  const open = summary ? unconfirmed() : [];
+  const notCounted = summary ? plans.filter((p) => isReady(p.id) && pageRow(p.id).run_status !== 'done') : [];
+  if (open.length || notCounted.length) {
+    const names = (list) => list.map((p) => p.sheet_number || 'page ' + p.page_number).join(', ');
+    status(`Not yet: ${open.length ? `confirm ${names(open)} (4 Count & route → Areas)` : ''}${open.length && notCounted.length ? '; ' : ''}${notCounted.length ? `count ${names(notCounted)}` : ''}.`, 'err');
+    go(4); return;
+  }
   try { await post('/api/wf/projects', { action: 'confirm_step', project_id: Number(projectId), step_code: 'WF4' }); status('Floor plans confirmed.', 'ok'); loadStep(); }
   catch (e) { status(e.message, 'err'); }
 };

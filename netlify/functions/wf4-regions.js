@@ -16,6 +16,14 @@ import { requireOrg } from './utils/auth.js';
 import { td, assertWfProjectInOrg } from './utils/takeoff-db.js';
 import { regionToLegacy, REGION_KINDS, wfPageProject } from './utils/wf4-map.js';
 
+// Changing a sheet's exclusion areas un-confirms its setup. Boxes the review
+// map creates when one device is excluded ("Manual exclude — …") do not.
+const clearsReady = (kind, label) => kind === 'exclude' && !String(label || '').startsWith('Manual exclude');
+async function clearReady(db, pageId) {
+  const { error } = await db.from('pages').update({ wf4_ready_at: null, wf4_ready_by: null }).eq('id', pageId);
+  if (error) console.warn('[wf4-regions] clear ready failed:', error.message);
+}
+
 const COLS = 'id, page_id, label, tr_pin_id, polygon, x0, y0, x1, y1, kind';
 
 export default async function handler(req) {
@@ -77,19 +85,21 @@ export default async function handler(req) {
     };
     const { data, error } = await db.from('page_regions').insert(row).select(COLS).single();
     if (error) return err(error.message, 500);
+    if (clearsReady(row.kind, row.label)) await clearReady(db, page_id);
     return ok(regionToLegacy(data));
   }
 
   if (req.method === 'DELETE') {
     const id = new URL(req.url).searchParams.get('id');
     if (!id) return err('id required');
-    const { data: region, error: findErr } = await db.from('page_regions').select('id, project_id').eq('id', id).maybeSingle();
+    const { data: region, error: findErr } = await db.from('page_regions').select('id, project_id, page_id, kind, label').eq('id', id).maybeSingle();
     if (findErr) return err(findErr.message, 500);
     if (!region) return err('Region not found', 404);
     if (!(await assertWfProjectInOrg(supabase, region.project_id, orgId))) return err('Project not found', 404);
 
     const { error } = await db.from('page_regions').delete().eq('id', id);
     if (error) return err(error.message, 500);
+    if (clearsReady(region.kind, region.label)) await clearReady(db, region.page_id);
     return ok({ deleted: true, id: Number(id) });
   }
 

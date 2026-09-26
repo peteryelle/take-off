@@ -4,6 +4,7 @@
 // POST /api/wf/wf4/settings
 //   project: { project_id, route_mode?, straight_multiplier?, right_angle_multiplier?, routed_multiplier? }
 //   sheet:   { project_id, page_id, route_mode: mode|null, route_multiplier: n|null }   null = use the project's
+//   confirm: { project_id, page_id, ready: true|false }   sheet setup done (areas, TR pin) / reopened
 //
 // After saving, stored device lengths are brought up to date where that needs
 // no re-measuring (public/lib/route-modes.js planSettingsChange):
@@ -45,11 +46,20 @@ export default async function handler(req) {
 
   const gate = await requireOrg(req);
   if (gate.error) return gate.error;
-  const { supabase, orgId } = gate;
+  const { supabase, orgId, user } = gate;
   const db = td(supabase);
   if (!(await assertWfProjectInOrg(supabase, project_id, orgId))) return err('Project not found', 404);
 
   try {
+    if (page_id != null && 'ready' in body) {
+      // ── confirm / reopen one sheet's setup ──
+      const { data: page } = await db.from('pages').select('id, project_id').eq('id', page_id).maybeSingle();
+      if (!page || String(page.project_id) !== String(project_id)) return err('Page not found in this project', 404);
+      const upd = body.ready ? { wf4_ready_at: new Date().toISOString(), wf4_ready_by: user?.id ?? null } : { wf4_ready_at: null, wf4_ready_by: null };
+      const { error } = await db.from('pages').update(upd).eq('id', page_id);
+      if (error) return err(error.message, 500);
+      return ok({ saved: true, page_id: Number(page_id), ready: !!body.ready });
+    }
     if (page_id != null) {
       // ── one sheet's override ──
       const { data: page } = await db.from('pages').select('id, project_id').eq('id', page_id).maybeSingle();
