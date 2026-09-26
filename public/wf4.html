@@ -111,6 +111,13 @@
             <button type="button" class="btn muted small" id="pins-add">Place on this sheet</button>
           </div>
         </div>
+        <div class="panel" style="padding: 12px 16px; display: flex; flex-direction: column; gap: 8px">
+          <div class="small muted">TR off this sheet? Place an exit pin where the cable leaves the sheet (riser, corridor edge toward the TR) and give the rest of the run as the stub.</div>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap">
+            <select class="cell" id="exit-sel" style="flex-grow: 1; min-width: 140px" aria-label="TR this sheet's cable goes to"></select>
+            <button type="button" class="btn muted small" id="exit-add">Add exit pin</button>
+          </div>
+        </div>
         <div class="panel"><div class="row head">All sheets, by PDF</div><div id="pins-overview"></div></div>
         <details class="small" id="pins-others"></details>
       </section>
@@ -677,6 +684,9 @@ const typedTrs = new Set();
 const docName = (id) => documents.find((d) => d.id === id)?.filename || `PDF ${id}`;
 const sheetName = (p) => p ? (p.sheet_number || 'page ' + p.page_number) : '—';
 const onSheet = (pageId) => pins.filter((d) => d.page_id === pageId && d.x_norm != null && d.pin_kind !== 'exit');
+const exitsOn = (pageId) => pins.filter((d) => d.page_id === pageId && d.x_norm != null && d.pin_kind === 'exit');
+const allTrNames = () => [...new Set([...trs.map((t) => t.tr_number), ...pins.map((d) => d.name), ...typedTrs])]
+  .sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }));
 const pinOf = (name) => pins.find((d) => d.name === name && d.pin_kind !== 'exit' && d.source !== 'off_sheet');
 const trIdOf = (name) => trs.find((t) => t.tr_number === name)?.id ?? null;
 function plansByPdf() {
@@ -708,7 +718,7 @@ $('pin-page').onchange = () => { pinPageId = Number($('pin-page').value); pinSel
 function renderPinPage() {
   // sheet picker, grouped by PDF
   $('pin-page').innerHTML = plansByPdf().map((g) => `<optgroup label="${esc(g.name)}">${g.list.map((p) =>
-    `<option value="${p.id}"${p.id === pinPageId ? ' selected' : ''}>${esc(sheetName(p))}${p.level ? ' · ' + esc(p.level) : ''} · ${onSheet(p.id).length} TR pin${onSheet(p.id).length === 1 ? '' : 's'}</option>`).join('')}</optgroup>`).join('');
+    `<option value="${p.id}"${p.id === pinPageId ? ' selected' : ''}>${esc(sheetName(p))}${p.level ? ' · ' + esc(p.level) : ''} · ${onSheet(p.id).length + exitsOn(p.id).length ? `${onSheet(p.id).length} TR · ${exitsOn(p.id).length} exit` : 'no TR pin'}</option>`).join('')}</optgroup>`).join('');
   const page = plans.find((p) => p.id === pinPageId);
   if (!page) { $('pins-list').innerHTML = '<div class="row muted">No plan sheets yet — add them under 1 Sheets.</div>'; renderFooter(); return; }
 
@@ -716,7 +726,8 @@ function renderPinPage() {
   const placed = onSheet(page.id);
   const placedNames = new Set(placed.map((d) => d.name));
   const found = (mentions.get(page.id) || []).filter((m) => !placedNames.has(m.name));
-  $('pins-head').textContent = `TRs on ${sheetName(page)} (${placed.length} placed${found.length ? ` · ${found.length} found, not placed` : ''})`;
+  const exits = exitsOn(page.id);
+  $('pins-head').textContent = `TRs for ${sheetName(page)} (${placed.length} on the sheet${exits.length ? ` · ${exits.length} off the sheet` : ''}${found.length ? ` · ${found.length} found, not placed` : ''})`;
   const row = (name, pin, extra) => {
     const sel = pinSel && pinSel.name === name;
     const [st, cls] = !pin ? ['found here', 'in_review'] : pin.source === 'user_pin' ? ['placed by hand', 'stale'] : ['at room label', 'confirmed'];
@@ -724,7 +735,11 @@ function renderPinPage() {
       <span style="font-weight: 700; flex-grow: 1">${esc(name)}${trIdOf(name) == null ? ' <span class="small muted" title="Typed here — not in the WF2 schedule">typed</span>' : ''}${pin && Number(pin.stub_ft) ? ` <span class="small muted">+${Number(pin.stub_ft)} ft</span>` : ''}</span>
       <span class="pill ${cls}">${st}</span>${extra}</div>`;
   };
+  const exitRow = (d) => `<div class="row" style="font-size: 13px; padding-top: 9px; padding-bottom: 9px; gap: 10px;${pinSel && pinSel.kind === 'exit' && pinSel.name === d.name ? ' background: var(--green-bg);' : ''}">
+      <span style="font-weight: 700; flex-grow: 1">→ ${esc(d.name)} <span class="small muted">off this sheet · +${Number(d.stub_ft) || 0} ft to the TR</span></span>
+      <span class="pill in_review">exit pin</span><button type="button" class="btn blue small" data-exit="${esc(d.name)}">Move</button></div>`;
   $('pins-list').innerHTML = (placed.map((d) => row(d.name, d, `<button type="button" class="btn blue small" data-pin="${esc(d.name)}">Move</button>`)).join('')
+    + exits.map(exitRow).join('')
     + found.map((m) => {
         const elsewhere = pinOf(m.name);
         return row(m.name, null, elsewhere
@@ -733,6 +748,8 @@ function renderPinPage() {
       }).join(''))
     || `<div class="row muted small">${mentions.size ? 'No TR is named on this sheet.' : 'Reading the sheets for TR names…'} Add one below if a TR serves it.</div>`;
   document.querySelectorAll('[data-pin]').forEach((b) => b.onclick = () => selectPin(b.dataset.pin));
+  document.querySelectorAll('[data-exit]').forEach((b) => b.onclick = () => selectExit(b.dataset.exit));
+  $('exit-sel').innerHTML = `<option value="">TR…</option>${allTrNames().filter((n) => !exits.some((d) => d.name === n)).map((n) => `<option>${esc(n)}</option>`).join('')}`;
   document.querySelectorAll('[data-place]').forEach((b) => b.onclick = () => {
     const m = (mentions.get(pinPageId) || []).find((x) => x.name === b.dataset.place);
     selectPin(b.dataset.place, m ? { x: m.x, y: m.y } : null);
@@ -748,7 +765,7 @@ function renderPinPage() {
       <div class="small muted" title="${esc(g.name)}" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">${esc(g.name)}</div>
       ${g.list.map((p) => { const on = onSheet(p.id);
         return `<button type="button" class="chip" data-sheet="${p.id}" aria-pressed="${p.id === pinPageId}" style="text-align: left; display: flex; gap: 10px; font-size: 12px">
-          <b style="width: 70px">${esc(sheetName(p))}</b><span class="${on.length ? '' : 'muted'}">${on.length ? esc(on.map((d) => d.name).join(', ')) : 'no TR pin'}</span></button>`; }).join('')}
+          <b style="width: 70px">${esc(sheetName(p))}</b><span class="${on.length || exitsOn(p.id).length ? '' : 'muted'}">${[...on.map((d) => esc(d.name)), ...exitsOn(p.id).map((d) => '→ ' + esc(d.name))].join(', ') || 'no TR pin'}</span></button>`; }).join('')}
     </div>`).join('');
   document.querySelectorAll('[data-sheet]').forEach((b) => b.onclick = () => { pinPageId = Number(b.dataset.sheet); pinSel = null; renderPinPage(); });
 
@@ -772,12 +789,24 @@ function selectPin(name, suggest = null, quiet = false) {
     stub: Number(pin?.stub_ft) || 0, pinId: onThis ? pin.id : null, movesFrom: pin && !onThis ? pin.page_id : null };
   if (!quiet) renderPinPage(); else { renderPinEdit(); renderPinViewer(); }
 }
+function selectExit(name) {
+  const ex = exitsOn(pinPageId).find((d) => d.name === name);
+  pinSel = { kind: 'exit', name, tr_id: ex?.tr_id ?? trIdOf(name), page_id: pinPageId, x: ex?.x_norm ?? null, y: ex?.y_norm ?? null,
+    stub: Number(ex?.stub_ft) || 0, pinId: ex?.id ?? null, movesFrom: null };
+  renderPinPage();
+}
+$('exit-add').onclick = () => {
+  const n = $('exit-sel').value;
+  if (!n) { status('Pick the TR this sheet\'s cable goes to.', 'err'); return; }
+  selectExit(n);
+  status(`Click where ${n}'s cable leaves this sheet, enter the feet from there to the TR as the stub, then Save pin.`);
+};
 function renderPinEdit() {
   if (!pinSel) { $('pin-edit').innerHTML = '<div class="muted small">Pick a TR on the left, or add one to this sheet.</div>'; return; }
   const from = pinSel.movesFrom != null ? plans.find((p) => p.id === pinSel.movesFrom) : null;
   $('pin-edit').innerHTML = `<div style="display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; width: 100%">
-    <div style="font-weight: 700; font-size: 15px; align-self: center; min-width: 90px">${esc(pinSel.name)}</div>
-    <label class="lbl" style="letter-spacing: 0" title="Fixed extra cable to the TR, e.g. a jumper or a run off this sheet">Stub ft<input class="field" id="pin-stub" type="number" min="0" step="1" style="padding: 6px 8px; font-size: 13px; width: 80px" value="${pinSel.stub}"></label>
+    <div style="font-weight: 700; font-size: 15px; align-self: center; min-width: 90px">${pinSel.kind === 'exit' ? '→ ' : ''}${esc(pinSel.name)}${pinSel.kind === 'exit' ? '<div class="small muted" style="font-weight: 400">exit pin — TR is off this sheet</div>' : ''}</div>
+    <label class="lbl" style="letter-spacing: 0" title="${pinSel.kind === 'exit' ? 'Feet of cable from this exit point to the TR (measured on the TR\'s sheet, or the riser run)' : 'Fixed extra cable to the TR, e.g. a jumper'}">${pinSel.kind === 'exit' ? 'Stub ft (exit → TR)' : 'Stub ft'}<input class="field" id="pin-stub" type="number" min="0" step="1" style="padding: 6px 8px; font-size: 13px; width: 90px" value="${pinSel.stub}"></label>
     <span class="small muted" style="align-self: center; flex-grow: 1">${pinSel.x == null ? 'Click the drawing to place it.' : `(${pinSel.x.toFixed(3)}, ${pinSel.y.toFixed(3)})`}${from ? ` · saving moves it from ${esc(sheetName(from))}` : ''}</span>
     <button type="button" class="btn green small" id="pin-save"${pinSel.x == null ? ' disabled' : ''}>Save pin</button>
     ${pinSel.pinId ? '<button type="button" class="btn muted small" id="pin-clear">Remove pin</button>' : ''}
@@ -821,9 +850,16 @@ function drawPins(scrollTo = false) {
     g.strokeText(label, px + 12, py - 8); g.fillStyle = color; g.fillText(label, px + 12, py - 8);
   };
   for (const m of mentions.get(pinPageId) || []) if (!onSheet(pinPageId).some((d) => d.name === m.name) && m.name !== pinSel?.name) dot(m.x, m.y, '#b07800', m.name, false, true);
-  for (const d of onSheet(pinPageId)) if (d.name !== pinSel?.name) dot(d.x_norm, d.y_norm, '#2a6ab0', d.name, false, false);
+  for (const d of onSheet(pinPageId)) if (!(pinSel && pinSel.kind !== 'exit' && d.name === pinSel.name)) dot(d.x_norm, d.y_norm, '#2a6ab0', d.name, false, false);
+  for (const d of exitsOn(pinPageId)) {
+    if (pinSel && pinSel.kind === 'exit' && d.name === pinSel.name) continue;
+    const px = d.x_norm * o.width, py = d.y_norm * o.height;
+    g.fillStyle = '#7a3ab0'; g.beginPath(); g.moveTo(px, py - 8); g.lineTo(px + 8, py); g.lineTo(px, py + 8); g.lineTo(px - 8, py); g.closePath(); g.fill();
+    g.font = '700 12px "JetBrains Mono", monospace'; g.lineWidth = 3; g.strokeStyle = 'rgba(255,255,255,.9)';
+    const t = `→ ${d.name} +${Number(d.stub_ft) || 0} ft`; g.strokeText(t, px + 12, py - 8); g.fillStyle = '#7a3ab0'; g.fillText(t, px + 12, py - 8);
+  }
   if (pinSel && pinSel.x != null) {
-    dot(pinSel.x, pinSel.y, '#0b7a2a', pinSel.name, true, false);
+    dot(pinSel.x, pinSel.y, '#0b7a2a', (pinSel.kind === 'exit' ? '→ ' : '') + pinSel.name, true, false);
     if (scrollTo) { const v = $('pin-viewer'); v.scrollTo({ left: pinSel.x * o.width - v.clientWidth / 2, top: pinSel.y * o.height - v.clientHeight / 2 }); }
   }
 }
@@ -839,16 +875,17 @@ async function savePin() {
   $('pin-save').disabled = true;
   try {
     // A TR has one serving pin: saving on this sheet moves it here if it was elsewhere.
-    await post('/api/wf/wf4/pins', { project_id: Number(projectId), page_id: pinPageId, name: s.name, tr_id: s.tr_id, source: 'user_pin', x_norm: s.x, y_norm: s.y, stub_ft: s.stub });
+    await post('/api/wf/wf4/pins', { project_id: Number(projectId), page_id: pinPageId, name: s.name, tr_id: s.tr_id, source: 'user_pin',
+      pin_kind: s.kind === 'exit' ? 'exit' : undefined, x_norm: s.x, y_norm: s.y, stub_ft: s.stub });
     if (s.movesFrom != null) { const old = pins.find((d) => d.name === s.name && d.page_id === s.movesFrom && d.pin_kind !== 'exit'); if (old) await api('/api/wf/wf4/pins?id=' + old.id, { method: 'DELETE' }).catch(() => {}); }
     pins = await api('/api/wf/wf4/pins?project_id=' + projectId);
-    status(`Pin saved for ${s.name} on ${sheetName(plans.find((p) => p.id === pinPageId))}.`, 'ok');
-    pinSel = null; selectPin(s.name);
+    status(`${s.kind === 'exit' ? 'Exit pin' : 'Pin'} saved for ${s.name} on ${sheetName(plans.find((p) => p.id === pinPageId))}.`, 'ok');
+    if (s.kind === 'exit') selectExit(s.name); else { pinSel = null; selectPin(s.name); }
   } catch (e) { status(e.message, 'err'); if ($('pin-save')) $('pin-save').disabled = false; }
 }
 async function clearPin() {
   const s = pinSel; if (!s?.pinId) return;
-  if (!confirm(`Remove the pin for ${s.name}?`)) return;
+  if (!confirm(`Remove the ${s.kind === 'exit' ? 'exit ' : ''}pin for ${s.name}?`)) return;
   try {
     await api('/api/wf/wf4/pins?id=' + s.pinId, { method: 'DELETE' });
     pins = await api('/api/wf/wf4/pins?project_id=' + projectId);
@@ -1587,7 +1624,7 @@ function renderFooter() {
     1: `${plans.length} plan sheet${plans.length === 1 ? '' : 's'} indexed`,
     2: `${types.length} device type${types.length === 1 ? '' : 's'} in the library${unverified ? ` · ${unverified} to re-check` : ''}`,
     3: (() => { if (!pinsLoaded) return 'TR pins';
-               const withPin = plans.filter((p) => onSheet(p.id).length).length, n = pins.filter((d) => d.page_id && d.x_norm != null && d.pin_kind !== 'exit').length;
+               const withPin = plans.filter((p) => onSheet(p.id).length || exitsOn(p.id).length).length, n = pins.filter((d) => d.page_id && d.x_norm != null).length;
                return `${n} TR pin${n === 1 ? '' : 's'} on ${withPin} of ${plans.length} sheet${plans.length === 1 ? '' : 's'}${plans.length - withPin ? ` · ${plans.length - withPin} sheet${plans.length - withPin === 1 ? '' : 's'} without a TR pin` : ''}`; })(),
     4: (() => { if (!summary) return 'Count & route'; const r = summary.routing || {}; const c = plans.length - unconfirmed().length;
                const counted = plans.filter((p) => pageRow(p.id).run_status === 'done').length;

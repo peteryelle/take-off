@@ -1,7 +1,7 @@
 // tests/test-wf4-map.mjs — WF4 mapping layer (old floor-plan shapes <-> takeoff rows)
 // Run: node tests/test-wf4-map.mjs
 import {
-  pinKind, demarcBodyToPinRow, pinToDemarc, regionToLegacy,
+  pinKind, demarcBodyToPinRow, pinToDemarc, regionToLegacy, baseTrName,
   manualBodyToInstanceRow, instanceToManual, cullUpdate,
   MANUAL_DEVICE_BASIS, USER_PIN_BASIS,
 } from '../netlify/functions/utils/wf4-map.js';
@@ -30,6 +30,11 @@ eq('pin -> demarc', [back.id, back.name, back.source, back.region_id, back.x_nor
 const coordsOnly = demarcBodyToPinRow({ project_id: 3, page_id: 11, name: 'EB51A_exit_pg11', source: 'user_pin', x_norm: 0.9, y_norm: 0.1 }, ctx);
 eq('no region key', 'region_id' in coordsOnly, false);
 eq('exit kind', coordsOnly.pin_kind, 'exit');
+eq('exit pin stores the real TR name', coordsOnly.tr_name, 'EB51A');
+eq('base TR name', [baseTrName('H133-1_exit_pg2'), baseTrName('H133-1')], ['H133-1', 'H133-1']);
+const explicitExit = demarcBodyToPinRow({ project_id: 3, page_id: 12, name: 'H133-1', source: 'user_pin', pin_kind: 'exit', x_norm: 0.95, y_norm: 0.5, stub_ft: 140 }, ctx);
+eq('explicit exit pin', [explicitExit.pin_kind, explicitExit.tr_name, explicitExit.stub_ft], ['exit', 'H133-1', 140]);
+eq('off-sheet wins over exit flag', demarcBodyToPinRow({ project_id: 3, page_id: null, name: 'X1', source: 'off_sheet', pin_kind: 'exit' }, ctx).pin_kind, 'off_sheet');
 
 // auto pin -> extracted, no basis; off-sheet round trip
 const auto = demarcBodyToPinRow({ project_id: 3, page_id: 11, name: 'EB51A', source: 'auto', x_norm: 0.5, y_norm: 0.5 }, ctx);

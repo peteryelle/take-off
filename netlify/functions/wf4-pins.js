@@ -9,9 +9,9 @@
 //     x_norm, y_norm, stub_ft, region_id, note, tr_id? }
 // DELETE /api/wf/wf4/pins?id=456   (refused while devices or regions use it)
 //
-// Dedup is unchanged from the old function: a pin's identity is what it IS,
-// not the typed name — an exit pin is one per page; a serving pin is one per
-// page + schematic region. Off-sheet pins (no page) always insert.
+// Dedup: a serving pin is one per page + schematic region (as before); an exit
+// pin is one per page and TR (the old rule allowed one per page, so a second
+// off-sheet TR replaced the first). Off-sheet pins (no page) always insert.
 // ─────────────────────────────────────────────────────────────────
 
 import { ok, err, CORS } from './utils/clients.js';
@@ -68,9 +68,11 @@ export default async function handler(req) {
 
     let existingId = null;
     if (page_id != null) {
-      const kind = pinKind(source, name);
+      const kind = row.pin_kind;   // explicit 'exit' or from the name, as mapped above
       let find = db.from('tr_pins').select('id').eq('project_id', project_id).eq('page_id', page_id).eq('pin_kind', kind);
       if (kind === 'serving') find = region_id != null ? find.eq('region_id', region_id) : find.is('region_id', null);
+      // One exit pin per sheet PER TR — a sheet served by two off-sheet TRs keeps both.
+      if (kind === 'exit') find = find.eq('tr_name', row.tr_name);
       const { data: existing, error: findErr } = await find.limit(1).maybeSingle();
       if (findErr) return err(findErr.message, 500);
       if (existing) existingId = existing.id;

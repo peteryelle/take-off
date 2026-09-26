@@ -30,17 +30,24 @@ export function pinKind(source, name) {
   return EXIT_PIN_RE.test(String(name ?? '')) ? 'exit' : 'serving';
 }
 
+// Real TR name of a pin: an old-style exit-pin name ("H133-1_exit_pg2") is
+// stored as the TR ("H133-1") with pin_kind 'exit', so devices measured to an
+// exit pin still roll up under their TR.
+export const baseTrName = (name) => String(name ?? '').replace(EXIT_PIN_RE, '');
+
 // Old demarc POST body -> takeoff.tr_pins row (without id).
+// body.pin_kind = 'exit' marks an exit pin explicitly (WF4 page); the old
+// "_exit_pgN" name suffix still works.
 // `regionId` is only written when the caller supplied it, so a coords-only
 // update never nulls an existing schematic link (old behaviour, kept).
 export function demarcBodyToPinRow(body, { orgId, userId }) {
-  const kind = pinKind(body.source, body.name);
+  const kind = body.source !== 'off_sheet' && body.pin_kind === 'exit' ? 'exit' : pinKind(body.source, body.name);
   const placedByUser = body.source === 'user_pin';
   const row = {
     org_id: orgId,
     project_id: body.project_id,
     page_id: nz(body.page_id),
-    tr_name: body.name,
+    tr_name: baseTrName(body.name),
     tr_id: nz(body.tr_id),
     pin_kind: kind,
     x_norm: nz(body.x_norm),
