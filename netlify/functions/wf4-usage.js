@@ -1,13 +1,16 @@
 // netlify/functions/wf4-usage.js
-// OWNER ONLY — token use and estimated cost of metered (LLM) passes.
-// Not shown to project users anywhere in the app.
+// PLATFORM ADMIN ONLY — token use and estimated cost of metered (LLM) passes,
+// across ALL organizations. Feeds the admin landing page; never shown to
+// customer users (including a customer org's own owner/admin).
 //
-// GET /api/wf/wf4/usage                    all projects in the caller's org
+// GET /api/wf/wf4/usage                    every org and project
+// GET /api/wf/wf4/usage?org_id=3           one organization
 // GET /api/wf/wf4/usage?project_id=12      one project, with per-page detail
 //
-// Access: the caller's email must be in TAKEOFF_OWNER_EMAILS (Netlify env,
-// comma-separated, e.g. "peter+smcis@winquest.ai"). Anyone else gets a plain
-// 404 — the endpoint does not reveal that it exists.
+// Access: the signed-in account's email must be in TAKEOFF_OWNER_EMAILS
+// (Netlify env, comma-separated, e.g. "peter@biq-i.com"). This is an access
+// list only — nothing is ever emailed. Anyone else gets a plain 404; the
+// endpoint does not reveal that it exists.
 //
 // Costs are shown two ways: `cost_logged` (price at the time of each call) and
 // `cost_now` (tokens x the current metered_prices row), so correcting a price
@@ -43,7 +46,7 @@ export function summarize(calls, prices, pages = []) {
     acc.cost_logged += Number(c.cost_usd ?? 0);
     acc.cost_now += now ?? 0;
   };
-  const totals = blank(), byPass = new Map(), byPage = new Map(), byProject = new Map(), byDay = new Map();
+  const totals = blank(), byPass = new Map(), byPage = new Map(), byProject = new Map(), byDay = new Map(), byOrg = new Map();
   const unpriced = new Set();
 
   for (const c of calls) {
@@ -57,6 +60,9 @@ export function summarize(calls, prices, pages = []) {
     const passKey = c.pass;
     if (!byPass.has(passKey)) byPass.set(passKey, { pass: passKey, ...blank() });
     add(byPass.get(passKey), c, now);
+    const orgKey = String(c.org_id ?? '—');
+    if (!byOrg.has(orgKey)) byOrg.set(orgKey, { org_id: c.org_id ?? null, ...blank() });
+    add(byOrg.get(orgKey), c, now);
     const projKey = String(c.project_id ?? '—');
     if (!byProject.has(projKey)) byProject.set(projKey, { project_id: c.project_id ?? null, ...blank() });
     add(byProject.get(projKey), c, now);
@@ -73,6 +79,7 @@ export function summarize(calls, prices, pages = []) {
   const fin = (o) => ({ ...o, cost_logged: r6(o.cost_logged), cost_now: r6(o.cost_now) });
   return {
     totals: fin(totals),
+    by_org: [...byOrg.values()].map(fin).sort((a, b) => b.cost_now - a.cost_now),
     by_pass: [...byPass.values()].map(fin).sort((a, b) => (b.cost_now - a.cost_now) || (b.calls - a.calls)),
     by_project: [...byProject.values()].map(fin).sort((a, b) => b.cost_now - a.cost_now),
     by_page: [...byPage.values()].map(fin).sort((a, b) => (a.page_number ?? 0) - (b.page_number ?? 0)),
@@ -88,30 +95,42 @@ export default async function handler(req) {
 
   const gate = await requireOrg(req);
   if (gate.error) return gate.error;
-  const { supabase, orgId, user } = gate;
+  const { supabase, user } = gate;
   if (!isOwner(user?.email)) return err('Not found', 404);
 
   const db = td(supabase);
-  const projectId = new URL(req.url).searchParams.get('project_id');
+  const url = new URL(req.url);
+  const projectId = url.searchParams.get('project_id');
+  const orgFilter = url.searchParams.get('org_id');
 
   try {
     const [calls, prices] = await Promise.all([
       fetchAll(() => {
         let q = db.from('metered_calls')
-          .select('id, project_id, page_id, pass, detail, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, ok, created_at')
-          .eq('org_id', orgId);
+          .select('id, org_id, project_id, page_id, pass, detail, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, ok, created_at');
+        if (orgFilter) q = q.eq('org_id', orgFilter);
         if (projectId) q = q.eq('project_id', projectId);
         return q;
       }),
       db.from('metered_prices').select('*').then((r) => r.data ?? []),
     ]);
     const pages = projectId
-      ? await fetchAll(() => db.from('pages').select('id, page_number, title_text').eq('project_id', projectId).eq('org_id', orgId))
+      ? await fetchAll(() => db.from('pages').select('id, page_number, title_text').eq('project_id', projectId))
       : [];
+    // Names for the admin page (organizations are in public, projects in takeoff).
+    const [{ data: orgs }, { data: projects }] = await Promise.all([
+      supabase.from('organizations').select('id, name'),
+      db.from('projects').select('id, name, org_id'),
+    ]);
+    const orgName = new Map((orgs ?? []).map((o) => [String(o.id), o.name]));
+    const projName = new Map((projects ?? []).map((p) => [String(p.id), p.name]));
+    const s = summarize(calls, prices, pages);
+    s.by_org = s.by_org.map((o) => ({ ...o, org_name: orgName.get(String(o.org_id)) ?? null }));
+    s.by_project = s.by_project.map((p) => ({ ...p, project_name: projName.get(String(p.project_id)) ?? null }));
     return ok({
-      scope: projectId ? { project_id: Number(projectId) } : { org_id: orgId },
+      scope: projectId ? { project_id: Number(projectId) } : orgFilter ? { org_id: Number(orgFilter) } : { all_orgs: true },
       prices,
-      ...summarize(calls, prices, pages),
+      ...s,
       recent: calls.slice(-50).reverse(),
     });
   } catch (e) {

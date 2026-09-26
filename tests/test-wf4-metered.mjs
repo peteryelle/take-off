@@ -17,11 +17,11 @@ eq('cost no price', costFromUsage({ input_tokens: 1 }, null), null);
 eq('cost no usage', costFromUsage(null, price), null);
 
 // owner check
-eq('owner exact', isOwner('peter+smcis@winquest.ai', 'peter+smcis@winquest.ai'), true);
+eq('owner exact', isOwner('peter@biq-i.com', 'peter@biq-i.com'), true);
 eq('owner case/space', isOwner(' Peter+SMCIS@winquest.ai ', 'a@b.com, peter+smcis@winquest.ai'), true);
-eq('not owner', isOwner('estimator@smcis.com', 'peter+smcis@winquest.ai'), false);
-eq('no list = nobody', isOwner('peter+smcis@winquest.ai', ''), false);
-eq('no email', isOwner(null, 'peter+smcis@winquest.ai'), false);
+eq('not owner', isOwner('estimator@smcis.com', 'peter@biq-i.com'), false);
+eq('no list = nobody', isOwner('peter@biq-i.com', ''), false);
+eq('no email', isOwner(null, 'peter@biq-i.com'), false);
 
 // row shape
 const ctx = { orgId: 1, projectId: 5, pageId: 9, pass: 'symbol', detail: 'WAP strip 3', userId: 'u' };
@@ -60,10 +60,10 @@ eq('log failure does not break call', !!resp3, true);
 
 // owner summary
 const calls = [
-  { id: 1, project_id: 5, page_id: 9, pass: 'pass_b', model: 'claude-sonnet-4-5', input_tokens: 2000, output_tokens: 400, cost_usd: 0.012, ok: true, created_at: '2026-09-27T10:00:00Z' },
-  { id: 2, project_id: 5, page_id: 9, pass: 'symbol', model: 'claude-sonnet-4-5', input_tokens: 1000, output_tokens: 200, cost_usd: 0.006, ok: true, created_at: '2026-09-27T10:01:00Z' },
-  { id: 3, project_id: 5, page_id: 10, pass: 'symbol', model: 'claude-sonnet-4-5', input_tokens: 1000, output_tokens: 200, cost_usd: 0.006, ok: false, created_at: '2026-09-28T09:00:00Z' },
-  { id: 4, project_id: 5, page_id: null, pass: 'discover:read_legend', model: 'other-model', input_tokens: 500, output_tokens: 100, cost_usd: null, ok: true, created_at: '2026-09-28T09:05:00Z' },
+  { id: 1, org_id: 3, project_id: 5, page_id: 9, pass: 'pass_b', model: 'claude-sonnet-4-5', input_tokens: 2000, output_tokens: 400, cost_usd: 0.012, ok: true, created_at: '2026-09-27T10:00:00Z' },
+  { id: 2, org_id: 3, project_id: 5, page_id: 9, pass: 'symbol', model: 'claude-sonnet-4-5', input_tokens: 1000, output_tokens: 200, cost_usd: 0.006, ok: true, created_at: '2026-09-27T10:01:00Z' },
+  { id: 3, org_id: 3, project_id: 5, page_id: 10, pass: 'symbol', model: 'claude-sonnet-4-5', input_tokens: 1000, output_tokens: 200, cost_usd: 0.006, ok: false, created_at: '2026-09-28T09:00:00Z' },
+  { id: 4, org_id: 1, project_id: 5, page_id: null, pass: 'discover:read_legend', model: 'other-model', input_tokens: 500, output_tokens: 100, cost_usd: null, ok: true, created_at: '2026-09-28T09:05:00Z' },
 ];
 const s = summarize(calls, [{ model: 'claude-sonnet-4-5', ...price }], [{ id: 9, page_number: 3, title_text: 'T-101' }, { id: 10, page_number: 4 }]);
 eq('totals', [s.totals.calls, s.totals.failed, s.totals.input_tokens, s.totals.output_tokens, s.totals.cost_now], [4, 1, 4500, 900, 0.024]);
@@ -72,6 +72,9 @@ eq('by page', s.by_page.map((p) => [p.page_number, p.calls, p.cost_now]), [[3, 2
 eq('avg per page', s.avg_cost_per_page, 0.012);
 eq('by day', s.by_day.map((d) => [d.day, d.calls]), [['2026-09-27', 2], ['2026-09-28', 2]]);
 eq('unpriced flagged', s.unpriced_models, ['other-model']);
+eq('by org (all orgs)', s.by_org.map((o) => [o.org_id, o.calls]), [[3, 3], [1, 1]]);
+eq('admin account allowed', isOwner('peter@biq-i.com', 'peter@biq-i.com'), true);
+eq('customer admin refused', isOwner('preardon@smcis.com', 'peter@biq-i.com'), false);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
