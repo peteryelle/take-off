@@ -108,6 +108,12 @@
       </section>
       <section>
         <div id="pin-edit" class="card" style="margin-bottom: 10px"></div>
+        <div class="row" style="padding: 0 0 8px; border: none; gap: 8px">
+          <span class="small muted" id="pin-sheet-name" style="flex-grow: 1"></span>
+          <button type="button" class="btn muted small" data-pzoom="fit">Fit</button>
+          <button type="button" class="btn muted small" data-pzoom="1.5">150%</button>
+          <button type="button" class="btn muted small" data-pzoom="3">300%</button>
+        </div>
         <div class="viewer" id="pin-viewer" style="height: 560px"><canvas id="pin-pdf"></canvas><canvas id="pin-ovl"></canvas></div>
         <div class="small muted" style="margin-top: 6px">Click the drawing to place the pin for the selected TR, then Save pin. Pins are kept in the full-page frame the batch measures cable from.</div>
       </section>
@@ -219,6 +225,25 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const status = (m, c = '') => { $('status').className = 'status-line ' + c; $('status').textContent = m; };
 
+// A viewer box has no width until it is laid out (hidden stage, first paint).
+// Measuring it then gives 0 and the drawing never appears. fitScale returns
+// null in that case and calls `retry` once the box actually has a width.
+const waiting = new WeakSet();
+function fitScale(el, pageWidth, zoom, retry) {
+  const w = el.getBoundingClientRect().width;
+  if (w < 100) {
+    if (!waiting.has(el)) {
+      waiting.add(el);
+      const ro = new ResizeObserver(() => {
+        if (el.getBoundingClientRect().width >= 100) { ro.disconnect(); waiting.delete(el); retry(); }
+      });
+      ro.observe(el);
+    }
+    return null;
+  }
+  return zoom === 'fit' ? (w - 2) / pageWidth : Number(zoom);
+}
+
 const CROP_SCALE = 2.5;          // crops are always rendered at this scale (same as the old tool), whatever the zoom
 const SYMBOL_MIN_SAMPLES = 3;
 const STAGES = ['Sheets', 'Device library', 'TR pins', 'Count & route', 'Review'];
@@ -306,7 +331,7 @@ async function renderViewer() {
     const page = await doc.getPage(p.page_number);
     if (token !== renderToken) return;
     const base = page.getViewport({ scale: 1 });
-    const z = zoom === 'fit' ? ($('viewer').clientWidth - 2) / base.width : Number(zoom);
+    const z = fitScale($('viewer'), base.width, zoom, renderViewer); if (z == null) return;
     vp = page.getViewport({ scale: z });
     const c = $('pdf'), o = $('ovl');
     c.width = o.width = Math.floor(vp.width); c.height = o.height = Math.floor(vp.height);
@@ -629,7 +654,7 @@ async function removeType(id) {
 // the frame the old screen used and the batch measures cable from.
 let trs = [], pins = [], pinsLoaded = false, autoTried = false;
 let pinSel = null;   // { name, tr_id, page_id, x, y, stub, pinId }
-let pinVp = null, pinPage = null;
+let pinVp = null, pinPage = null, pinZoom = 'fit';
 const pinFor = (name) => pins.find((p) => p.name === name && p.pin_kind !== 'exit' && p.source !== 'off_sheet');
 async function loadPins() {
   const [w2, pl] = await Promise.all([
@@ -718,8 +743,10 @@ async function renderPinViewer() {
     const page = await doc.getPage(p.page_number);
     if (token !== pinToken) return;
     const base = page.getViewport({ scale: 1 });
-    pinVp = page.getViewport({ scale: ($('pin-viewer').clientWidth - 2) / base.width * 1.6 });
+    const z = fitScale($('pin-viewer'), base.width, pinZoom, renderPinViewer); if (z == null) return;
+    pinVp = page.getViewport({ scale: z });
     pinPage = p;
+    $('pin-sheet-name').textContent = `${p.sheet_number || 'page ' + p.page_number}${p.level ? ' · ' + p.level : ''}${p.title_text ? ' · ' + p.title_text : ''}`;
     const c = $('pin-pdf'), o = $('pin-ovl');
     c.width = o.width = Math.floor(pinVp.width); c.height = o.height = Math.floor(pinVp.height);
     pinTask = page.render({ canvasContext: c.getContext('2d'), viewport: pinVp });
@@ -728,8 +755,10 @@ async function renderPinViewer() {
     drawPins(true);
   } catch (e) { if (e?.name !== 'RenderingCancelledException') status('Could not show the drawing: ' + e.message, 'err'); }
 }
+document.querySelectorAll('[data-pzoom]').forEach((b) => b.onclick = () => { pinZoom = b.dataset.pzoom; renderPinViewer(); });
 function drawPins(scrollTo = false) {
   const o = $('pin-ovl'), g = o.getContext('2d');
+  if (!pinPage || pinPage.id !== pinSel?.page_id) { g.clearRect(0, 0, o.width, o.height); return; }
   g.clearRect(0, 0, o.width, o.height);
   const dot = (x, y, color, label, big) => {
     const px = x * o.width, py = y * o.height;
@@ -1095,7 +1124,7 @@ async function renderAreas() {
     const page = await doc.getPage(p.page_number);
     if (token !== areasToken) return;
     const base = page.getViewport({ scale: 1 });
-    const z = areasZoom === 'fit' ? ($('areas-viewer').clientWidth - 2) / base.width : Number(areasZoom);
+    const z = fitScale($('areas-viewer'), base.width, areasZoom, renderAreas); if (z == null) return;
     const v = page.getViewport({ scale: z });
     const c = $('areas-pdf'), o = $('areas-ovl');
     c.width = o.width = Math.floor(v.width); c.height = o.height = Math.floor(v.height);
@@ -1285,7 +1314,7 @@ async function renderMap() {
     if (token !== mapToken) return;
     const base = page.getViewport({ scale: 1 });
     mapW = base.width; mapH = base.height;
-    const z = mapZoom === 'fit' ? ($('map-viewer').clientWidth - 2) / base.width : Number(mapZoom);
+    const z = fitScale($('map-viewer'), base.width, mapZoom, renderMap); if (z == null) return;
     mapVp = page.getViewport({ scale: z });
     const c = $('map-pdf'), o = $('map-ovl');
     c.width = o.width = Math.floor(mapVp.width); c.height = o.height = Math.floor(mapVp.height);
