@@ -13,8 +13,10 @@
 //   * `takeoff` schema; device types come from the project's device library,
 //     and only VERIFIED types count (copied types must be re-checked first).
 //   * Cable length follows the routing mode (public/lib/route-modes.js):
-//     straight (default) | right_angle | routed; sheet override wins over the
-//     project setting. Routed keeps the old 1.35 factor, so its lengths match.
+//     straight (default) | right_angle | routed, each with its own user-set
+//     multiplier on the project (defaults 1.00 / 1.00 / 1.35 — routed's 1.35
+//     is the old route factor, so routed lengths match until edited).
+//     A sheet can override its mode and multiplier.
 //   * Manual devices are device_instances rows (source = 'manual'): a re-run
 //     wipes only non-manual rows, and updates each manual row's length/TR in
 //     place instead of re-inserting it.
@@ -26,7 +28,7 @@
 import { ok, err, CORS } from "./utils/clients.js";
 import { requireOrg } from "./utils/auth.js";
 import { td, assertWfProjectInOrg } from "./utils/takeoff-db.js";
-import { effectiveRouting, appliedFactor, measure, lengthsFt } from "../../public/lib/route-modes.js";
+import { effectiveRouting, measure, lengthsFt } from "../../public/lib/route-modes.js";
 import { buildDeviceList } from "../../public/lib/pipeline.js";
 import { parseSchedule } from "../../public/lib/schedule.js";
 import { buildGreedyPath } from "../../public/lib/waypoint-path.js";
@@ -96,7 +98,7 @@ export default async function handler(req) {
   try {
     const [{ data: page }, { data: project }] = await Promise.all([
       tdb.from("pages").select("*").eq("id", page_id).single(),
-      tdb.from("projects").select("id, device_library_id, route_mode, route_multiplier").eq("id", project_id).single()
+      tdb.from("projects").select("id, device_library_id, route_mode, straight_multiplier, right_angle_multiplier, routed_multiplier").eq("id", project_id).single()
     ]);
     if (!page) return err("Page not found", 404);
     if (!project?.device_library_id) return err("This project has no device library yet — create or copy one first", 404);
@@ -110,7 +112,7 @@ export default async function handler(req) {
     const skippedUnverified = (libTypes || []).filter((t) => !t.verified).map((t) => t.name);
 
     const routing = effectiveRouting(project, page);
-    const factor  = appliedFactor(routing.mode, routing.multiplier);
+    const factor  = routing.multiplier;
 
     // ── Scale gate ──────────────────────────────────────────────────
     // Distance (and any TR-run cable line item) silently comes out null
@@ -600,7 +602,7 @@ export default async function handler(req) {
       leader_overrides: leaderOv,   // effective marks (body or persisted) so the UI can pre-fill
       tia_violations: instances.filter((x) => x.row.tia_flag).length,
       max_run_ft: Math.max(0, ...instances.map((x) => x.row.route_ft ?? 0)) || null,
-      routing: { mode: routing.mode, multiplier: routing.multiplier, applied_factor: factor },
+      routing: { mode: routing.mode, multiplier: routing.multiplier },
       skipped_unverified_types: skippedUnverified,
       _tier3_debug: tier3Debug,  // TEMPORARY — see comment at tier3Debug's declaration
       devices: instances.map((x, j) => ({

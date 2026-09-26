@@ -2,34 +2,35 @@
 // WF4 cable-length modes. Pure functions — no DOM, no database — shared by the
 // WF4 batch pass and any client that previews lengths.
 //
-//   straight     device -> TR pin, straight line            x multiplier (default 1.00)
-//   right_angle  one horizontal + one vertical leg           x multiplier
-//   routed       existing wall-aware / waypoint routing      x ROUTED_FACTOR x multiplier
+//   straight     device -> TR pin, straight line          (default mode)
+//   right_angle  one horizontal + one vertical leg
+//   routed       existing wall-aware / waypoint routing
 //
-// Routed keeps the old app's 1.35 route factor so its lengths stay identical to
-// today's (which have been validated). The project/sheet multiplier applies on
-// top of it; at the default 1.00 nothing changes.
+// Each mode has its own user-set multiplier on the project
+// (straight_multiplier, right_angle_multiplier, routed_multiplier).
+// Defaults: 1.00, 1.00, 1.35 — routed's 1.35 is the old app's route factor,
+// so routed lengths match today's until someone edits it.
+// A sheet may override its mode and/or multiplier (pages.route_mode,
+// pages.route_multiplier). The sheet multiplier replaces the mode's multiplier.
 //
 // Distances are in PDF points; `ptsPerFt` converts to feet. The TR pin's stub
 // (fixed off-sheet distance) is added after the multiplier, as before.
 // ─────────────────────────────────────────────────────────────────
 
 export const ROUTE_MODES = ['straight', 'right_angle', 'routed'];
-export const ROUTED_FACTOR = 1.35;
+export const DEFAULT_MULTIPLIERS = { straight: 1.00, right_angle: 1.00, routed: 1.35 };
 
-// Sheet override wins over the project setting; anything invalid falls back
-// to the defaults (straight line at 100%).
+const positive = (v) => { const n = Number(v); return v != null && Number.isFinite(n) && n > 0 ? n : null; };
+
+// Mode: sheet override > project > straight.
+// Multiplier: sheet override > project's multiplier for that mode > default for that mode.
 export function effectiveRouting(project = {}, page = {}) {
   const mode = ROUTE_MODES.includes(page?.route_mode) ? page.route_mode
     : ROUTE_MODES.includes(project?.route_mode) ? project.route_mode : 'straight';
-  const m = Number(page?.route_multiplier ?? project?.route_multiplier ?? 1);
-  const multiplier = Number.isFinite(m) && m > 0 ? m : 1;
+  const multiplier = positive(page?.route_multiplier)
+    ?? positive(project?.[`${mode}_multiplier`])
+    ?? DEFAULT_MULTIPLIERS[mode];
   return { mode, multiplier };
-}
-
-// The factor actually applied to the measured distance for this mode.
-export function appliedFactor(mode, multiplier) {
-  return mode === 'routed' ? ROUTED_FACTOR * multiplier : multiplier;
 }
 
 // Measure device -> pin in points. `routedFn(deviceXY, pinXY)` is the existing
@@ -58,13 +59,12 @@ export function measure(mode, deviceXY, pinXY, routedFn) {
 }
 
 // Feet, rounded to 0.1 like the old code:
-//   route_ft_raw = measured length, no factor
-//   run_ft       = raw x applied factor           (old run_length_ft)
+//   route_ft_raw = measured length, no multiplier
+//   run_ft       = raw x multiplier               (old run_length_ft)
 //   route_ft     = run_ft + stub                  (old total_ft)
-export function lengthsFt(distPts, ptsPerFt, factor, stubFt = 0) {
+export function lengthsFt(distPts, ptsPerFt, multiplier, stubFt = 0) {
   if (!Number.isFinite(distPts) || !(ptsPerFt > 0)) return { route_ft_raw: null, run_ft: null, route_ft: null };
   const round = (v) => parseFloat(v.toFixed(1));
-  const raw = distPts / ptsPerFt;
-  const run = round(distPts * factor / ptsPerFt);
-  return { route_ft_raw: round(raw), run_ft: run, route_ft: round(run + (Number(stubFt) || 0)) };
+  const run = round(distPts * multiplier / ptsPerFt);
+  return { route_ft_raw: round(distPts / ptsPerFt), run_ft: run, route_ft: round(run + (Number(stubFt) || 0)) };
 }
