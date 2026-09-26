@@ -14,8 +14,8 @@
 //     and only VERIFIED types count (copied types must be re-checked first).
 //   * Cable length follows the routing mode (public/lib/route-modes.js):
 //     straight (default) | right_angle | routed, each with its own user-set
-//     multiplier on the project (defaults 1.00 / 1.00 / 1.35 — routed's 1.35
-//     is the old route factor, so routed lengths match until edited).
+//     multiplier on the project (defaults: straight 1.35, right_angle 1.20,
+//     routed 1.10).
 //     A sheet can override its mode and multiplier.
 //   * Manual devices are device_instances rows (source = 'manual'): a re-run
 //     wipes only non-manual rows, and updates each manual row's length/TR in

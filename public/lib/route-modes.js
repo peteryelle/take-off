@@ -8,8 +8,7 @@
 //
 // Each mode has its own user-set multiplier on the project
 // (straight_multiplier, right_angle_multiplier, routed_multiplier).
-// Defaults: 1.00, 1.00, 1.35 — routed's 1.35 is the old app's route factor,
-// so routed lengths match today's until someone edits it.
+// Defaults: straight 1.35, right_angle 1.20, routed 1.10.
 // A sheet may override its mode and/or multiplier (pages.route_mode,
 // pages.route_multiplier). The sheet multiplier replaces the mode's multiplier.
 //
@@ -18,7 +17,7 @@
 // ─────────────────────────────────────────────────────────────────
 
 export const ROUTE_MODES = ['straight', 'right_angle', 'routed'];
-export const DEFAULT_MULTIPLIERS = { straight: 1.00, right_angle: 1.00, routed: 1.35 };
+export const DEFAULT_MULTIPLIERS = { straight: 1.35, right_angle: 1.20, routed: 1.10 };
 
 const positive = (v) => { const n = Number(v); return v != null && Number.isFinite(n) && n > 0 ? n : null; };
 
