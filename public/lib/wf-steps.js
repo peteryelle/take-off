@@ -14,7 +14,7 @@ export const STEPS = [
   { code: 'WF4', name: 'Floor plans', roles: ['plan', 'key_plan'], page: 'wf4.html' },
   { code: 'WF5', name: 'TR rooms', roles: ['tr_room'], page: 'wf5.html' },
   { code: 'WF6', name: 'Rack & details', roles: ['rack', 'detail'], page: 'wf6.html' },
-  { code: 'WF7', name: 'Riser', roles: ['riser'], page: 'wf-soon.html' },
+  { code: 'WF7', name: 'Riser', roles: ['riser'], page: 'wf7.html' },
   { code: 'WF8', name: 'BOM', roles: [], page: 'wf-soon.html' },
 ];
 
@@ -32,8 +32,8 @@ export const RECOMMENDED = {
   WF6: [{ needs: 'WF2', without: 'patch panels and switches per TR wait on the schedule counts' },
         { needs: 'WF5', without: 'no rack count per TR, so rack items cannot be counted' },
         { needs: 'WF7', without: 'fiber cassettes wait on each TR\'s ISP/OSP' }],
-  WF7: [{ needs: 'WF2', without: 'riser TRs are not checked against the schedule' },
-        { needs: 'WF3', without: 'ISP/OSP is set by hand instead of matched to routes' }],
+  WF7: [{ needs: 'WF2', without: 'riser TRs cannot be matched to the schedule; every riser TR is out until added in' },
+        { needs: 'WF3', without: 'no route check for OSP feeds' }],
   WF8: [],
 };
 

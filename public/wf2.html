@@ -136,6 +136,11 @@ async function readSheet(docId, pageNo, revisionId, label) {
     }
     readFrom = { revision_id: Number(revisionId), label };
     working = r.rows.map((x) => ({ ...x, source: 'extracted' }));
+    // TRs entered by hand (including TRs added in from the riser) are not on the schedule sheet;
+    // keep them unless the user removes them.
+    const readNames = new Set(working.map((x) => x.tr_number));
+    const kept = saved.filter((x) => x.source === 'manual' && !readNames.has(x.tr_number));
+    working.push(...kept.map((x) => ({ ...x })));
     const d = diffTrRows(saved, working);
     $('read-kicker').textContent = `READ ${label.toUpperCase()}`;
     $('read-msg').textContent = saved.length
@@ -204,7 +209,7 @@ function renderChanges() {
 }
 
 $('save').onclick = async () => {
-  const needsReason = working.some((r) => r.source !== 'extracted');
+  const needsReason = working.some((r) => r.source !== 'extracted' && !String(r.override_basis || '').trim());
   let basis = '';
   if (needsReason) {
     basis = prompt('Reason for edited or hand-entered rows (kept with those rows):', 'Checked against the schedule sheet') || '';
@@ -223,7 +228,8 @@ $('save').onclick = async () => {
 
 async function loadSaved() {
   const d = await api('/api/wf/wf2?project_id=' + projectId);
-  saved = d.trs.map(({ id, sheet_revision_id, override_basis, entered_at, ...r }) => r);
+  // override_basis is kept so a hand-entered TR's reason (e.g. added from the riser) survives a re-save
+  saved = d.trs.map(({ id, sheet_revision_id, entered_at, ...r }) => r);
   if (!dirty) { working = saved.map((x) => ({ ...x })); readFrom = null; }
   renderRows(); renderChanges();
 }

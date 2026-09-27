@@ -21,6 +21,7 @@ import { ok, err, CORS } from './utils/clients.js';
 import { requireOrg } from './utils/auth.js';
 import { td, assertWfProjectInOrg } from './utils/takeoff-db.js';
 import { METHOD_KEYS, confirmBlocker, countsSomething } from '../../public/lib/wf6-rules.js';
+import { feedType } from '../../public/lib/wf7-riser.js';
 
 const RULE_COLS = 'id, rule_key, note_kind, note_number, ref, item, part_number, ru, qty_rule, zone, params, note_text, stated_on_sheet, source, page_id, sheet_revision_id, original_value, override_basis, conflict, entered_at, confirmed_at, confirmed_by';
 const ZONES = [null, 'top', 'middle', 'bottom', 'side'];
@@ -68,18 +69,21 @@ export default async function handler(req) {
     if (req.method === 'GET') {
       const projectId = new URL(req.url).searchParams.get('project_id');
       if (!(await assertWfProjectInOrg(supabase, projectId, orgId))) return err('Project not found', 404);
-      const [rules, elev, trs, racks, feeds] = await Promise.all([
+      const [rules, elev, trs, racks, feeds, cables] = await Promise.all([
         db.from('rack_rules').select(RULE_COLS).eq('project_id', projectId).order('note_kind').order('note_number').order('rule_key'),
         db.from('rack_elevations').select('id, page_id, detail_ref, title, rack_count, capacity_passive, capacity_active, active_over, capacity_text, source').eq('project_id', projectId).order('detail_ref'),
         db.from('trs').select('id, tr_number, cat6a_terminations, min_patch_panels').eq('project_id', projectId).order('tr_number'),
         db.from('tr_room_devices').select('tr_name, category, quantity').eq('project_id', projectId),
-        db.from('riser_feeds').select('tr_name, isp_osp').eq('project_id', projectId),
+        db.from('riser_feeds').select('tr_name, core_a_note, core_b_note, confirmed_at').eq('project_id', projectId),
+        db.from('riser_cables').select('note_number, isp_osp, strands_text, confirmed_at').eq('project_id', projectId),
       ]);
-      for (const r of [rules, elev, trs, racks, feeds]) if (r.error) return err(r.error.message, 500);
+      for (const r of [rules, elev, trs, racks, feeds, cables]) if (r.error) return err(r.error.message, 500);
       const rackBy = new Map((racks.data || []).filter((x) => x.category === 'rack_new').map((x) => [x.tr_name, Number(x.quantity)]));
       const wallBy = new Set((racks.data || []).filter((x) => x.category === 'wall_mount' && Number(x.quantity) > 0).map((x) => x.tr_name));
       const inWf5 = new Set((racks.data || []).map((x) => x.tr_name));
-      const plantBy = new Map((feeds.data || []).filter((x) => x.isp_osp).map((x) => [x.tr_name, x.isp_osp]));
+      // ISP/OSP from WF7: only confirmed riser feeds whose cable types are confirmed
+      const plantBy = new Map((feeds.data || []).filter((f) => f.tr_name && f.confirmed_at)
+        .map((f) => [f.tr_name, feedType(f, cables.data || [], { confirmedOnly: true }).isp_osp]).filter(([, v]) => v));
       return ok({
         rules: rules.data || [], elevations: elev.data || [],
         trs: (trs.data || []).filter((t) => t.tr_number).map((t) => ({

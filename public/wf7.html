@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WF7 · Riser — Take-off</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="auth.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
+<link rel="stylesheet" href="wf.css">
+<style>
+.wf-page { max-width: 1440px; }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); }
+.tab { font-family: inherit; font-size: 14px; padding: 11px 16px; background: none; border: none; border-bottom: 2px solid transparent; color: var(--muted); cursor: pointer; }
+.tab[aria-selected="true"] { color: var(--green); border-bottom-color: var(--green); font-weight: 700; }
+.lead { font-size: 14px; color: var(--muted); margin-bottom: 12px; }
+table.g { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.g th { text-align: left; color: var(--muted); font-weight: normal; font-size: 11px; letter-spacing: .05em; text-transform: uppercase; padding: 10px 10px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); z-index: 1; }
+table.g td { padding: 7px 10px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
+table.g td.m { color: var(--muted); font-size: 12px; }
+.wrap { max-height: 62vh; overflow: auto; }
+.sel, .inp { font-family: inherit; font-size: 12px; background: var(--bg); color: var(--text); border: 1px solid #3a443f; border-radius: 3px; padding: 5px 6px; }
+.inp { width: 70px; text-align: center; }
+.pill.isp { color: var(--green); border-color: #2f6a3a; background: #12241a; }
+.pill.osp { color: var(--blue); border-color: var(--blue-bd); background: var(--blue-bg); }
+.pill.ok { color: var(--green); border-color: var(--green-bd); background: var(--green-bg); font-weight: 700; }
+.pill.review { color: var(--amber); border-color: var(--amber-bd); background: var(--amber-bg); }
+.pill.warn { color: var(--orange); border-color: var(--orange-bd); background: var(--orange-bg); }
+.pill.none { color: var(--muted); border-color: #3a443f; background: #141816; }
+.pill.added { color: var(--purple); border-color: var(--purple-bd); background: var(--purple-bg); }
+.link { background: none; border: none; color: var(--blue); font-family: inherit; font-size: 12px; cursor: pointer; padding: 0; text-decoration: underline; }
+.checks { border: 1px solid var(--line); background: var(--panel); border-radius: 4px; padding: 10px 18px; font-size: 13px; line-height: 1.8; margin-top: 12px; }
+.grp { border: 1px solid var(--line); background: var(--panel); border-radius: 4px; margin-bottom: 14px; }
+.grp h3 { margin: 0; padding: 11px 16px; font-size: 13px; color: var(--amber); letter-spacing: .06em; font-weight: normal; border-bottom: 1px solid var(--line); }
+.bar { display: flex; gap: 12px; align-items: center; padding: 10px 16px; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+<nav id="to-nav"></nav>
+<script src="nav.js"></script>
+
+<main class="wf-page">
+  <div class="wf-head">
+    <div>
+      <a class="wf-crumb" id="crumb" href="wf-projects.html">← Project</a>
+      <h1 class="wf-title"><span class="code">WF7</span> · Riser</h1>
+      <div class="wf-sub">Riser diagram sheet · read from the text layer · no cost · every value from the sheet or set by you, each item confirmed</div>
+    </div>
+    <span class="pill" id="step-pill">…</span>
+  </div>
+
+  <div id="intake"></div>
+
+  <section class="panel" aria-label="Riser sheets">
+    <div class="row head"><span style="width: 110px">Sheet</span><span style="flex-grow: 1">Title</span><span style="width: 140px">Revision</span><span style="width: 160px"></span></div>
+    <div id="riser-pages"><div class="empty">Loading…</div></div>
+  </section>
+  <section class="banner orange" id="read-banner" hidden>
+    <div style="flex-grow: 1"><div class="kicker" id="read-kicker">READ</div><div class="msg" id="read-msg"></div></div>
+  </section>
+
+  <section class="banner amber" id="scope-banner" hidden>
+    <div style="flex-grow: 1"><div class="msg" id="scope-a" style="font-size: 14px; margin-top: 0"></div><div class="muted" id="scope-b" style="font-size: 13px; margin-top: 4px"></div></div>
+    <button type="button" class="btn amber small" id="show-out">Show not on schedule</button>
+  </section>
+
+  <nav class="tabs" role="tablist" aria-label="WF7 sections">
+    <button type="button" class="tab" role="tab" aria-selected="false" data-tab="cab" id="tab-cab">Cable types</button>
+    <button type="button" class="tab" role="tab" aria-selected="true" data-tab="riser" id="tab-riser">Riser</button>
+    <button type="button" class="tab" role="tab" aria-selected="false" data-tab="allow" id="tab-allow">Allowances</button>
+  </nav>
+
+  <section data-panel="cab" hidden>
+    <div class="lead">The coded notes are the cable types. Each core on the riser carries a note number; confirm each type once and every TR fed by it follows. ISP/OSP is suggested from the note's own wording.</div>
+    <div class="panel wrap"><table class="g"><thead><tr><th>Note</th><th>Cable (as read)</th><th>Strands per core</th><th>Type · based on</th><th>Used on</th><th></th></tr></thead><tbody id="cab-body"></tbody></table></div>
+    <div class="checks" id="checks"></div>
+  </section>
+
+  <section data-panel="riser">
+    <div class="lead">All TRs on the riser diagram, as drawn. TRs found on the schedule (WF2) are in automatically; a TR that isn't on the schedule is left out until you click Add in — that adds it to the TR list, so WF5, WF6 and the BOM include it.</div>
+    <div class="panel">
+      <div class="bar">
+        <label class="muted" style="font-size: 12px">Show <select class="sel" id="filter">
+          <option value="all">all</option><option value="in">in</option><option value="sched">on the schedule</option>
+          <option value="close">close match to accept</option><option value="out">not on the schedule</option><option value="added">added in</option><option value="todo">to review</option></select></label>
+        <span style="flex-grow: 1"></span>
+        <span class="muted" id="feed-count" style="font-size: 12px"></span>
+        <button type="button" class="btn green small" id="confirm-feeds">Confirm all ready</button>
+      </div>
+      <div class="wrap"><table class="g"><thead><tr><th>On the riser</th><th>On the schedule</th><th>Level</th><th>Core A</th><th>Core B</th><th>Type</th><th>Strands</th><th>Check</th><th></th></tr></thead><tbody id="feed-body"></tbody></table></div>
+    </div>
+  </section>
+
+  <section data-panel="allow" hidden>
+    <div class="lead">Each diagram note that says "carry an allowance" becomes lines: quantity per unit read from the note × the unit count read from the same note. The system is the diagram's title.</div>
+    <div id="allow-groups"></div>
+    <div class="bar" style="padding-left: 0"><button type="button" class="btn green small" id="confirm-allow">Confirm all ready</button><span class="muted" id="allow-count" style="font-size: 12px"></span></div>
+  </section>
+
+  <section class="panel">
+    <div class="row">
+      <span id="footer-msg" style="flex-grow: 1"></span>
+      <button type="button" class="btn muted" id="reopen" hidden>Reopen</button>
+      <button type="button" class="btn green" id="confirm" style="font-weight: 700">Confirm riser</button>
+    </div>
+  </section>
+  <div class="status-line" id="status" role="status"></div>
+</main>
+
+<script type="module">
+import { mountIntake, api, post } from './lib/wf-intake-ui.js';
+import { linesFromTextContent } from './lib/wf6-rules.js';
+import { readRiserBlocks, readCableNotes, readHeadEnd, readAllowances, reconcile, feedType, feedBlocker, cableBlocker,
+  allowanceBlocker, headEndCheck } from './lib/wf7-riser.js';
+
+const projectId = new URLSearchParams(location.search).get('project_id');
+if (!projectId) location.replace('wf-projects.html');
+try { sessionStorage.setItem('to_project_id', projectId); } catch {}
+document.getElementById('crumb').href = 'wf-project.html?project_id=' + projectId;
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const status = (m, c = '') => { $('status').className = 'status-line ' + c; $('status').textContent = m; };
+const PID = Number(projectId);
+const call = (action, body = {}) => post('/api/wf/wf7/riser', { action, project_id: PID, ...body });
+
+let data = { cables: [], feeds: [], head_end: [], allowances: [], trs: [], wf3_ends: [], wf6_strands: null };
+let locked = false, stepRow = null;
+
+function showError(kicker, msg) {
+  $('read-banner').hidden = false; $('read-banner').className = 'banner red';
+  $('read-kicker').textContent = kicker; $('read-msg').textContent = msg; status(msg, 'err');
+}
+document.querySelectorAll('.tab').forEach((t) => t.onclick = () => {
+  document.querySelectorAll('.tab').forEach((x) => x.setAttribute('aria-selected', String(x === t)));
+  document.querySelectorAll('[data-panel]').forEach((p) => p.hidden = p.dataset.panel !== t.dataset.tab);
+});
+
+// ── intake + riser sheets ──
+mountIntake($('intake'), { projectId, stepCode: 'WF7', showLocation: false, onData: renderPages });
+function renderPages(intake) {
+  const pages = intake.pages.filter((p) => p.role === 'riser' && !p.is_duplicate && p.revision && p.revision.status !== 'rejected');
+  $('riser-pages').innerHTML = pages.length ? pages.map((p) => `
+    <div class="row">
+      <span style="width: 110px; font-weight: 700">${esc(p.sheet_number || '—')}</span>
+      <span style="flex-grow: 1">${esc(p.title_text || '')}</span>
+      <span style="width: 140px">${esc(p.revision.rev_label)} ${p.revision.is_current ? '' : '<span class="pill open">not current</span>'}</span>
+      <span style="width: 160px; text-align: right"><button type="button" class="btn blue small" data-read="${p.id}" ${p.revision.status === 'pending' ? 'disabled title="Accept this revision above first"' : ''}>Read sheet</button></span>
+    </div>`).join('') : '<div class="empty">No riser diagram sheet yet. Upload it above (its role should read "riser").</div>';
+  document.querySelectorAll('[data-read]').forEach((b) => b.onclick = () => readSheet(pages.find((p) => String(p.id) === b.dataset.read)));
+}
+
+async function readSheet(p) {
+  if (locked) { status('Reopen WF7 before reading the sheet again.', 'err'); return; }
+  const label = `${p.sheet_number || 'page ' + p.page_number} ${p.revision.rev_label}`;
+  status(`Reading ${label}…`);
+  try {
+    const { url } = await post('/api/wf/documents', { action: 'file_url', document_id: Number(p.document_id) });
+    const doc = await pdfjsLib.getDocument(url).promise;
+    const page = await doc.getPage(Number(p.page_number));
+    const vp = page.getViewport({ scale: 1 });
+    const tc = await page.getTextContent();
+    await doc.destroy();
+    const runs = linesFromTextContent(tc.items, vp.width, vp.height, { maxMergeFrac: 0.5 });
+    const blocks = readRiserBlocks(runs), cables = readCableNotes(runs), head_end = readHeadEnd(runs);
+    const allowances = readAllowances(runs).flatMap((g) => g.lines);
+    $('read-banner').hidden = false; $('read-banner').className = 'banner orange';
+    if (!blocks.length) { $('read-kicker').textContent = 'NO RISER TRs FOUND'; $('read-msg').textContent = `No TR blocks (RACK with CORE labels) were recognised on ${label}.`; status(''); return; }
+    const r = await call('save_read', { page_id: p.id, sheet_revision_id: p.revision.id, blocks: blocks.map(({ at, ...x }) => x), cables, head_end, allowances });
+    $('read-kicker').textContent = `READ ${label.toUpperCase()}`;
+    $('read-msg').textContent = `${blocks.length} riser TRs, ${cables.length} cable types, ${allowances.length} allowance lines. `
+      + `${r.feeds_new} new, ${r.feeds_updated} changed${r.feeds_removed ? `, ${r.feeds_removed} removed` : ''}${r.conflicts ? `, ${r.conflicts} item(s) you edited differ from the new read` : ''}.`;
+    await load();
+    post('/api/wf/projects', { action: 'touch_step', project_id: PID, step_code: 'WF7' }).then(loadStep).catch(() => {});
+    status('');
+  } catch (e) { showError('READ FAILED', e.message); }
+}
+
+// ── shared bits ──
+const statusPill = (item, blocker) => item.confirmed_at ? '<span class="pill ok">✓ confirmed</span>'
+  : blocker ? `<span class="pill warn" title="${esc(blocker)}">${esc(/^add it in|^accept/.test(blocker) ? 'out' : 'needs attention')}</span>`
+  : '<span class="pill review">to review</span>';
+const confirmBtn = (kind, key, item, blocker) => locked ? '' : item.confirmed_at
+  ? `<button type="button" class="link" data-unconfirm="${kind}:${esc(key)}">unconfirm</button>`
+  : `<button type="button" class="btn green small" data-confirm="${kind}:${esc(key)}" ${blocker ? `disabled title="${esc(blocker)}"` : ''}>Confirm</button>`;
+const typePill = (t) => t ? `<span class="pill ${t}">${t.toUpperCase()}</span>` : '<span class="muted">—</span>';
+
+// ── cable types ──
+function renderCables() {
+  const useBy = new Map();
+  for (const f of data.feeds) for (const n of [f.core_a_note, f.core_b_note]) if (n != null) useBy.set(n, (useBy.get(n) || 0) + 1);
+  const heBy = new Map(); for (const h of data.head_end) heBy.set(h.note_number, [...(heBy.get(h.note_number) || []), `(${h.qty}) core ${h.core || '?'}`]);
+  $('cab-body').innerHTML = data.cables.length ? data.cables.map((c) => {
+    const bl = cableBlocker(c);
+    return `<tr>
+      <td style="color: var(--amber); font-weight: 700">CN ${c.note_number}</td>
+      <td>${esc(c.note_text)}${c.conflict ? '<div style="color: var(--orange); font-size: 12px">The sheet now reads differently.</div>' : ''}</td>
+      <td>${esc(c.strands_text || '—')}</td>
+      <td><select class="sel" data-cabtype="${c.note_number}" ${locked ? 'disabled' : ''}><option value="">—</option><option value="isp"${c.isp_osp === 'isp' ? ' selected' : ''}>ISP</option><option value="osp"${c.isp_osp === 'osp' ? ' selected' : ''}>OSP</option></select>
+        <span class="m" style="font-size: 12px; color: var(--muted)">${c.source === 'edited' ? 'set by you' : esc(c.basis || 'nothing to go on — set it')}</span></td>
+      <td class="m">${useBy.get(c.note_number) ? `${useBy.get(c.note_number)} cores` : heBy.get(c.note_number) ? `head end ${esc(heBy.get(c.note_number).join(', '))}` : 'not used'}</td>
+      <td style="text-align: right; white-space: nowrap">${statusPill(c, bl)} ${confirmBtn('cable', c.note_number, c, bl)}</td></tr>`;
+  }).join('') : '<tr><td colspan="6" class="m">Read the riser sheet above.</td></tr>';
+
+  const checks = headEndCheck(data.head_end, data.feeds, data.cables).map((h) => `${h.ok ? '✓' : '⚠'} Head end core ${esc(h.core || '?')}: (${h.qty}) of CN ${h.note_number}; the riser shows ${h.riser_cores} core ${esc(h.core || '?')} feed(s) with the same cable${h.same_as.length ? ` (CN ${h.same_as.join(', ')})` : ''}.`);
+  const s6 = data.wf6_strands;
+  if (s6) for (const [plant, v] of [['isp', s6.isp], ['osp', s6.osp]]) {
+    const c = data.cables.find((x) => x.isp_osp === plant && x.strands_per_core != null);
+    if (c && v != null) checks.push(`${c.strands_per_core === Number(v) ? '✓' : '⚠'} ${plant.toUpperCase()} strands per core: ${c.strands_per_core} here (CN ${c.note_number}), ${v} on the rack elevation sheet (WF6 cassettes).`);
+  }
+  $('checks').innerHTML = checks.length ? '<div style="font-weight: 700; margin-bottom: 4px">Checks (read from the sheets)</div>' + checks.map((x) => `<div style="color: ${x.startsWith('⚠') ? 'var(--orange)' : 'inherit'}">${x}</div>`).join('') : '<span class="muted">Checks appear after the sheet is read.</span>';
+}
+
+// ── riser feeds ──
+const trNames = () => data.trs.map((t) => t.tr_number);
+function scheduleCell(f) {
+  if (f.tr_name) {
+    const tag = f.match_kind === 'added' ? '<span class="pill added">added in</span>' : f.match_kind === 'manual' ? '<span class="muted" style="font-size: 11px">matched by you</span>' : f.match_kind === 'close' ? '<span class="muted" style="font-size: 11px">close match</span>' : '';
+    return `<span style="color: ${f.match_kind === 'added' ? 'var(--purple)' : 'var(--green)'}">✓ ${esc(f.tr_name)}</span> ${tag}${locked ? '' : ` <button type="button" class="link" data-out="${esc(f.riser_key)}">take out</button>`}`;
+  }
+  if (locked) return '<span class="muted">out</span>';
+  const used = new Set(data.feeds.filter((x) => x.tr_name).map((x) => x.tr_name));
+  const free = trNames().filter((n) => !used.has(n));
+  const pickSel = `<select class="sel" data-match="${esc(f.riser_key)}"><option value="">match to…</option>${free.map((n) => `<option>${esc(n)}</option>`).join('')}</select>`;
+  if (f.suggested_tr) return `<span style="color: var(--amber)">${esc(f.suggested_tr)}?</span> <button type="button" class="btn amber small" data-accept="${esc(f.riser_key)}">Accept</button> ${pickSel} <button type="button" class="btn blue small" data-addin="${esc(f.riser_key)}">+ Add in</button>`;
+  return `<button type="button" class="btn blue small" data-addin="${esc(f.riser_key)}">+ Add in${f.tr_name_read ? '' : '…'}</button> ${pickSel}`;
+}
+function renderFeeds() {
+  const flt = $('filter').value;
+  const ends = new Set(data.wf3_ends);
+  const rows = data.feeds.filter((f) => flt === 'all' || (flt === 'in' && f.tr_name) || (flt === 'out' && !f.tr_name && !f.suggested_tr)
+    || (flt === 'close' && !f.tr_name && f.suggested_tr) || (flt === 'added' && f.match_kind === 'added')
+    || (flt === 'sched' && f.tr_name && f.match_kind !== 'added') || (flt === 'todo' && f.tr_name && !f.confirmed_at));
+  $('feed-body').innerHTML = rows.length ? rows.map((f) => {
+    const t = feedType(f, data.cables);
+    const cable = data.cables.find((c) => c.note_number === (f.core_a_note ?? f.core_b_note));
+    const bl = feedBlocker(f, data.cables);
+    const check = f.conflict ? (f.conflict.removed_from_sheet ? 'no longer on the riser sheet' : 'the sheet now reads differently')
+      : !f.tr_name ? (f.suggested_tr ? 'close name match — accept, match by hand, or add in as its own TR' : f.tr_name_read ? 'not on the schedule — out until added in' : 'no TR number on the riser — name it when adding in')
+      : data.wf3_ends.length ? (ends.has(f.tr_name) ? 'WF3 route ends here' : 'no WF3 route ends at this TR — check') : '';
+    const coreSel = (which) => {
+      const v = f[`core_${which}_note`];
+      if (locked) return v != null ? `CN ${v}` : '—';
+      return `<select class="sel" data-core="${esc(f.riser_key)}:${which}" title="Cable note on core ${which.toUpperCase()}"><option value="">—</option>${data.cables.map((c) => `<option value="${c.note_number}"${c.note_number === v ? ' selected' : ''}>CN ${c.note_number}</option>`).join('')}</select>`;
+    };
+    return `<tr>
+      <td><b>${esc(f.riser_label || '')}</b> <span class="muted">· ${esc(f.building || '')}</span></td>
+      <td style="white-space: nowrap">${scheduleCell(f)}</td>
+      <td class="m">${esc(f.floor || '—')}</td>
+      <td>${coreSel('a')}</td><td>${coreSel('b')}</td>
+      <td>${typePill(t.isp_osp)}</td>
+      <td class="m">${esc(cable?.strands_text || '—')}</td>
+      <td class="m">${esc(check)}</td>
+      <td style="text-align: right; white-space: nowrap">${f.tr_name ? statusPill(f, bl) + ' ' + confirmBtn('feed', f.riser_key, f, bl) : '<span class="pill none">out</span>'}</td></tr>`;
+  }).join('') : '<tr><td colspan="9" class="m">Nothing to show.</td></tr>';
+  const inF = data.feeds.filter((f) => f.tr_name);
+  const ready = inF.filter((f) => !f.confirmed_at && !feedBlocker(f, data.cables));
+  $('feed-count').textContent = `${inF.filter((f) => f.confirmed_at).length} of ${inF.length} feeds confirmed`;
+  $('confirm-feeds').textContent = `Confirm all ready (${ready.length})`;
+  $('confirm-feeds').disabled = locked || !ready.length;
+}
+
+// ── allowances ──
+function renderAllow() {
+  const groups = new Map();
+  for (const a of data.allowances) { if (!groups.has(a.system)) groups.set(a.system, []); groups.get(a.system).push(a); }
+  $('allow-groups').innerHTML = groups.size ? [...groups.entries()].map(([sys, lines]) => `
+    <div class="grp"><h3>${esc(lines[0].note_ref || sys)}</h3>
+      <table class="g"><thead><tr><th>Item (as read)</th><th>Per unit</th><th>Unit</th><th>× Count</th><th>Total</th><th></th></tr></thead><tbody>
+      ${lines.map((a) => { const bl = allowanceBlocker(a); return `<tr>
+        <td>${esc(a.item)}${a.conflict ? '<div style="color: var(--orange); font-size: 12px">The sheet now reads differently.</div>' : ''}${a.per_text ? `<div class="muted" style="font-size: 11px">${esc(a.per_text)}</div>` : ''}</td>
+        <td><input class="inp" inputmode="decimal" value="${a.per_unit_qty ?? ''}" data-allow="${esc(a.allowance_key)}:per_unit_qty" ${locked ? 'disabled' : ''}></td>
+        <td class="m">${esc(a.unit || '—')}</td>
+        <td><input class="inp" inputmode="numeric" value="${a.unit_count ?? ''}" data-allow="${esc(a.allowance_key)}:unit_count" ${locked ? 'disabled' : ''}></td>
+        <td style="font-weight: 700">${a.total != null ? `${Number(a.total)} ${esc(a.unit || '')}` : '—'}</td>
+        <td style="text-align: right; white-space: nowrap">${statusPill(a, bl)} ${confirmBtn('allow', a.allowance_key, a, bl)}</td></tr>`; }).join('')}
+      </tbody></table></div>`).join('') : '<div class="empty">No allowance notes read yet.</div>';
+  const ready = data.allowances.filter((a) => !a.confirmed_at && !allowanceBlocker(a));
+  $('confirm-allow').textContent = `Confirm all ready (${ready.length})`;
+  $('confirm-allow').disabled = locked || !ready.length;
+  $('allow-count').textContent = `${data.allowances.filter((a) => a.confirmed_at).length} of ${data.allowances.length} allowance lines confirmed`;
+}
+
+// ── wiring ──
+function wire() {
+  document.querySelectorAll('[data-cabtype]').forEach((s) => s.onchange = () => act(() => call('set_cable', { note_number: Number(s.dataset.cabtype), isp_osp: s.value || null, basis: 'ISP/OSP set by user' }), 'Saved — confirm it when right.'));
+  document.querySelectorAll('[data-confirm]').forEach((b) => b.onclick = () => confirmItem(b.dataset.confirm, true));
+  document.querySelectorAll('[data-unconfirm]').forEach((b) => b.onclick = () => confirmItem(b.dataset.unconfirm, false));
+  document.querySelectorAll('[data-accept]').forEach((b) => b.onclick = () => act(() => call('accept_match', { riser_key: b.dataset.accept }), 'Match accepted — it is in.'));
+  document.querySelectorAll('[data-match]').forEach((s) => s.onchange = () => s.value && act(() => call('set_match', { riser_key: s.dataset.match, tr_name: s.value }), `Matched to ${s.value} — it is in.`));
+  document.querySelectorAll('[data-addin]').forEach((b) => b.onclick = async () => {
+    const f = data.feeds.find((x) => x.riser_key === b.dataset.addin);
+    let name = f.tr_name_read;
+    if (!name) { name = prompt(`${f.building || ''} ${f.riser_label || ''} has no TR number on the riser. Name for the TR list:`, ''); if (!name || !name.trim()) return; }
+    else if (!confirm(`Add ${name} (${f.building || ''}) to the TR list? It will show in WF5, WF6 and the BOM.`)) return;
+    act(() => call('add_in', { riser_key: f.riser_key, tr_name: name.trim() }), `${name} added to the TR list — it is in.`);
+  });
+  document.querySelectorAll('[data-out]').forEach((b) => b.onclick = async () => {
+    const f = data.feeds.find((x) => x.riser_key === b.dataset.out);
+    if (!confirm(f.match_kind === 'added' ? `Take ${f.tr_name} out? It is removed from the TR list too, unless WF5 already has values for it.` : `Take ${f.riser_label} out (unmatch from ${f.tr_name})?`)) return;
+    act(() => call('take_out', { riser_key: f.riser_key }), 'Taken out.');
+  });
+  document.querySelectorAll('[data-core]').forEach((s) => s.onchange = () => {
+    const [key, which] = s.dataset.core.split(':');
+    const f = data.feeds.find((x) => x.riser_key === key);
+    const next = { core_a_note: f.core_a_note, core_b_note: f.core_b_note, [`core_${which}_note`]: s.value === '' ? null : Number(s.value) };
+    act(() => call('set_cores', { riser_key: key, ...next, basis: 'Core cable note set by user' }), 'Saved.');
+  });
+  document.querySelectorAll('[data-allow]').forEach((inp) => inp.onchange = () => {
+    const [key, field] = inp.dataset.allow.split(':');
+    act(() => call('set_allowance', { allowance_key: key, patch: { [field]: inp.value.trim() === '' ? null : inp.value }, basis: 'Allowance quantity set by user' }), 'Saved.');
+  });
+}
+async function act(fn, okMsg) { try { await fn(); await load(); status(okMsg, 'ok'); } catch (e) { status(e.message, 'err'); } }
+async function confirmItem(spec, on) {
+  const i = spec.indexOf(':'); const kind = spec.slice(0, i), key = spec.slice(i + 1);
+  const map = { cable: ['confirm_cable', { note_number: Number(key) }], feed: ['confirm_feed', { riser_key: key }], allow: ['confirm_allowance', { allowance_key: key }] };
+  act(() => call(map[kind][0], { ...map[kind][1], confirmed: on }), on ? 'Confirmed — now applied.' : 'Unconfirmed.');
+}
+$('filter').onchange = () => { renderFeeds(); wire(); };
+$('show-out').onclick = () => { document.querySelector('[data-tab="riser"]').click(); $('filter').value = 'out'; renderFeeds(); wire(); };
+$('confirm-feeds').onclick = () => confirm('Confirm every riser feed that is in and has confirmed cable types? Review any you have not checked first.') && act(() => call('confirm_ready_feeds'), 'Feeds confirmed.');
+$('confirm-allow').onclick = () => confirm('Confirm every allowance line that has its quantities?') && act(() => call('confirm_ready_allowances'), 'Allowance lines confirmed.');
+
+// ── footer / banner / step ──
+function renderSummary() {
+  const r = reconcile(data.feeds, data.trs.filter((t) => !t.added_from_riser));
+  const inF = data.feeds.filter((f) => f.tr_name);
+  $('scope-banner').hidden = !data.feeds.length;
+  $('scope-a').textContent = `${r.riser} TRs on the riser · ${r.on_schedule} found on the schedule (in) · ${r.added} added in · ${r.out} out${r.close ? ` (${r.close} close match${r.close > 1 ? 'es' : ''} to accept)` : ''} · ${r.schedule_without_feed.length} schedule TR${r.schedule_without_feed.length === 1 ? '' : 's'} with no riser feed`;
+  $('scope-b').textContent = r.schedule_without_feed.length ? `No riser feed: ${r.schedule_without_feed.join(', ')}` : 'Every schedule TR has a riser feed.';
+  $('tab-cab').textContent = `Cable types (${data.cables.length})`;
+  $('tab-riser').textContent = `Riser (${data.feeds.length})`;
+  $('tab-allow').textContent = `Allowances (${new Set(data.allowances.map((a) => a.system)).size})`;
+  if (!stepRow) return;
+  const done = stepRow.status === 'confirmed';
+  $('confirm').hidden = done; $('reopen').hidden = !done;
+  const checksBad = headEndCheck(data.head_end, data.feeds, data.cables).filter((h) => !h.ok).length;
+  const parts = data.feeds.length ? [
+    `${data.cables.filter((c) => c.confirmed_at).length} of ${data.cables.length} cable types confirmed`,
+    `${r.riser} riser TRs: ${r.on_schedule} on the schedule, ${r.added} added in, ${r.out} out`,
+    `${inF.filter((f) => f.confirmed_at).length} of ${inF.length} feeds confirmed`,
+    `${data.allowances.filter((a) => a.confirmed_at).length} of ${data.allowances.length} allowance lines confirmed`,
+  ] : ['Sheet not read yet'];
+  if (checksBad) parts.push(`${checksBad} check${checksBad > 1 ? 's' : ''} to look at`);
+  $('footer-msg').textContent = (done ? 'Riser confirmed · ' : stepRow.status === 'stale' ? `Needs review: ${stepRow.stale_reason || 'a sheet changed'} · ` : '') + parts.join(' · ');
+}
+function renderAll() { renderCables(); renderFeeds(); renderAllow(); renderSummary(); wire(); }
+async function load() { data = await api('/api/wf/wf7/riser?project_id=' + projectId); renderAll(); }
+async function loadStep() {
+  const d = await api('/api/wf/projects?id=' + projectId);
+  $('crumb').textContent = '← ' + d.project.name;
+  stepRow = d.steps.find((x) => x.step_code === 'WF7');
+  $('step-pill').className = 'pill ' + stepRow.status;
+  $('step-pill').textContent = stepRow.status === 'stale' ? 'changed' : stepRow.status.replace('_', ' ');
+  locked = stepRow.status === 'confirmed';
+  renderAll();
+}
+$('confirm').onclick = async () => {
+  const inF = data.feeds.filter((f) => f.tr_name);
+  const open = data.cables.filter((c) => !c.confirmed_at).length + inF.filter((f) => !f.confirmed_at).length + data.allowances.filter((a) => !a.confirmed_at).length;
+  if (!data.feeds.length && !confirm('The riser sheet has not been read. Confirm the riser anyway?')) return;
+  if (open && !confirm(`${open} item(s) are not confirmed and are not applied. Confirm the riser anyway?`)) return;
+  try { await post('/api/wf/projects', { action: 'confirm_step', project_id: PID, step_code: 'WF7' }); status('Riser confirmed.', 'ok'); loadStep(); }
+  catch (e) { status(e.message, 'err'); }
+};
+$('reopen').onclick = async () => {
+  try { await post('/api/wf/projects', { action: 'reopen_step', project_id: PID, step_code: 'WF7' }); loadStep(); }
+  catch (e) { status(e.message, 'err'); }
+};
+
+load().catch((e) => showError('COULD NOT LOAD WF7', e.message));
+loadStep().catch((e) => status(e.message, 'err'));
+</script>
+</body>
+</html>
