@@ -34,7 +34,8 @@ function styleRow(row) { row.eachCell({ includeEmpty: true }, (c) => { if (!c.fo
 
 // Pricing block: cost | margin | sell | labor min | rate | labor $/unit | material ext | labor ext | total ext.
 // qtyCol and first pricing column are 1-based column numbers.
-function pricing(ws, r, qtyCol, c0) {
+// pre = { unit_cost, labor_min, margin, rate } from the parts catalog (pass 2); blanks stay blank.
+function pricing(ws, r, qtyCol, c0, pre = null) {
   const Q = `${col(qtyCol)}${r}`, C = `${col(c0)}${r}`, M = `${col(c0 + 1)}${r}`, S = `${col(c0 + 2)}${r}`,
     L = `${col(c0 + 3)}${r}`, R = `${col(c0 + 4)}${r}`, LU = `${col(c0 + 5)}${r}`, ME = `${col(c0 + 6)}${r}`, LE = `${col(c0 + 7)}${r}`;
   const set = (c, v, fmt) => { const cell = ws.getCell(`${col(c)}${r}`); cell.value = v; if (fmt) cell.numFmt = fmt; cell.font = FONT; return cell; };
@@ -45,6 +46,12 @@ function pricing(ws, r, qtyCol, c0) {
   set(c0 + 6, { formula: `IFERROR(${Q}*${S},"")` }, MONEY);
   set(c0 + 7, { formula: `IFERROR(${Q}*${LU},"")` }, MONEY);
   set(c0 + 8, { formula: `IFERROR(${ME}+${LE},"")` }, MONEY);
+  if (pre) {
+    if (pre.unit_cost != null) ws.getCell(C).value = pre.unit_cost;
+    if (pre.unit_cost != null && pre.margin != null) ws.getCell(M).value = pre.margin;
+    if (pre.labor_min != null) ws.getCell(L).value = pre.labor_min;
+    if (pre.labor_min != null && pre.rate != null) ws.getCell(R).value = pre.rate;
+  }
 }
 const PRICE_HEADS = ['Unit Cost ($)', 'Margin (%)', 'Sell Price / Unit ($)', 'Labor Time (min/install)', 'Unit Labor Rate ($/hr)', 'Labor $ / Unit',
   'Material $ Extended', 'Labor $ Extended', 'Total $ Extended'];
@@ -59,8 +66,13 @@ function grandTotal(ws, r, fromRow, toRow, c0, label = 'GRAND TOTAL') {
   row.eachCell({ includeEmpty: false }, (c) => { c.font = TOTAL_FONT; });
 }
 
-export function buildWorkbook(ExcelJS, model, meta = {}) {
+// prices (optional, pass 2) = { byKey: { [item_key]: { unit_cost, labor_min, status } }, margin, rate, parts_list: [...] }
+export function buildWorkbook(ExcelJS, model, meta = {}, prices = null) {
   const wb = new ExcelJS.Workbook();
+  const pre = (key) => {
+    const p = prices?.byKey?.[key];
+    return p ? { unit_cost: p.unit_cost ?? null, labor_min: p.labor_min ?? null, margin: prices.margin ?? null, rate: prices.rate ?? null } : null;
+  };
   wb.creator = 'Take-off'; wb.created = meta.generated_at ? new Date(meta.generated_at) : new Date();
   const S = model.sheets;
 
@@ -108,13 +120,13 @@ export function buildWorkbook(ExcelJS, model, meta = {}) {
     for (const it of S.summary) {
       putRow(ws, r, [it.item, it.detail, it.install_only ? 'Install only (owner furnished)' : it.part, it.qty,
         `WF6 · ${it.ref || ''} confirmed rule${it.missing ? ` · ${it.missing} TR(s) not counted yet` : ''}`]);
-      styleRow(ws.getRow(r)); pricing(ws, r, 4, 6); r++;
+      styleRow(ws.getRow(r)); pricing(ws, r, 4, 6, pre(it.key)); r++;
     }
     grandTotal(ws, r, 2, r - 1, 6);
   }
 
   // ── Device Counts / Lengths, by Device ──
-  const levelGrid = (name, grid, key, unitWord) => {
+  const levelGrid = (name, grid, key, unitWord, keyPrefix) => {
     const types = grid.types;
     const ws = sheet(wb, name, ['Level', ...types, 'Total', 'Material $ Total', 'Labor $ Total', 'Total $'], [14, ...types.map(() => 14), 12, 16, 16, 16]);
     const nT = types.length, tCol = nT + 2;
@@ -138,6 +150,9 @@ export function buildWorkbook(ExcelJS, model, meta = {}) {
       ws.getCell(`${c}${priceRow0 + 2}`).numFmt = MONEY;
       ws.getCell(`${c}${priceRow0 + 5}`).value = { formula: `IFERROR(IF(OR(${c}${priceRow0 + 3}="",${c}${priceRow0 + 4}=""),"",(${c}${priceRow0 + 3}/60)*${c}${priceRow0 + 4}),"")` };
       ws.getCell(`${c}${priceRow0 + 5}`).numFmt = MONEY;
+      const p = pre(`${keyPrefix}${types[i]}`);
+      if (p?.unit_cost != null) { ws.getCell(`${c}${priceRow0}`).value = p.unit_cost; if (p.margin != null) ws.getCell(`${c}${priceRow0 + 1}`).value = p.margin; }
+      if (p?.labor_min != null) { ws.getCell(`${c}${priceRow0 + 3}`).value = p.labor_min; if (p.rate != null) ws.getCell(`${c}${priceRow0 + 4}`).value = p.rate; }
     }
     for (let r = first; r <= totalRow; r++) {
       if (r > last && r !== totalRow) continue;
@@ -150,8 +165,8 @@ export function buildWorkbook(ExcelJS, model, meta = {}) {
     const tr = ws.getRow(totalRow); tr.getCell(1).value = 'TOTAL'; tr.eachCell((c) => { c.font = TOTAL_FONT; });
     return ws;
   };
-  levelGrid('Device Counts', S.device_counts, 'counts', 'unit');
-  levelGrid('Lengths, by Device', S.lengths, 'ft', 'ft');
+  levelGrid('Device Counts', S.device_counts, 'counts', 'unit', 'wf4:count:');
+  levelGrid('Lengths, by Device', S.lengths, 'ft', 'ft', 'wf4:ft:');
 
   // ── Floor Assemblies ──
   {
@@ -161,7 +176,7 @@ export function buildWorkbook(ExcelJS, model, meta = {}) {
     for (const f of S.floor_assemblies) {
       putRow(ws, r, [f.type, f.ports, f.faceplates, f.jacks, null]);
       ws.getCell(r, 15).value = f.ports == null ? 'Ports per outlet not set in the device library — jacks left blank.' : 'Faceplates = outlets counted (WF4); jacks = outlets × ports per outlet.';
-      styleRow(ws.getRow(r)); pricing(ws, r, 4, 6); r++;
+      styleRow(ws.getRow(r)); pricing(ws, r, 4, 6, pre(`wf4:jacks:${f.type}`)); r++;
     }
     grandTotal(ws, r, 2, r - 1, 6, 'TOTAL');
   }
@@ -173,7 +188,7 @@ export function buildWorkbook(ExcelJS, model, meta = {}) {
     for (const a of S.ancillary) {
       putRow(ws, r, [a.item + (a.unit === 'ft' ? ' (ft)' : ''), `Sum of TR room values (WF5) across ${a.trs} TR(s)`, a.qty]);
       if (a.category === 'rack_existing') ws.getCell(r, 13).value = 'Existing racks remain — reference only, not priced.';
-      styleRow(ws.getRow(r)); if (a.category !== 'rack_existing') pricing(ws, r, 3, 4); r++;
+      styleRow(ws.getRow(r)); if (a.category !== 'rack_existing') pricing(ws, r, 3, 4, pre(a.key)); r++;
     }
     grandTotal(ws, r, 2, r - 1, 4, 'TOTAL');
   }
@@ -190,7 +205,7 @@ export function buildWorkbook(ExcelJS, model, meta = {}) {
     let r = start + 1;
     for (const t of S.backbone.totals) {
       putRow(ws, r, [`CN ${t.note_number}: ${t.cable}`, t.strands_text, t.isp_osp ? t.isp_osp.toUpperCase() : null, t.cores]);
-      styleRow(ws.getRow(r)); pricing(ws, r, 4, 5); r++;
+      styleRow(ws.getRow(r)); pricing(ws, r, 4, 5, pre(`wf7:cable:${t.note_number}`)); r++;
     }
     grandTotal(ws, r, start + 1, r - 1, 5, 'TOTAL');
     ws.getCell(r + 2, 1).value = 'Core runs = cores fed by each cable on the confirmed riser. Price per run, or replace with footage when routes are measured.';
@@ -204,9 +219,26 @@ export function buildWorkbook(ExcelJS, model, meta = {}) {
     for (const a of S.allowances) {
       putRow(ws, r, [a.system, a.item, a.per_unit_qty, a.unit, a.unit_count, { formula: `IFERROR(C${r}*E${r},"")` }]);
       ws.getCell(r, 16).value = a.note_ref || null;
-      styleRow(ws.getRow(r)); pricing(ws, r, 6, 7); r++;
+      styleRow(ws.getRow(r)); pricing(ws, r, 6, 7, pre(a.key)); r++;
     }
     grandTotal(ws, r, 2, r - 1, 7, 'TOTAL');
+  }
+
+  // ── Parts List (pass 2: when assemblies exist) ──
+  if (prices?.parts_list?.length) {
+    const ws = sheet(wb, 'Parts List', ['Part Number', 'Manufacturer', 'Description', 'Unit', 'Total Qty', 'Unit Cost ($)', 'Extended ($)', 'Labor (min/unit)', 'Used By'],
+      [18, 18, 44, 7, 11, 12, 14, 12, 60]);
+    let r = 2;
+    for (const p of prices.parts_list) {
+      putRow(ws, r, [p.part_number, p.part?.manufacturer ?? null, p.part?.description ?? '(not in catalog)', p.part?.unit ?? null, p.qty,
+        p.part?.unit_cost ?? null, { formula: `IFERROR(IF(F${r}="","",E${r}*F${r}),"")` }, p.part?.labor_min ?? null, [...new Set(p.used_by)].join(' · ')]);
+      ws.getCell(r, 6).numFmt = MONEY; ws.getCell(r, 7).numFmt = MONEY; if (p.part?.unit_cost == null) ws.getCell(r, 6).fill = INPUT_FILL;
+      styleRow(ws.getRow(r)); r++;
+    }
+    const t = putRow(ws, r, ['TOTAL', null, null, null, null, null, { formula: `SUM(G2:G${r - 1})` }]);
+    t.getCell(7).numFmt = MONEY; t.eachCell((c) => { c.font = TOTAL_FONT; });
+    ws.getCell(r + 2, 1).value = 'Total Qty = BOM item quantity × parts per unit × waste. This is an ordering list; the priced BOM lines on the other sheets already include these parts.';
+    ws.getCell(r + 2, 1).font = { ...FONT, italic: true };
   }
 
   // ── Notes & Assumptions ──
@@ -228,7 +260,9 @@ export function buildCoWorkbook(ExcelJS, co, meta = {}) {
   for (const l of co.lines) {
     putRow(ws, r, [l.line_type, l.item, l.unit, l.ref_qty, l.cur_qty, { formula: `E${r}-D${r}` }]);
     ws.getCell(r, 16).value = l.cause_note || null;
-    styleRow(ws.getRow(r)); pricing(ws, r, 6, 7); r++;
+    styleRow(ws.getRow(r));
+    pricing(ws, r, 6, 7, l.unit_cost != null || l.labor_min != null ? { unit_cost: l.unit_cost ?? null, labor_min: l.labor_min ?? null, margin: co.margin ?? null, rate: co.rate ?? null } : null);
+    r++;
   }
   grandTotal(ws, r, 2, r - 1, 7, 'NET');
   ws.getCell(r + 2, 1).value = `${co.number || 'Change order'} · against ${meta.reference || 'the reference'} · generated ${meta.generated_at || new Date().toISOString()}`;

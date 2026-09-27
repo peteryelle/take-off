@@ -37,7 +37,7 @@ table.g td.m { color: var(--muted); font-size: 14px; }
     <div>
       <a class="wf-crumb" id="crumb" href="wf-projects.html">← Project</a>
       <h1 class="wf-title"><span class="code">WF8</span> · BOM</h1>
-      <div class="wf-sub">Output only · quantities from confirmed WF2–WF7 data, written as values · the workbook layout gives sheets, columns and the pricing arithmetic · cost, margin and labor are filled in the workbook</div>
+      <div class="wf-sub">Output only · quantities from confirmed WF2–WF7 data, written as values · the workbook layout gives sheets, columns and the pricing arithmetic · prices from the parts catalog where loaded, else left for you in the workbook</div>
     </div>
   </div>
 
@@ -57,8 +57,23 @@ table.g td.m { color: var(--muted); font-size: 14px; }
   </section>
 
   <section data-panel="parts" hidden>
-    <div class="lead">Every quantity the BOM carries, as it will be snapshotted. Parts, assemblies and price import (workbook or manual entry) come in the next build — until then cost, margin and labor are filled in the generated workbook.</div>
-    <div class="panel wrap"><table class="g"><thead><tr><th>BOM item</th><th>From</th><th>Qty</th><th>Unit</th><th>Detail</th><th>Parts</th></tr></thead><tbody id="items-body"></tbody></table></div>
+    <div class="lead">Each BOM item can carry an assembly: the parts it takes per unit of the item (per foot when the item is in feet), times a waste factor. Parts and prices live in the org's parts catalog, reusable across projects. Anything without a part or a price stays blank in the workbook — never $0.</div>
+    <div class="bar">
+      <span class="muted">Catalog <b id="cat-name" style="color: var(--text)"></b></span>
+      <select class="field" id="cat-pick" style="padding: 6px 8px; font-size: 14px" aria-label="Use another catalog"><option value="">use another catalog…</option></select>
+      <label class="muted">Material margin <input class="field" id="set-margin" style="width: 80px; padding: 6px 8px" inputmode="decimal" placeholder="%"> %</label>
+      <label class="muted">Labor rate $<input class="field" id="set-rate" style="width: 90px; padding: 6px 8px" inputmode="decimal"> /hr</label>
+      <label class="muted">Change orders priced at <select class="field" id="set-basis" style="padding: 6px 8px; font-size: 14px"><option value="bid">bid prices (reference)</option><option value="current">current prices</option></select></label>
+    </div>
+    <div class="bar">
+      <button type="button" class="btn muted small" id="tpl-dl">Download template</button>
+      <label class="btn blue small" style="margin: 0">Import workbook<input type="file" id="imp-file" accept=".xlsx" hidden></label>
+      <button type="button" class="btn blue small" id="part-add">+ Add part</button>
+      <span style="flex-grow: 1"></span><span class="muted" id="price-sum"></span>
+    </div>
+    <div class="panel wrap"><table class="g"><thead><tr><th>BOM item (from the app)</th><th>From</th><th>Qty</th><th>Assembly · parts per unit</th><th>Unit cost</th><th>Labor</th><th>Status</th><th></th></tr></thead><tbody id="items-body"></tbody></table></div>
+    <div class="bar"><button type="button" class="btn muted small" id="cat-toggle">Show catalog</button></div>
+    <div class="panel wrap" id="cat-panel" hidden><table class="g"><thead><tr><th>Part number</th><th>Manufacturer</th><th>Description</th><th>Unit</th><th>Unit cost $</th><th>Labor min</th><th></th></tr></thead><tbody id="cat-body"></tbody></table></div>
   </section>
 
   <section data-panel="chk" hidden>
@@ -72,7 +87,7 @@ table.g td.m { color: var(--muted); font-size: 14px; }
   </section>
 
   <section data-panel="co" hidden>
-    <div class="lead">Current confirmed data vs the reference snapshot, line by line with the cause. Quantities here; prices are filled in the change-order workbook (same pricing columns and arithmetic as the BOM).</div>
+    <div class="lead">Current confirmed data vs the reference snapshot, line by line with the cause. Quantities here; the change-order workbook carries the pricing columns, pre-filled at bid or current prices (set on Parts &amp; prices) where the catalog has them.</div>
     <div class="bar"><span id="co-ref" class="muted"></span><span style="flex-grow: 1"></span>
       <button type="button" class="btn blue small" id="co-refresh">Compare with the reference</button>
       <button type="button" class="btn green small" id="co-create" disabled>Create change order</button></div>
@@ -93,6 +108,7 @@ table.g td.m { color: var(--muted); font-size: 14px; }
 <script type="module">
 import { api, post } from './lib/wf-intake-ui.js';
 import { buildWorkbook, buildCoWorkbook } from './lib/wf8-workbook.js';
+import { parseImport, buildTemplate, sheetRows } from './lib/wf8-pricing.js';
 
 const projectId = new URLSearchParams(location.search).get('project_id');
 if (!projectId) location.replace('wf-projects.html');
@@ -141,9 +157,7 @@ function render() {
     <td>${pill(s.status)}</td><td class="m">${esc(s.why)}</td><td class="m">${esc(WHAT[s.key] || '')}</td>
     <td style="white-space: nowrap">${s.steps.filter((c) => STEP_PAGE[c]).map((c) => `<a class="act" href="${STEP_PAGE[c]}?project_id=${projectId}">${c} →</a>`).join(' ')}</td></tr>`).join('');
 
-  $('items-body').innerHTML = m.items.length ? m.items.map((i) => `<tr><td>${esc(i.item)}</td><td style="color: var(--amber)">${esc(i.step)}</td>
-    <td>${fmtN(i.qty)}</td><td class="m">${esc(i.unit)}</td><td class="m">${esc(i.detail || '')}</td><td><span class="pill none">no parts yet</span></td></tr>`).join('')
-    : '<tr><td colspan="6" class="m">No confirmed quantities yet.</td></tr>';
+  renderParts();
 
   const bad = m.checks.filter((c) => !c.ok).length;
   document.getElementById('tab-chk').textContent = `Cross-checks${bad ? ` (${bad})` : ''}`;
@@ -172,12 +186,114 @@ function render() {
   wire();
 }
 
+let openItem = null;
+const money = (v) => v == null ? '—' : '$' + Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+function renderParts() {
+  const pr = data.pricing, m = data.model;
+  $('cat-name').textContent = pr.catalog ? pr.catalog.name : 'none yet — created when you add or import a part';
+  $('set-margin').value = data.project.material_margin == null ? '' : +(data.project.material_margin * 100).toFixed(2);
+  $('set-rate').value = data.project.labor_rate ?? '';
+  $('set-basis').value = data.project.co_pricing_basis || 'bid';
+  const sm = pr.summary;
+  $('price-sum').textContent = `${sm.items} BOM items · ${sm.priced} priced · ${sm.partial} not fully priced · ${sm.none} without parts · ${pr.parts.length} parts in the catalog`;
+  const linesBy = new Map();
+  for (const a of pr.assemblies) { if (!linesBy.has(a.item_key)) linesBy.set(a.item_key, []); linesBy.get(a.item_key).push(a); }
+  const partBy = new Map(pr.parts.map((p) => [p.part_number, p]));
+  const pill = (st) => st === 'priced' ? '<span class="pill ok">✓ priced</span>' : st === 'partial' ? '<span class="pill review">not fully priced</span>' : '<span class="pill none">no parts</span>';
+  $('items-body').innerHTML = m.items.length ? m.items.map((i) => {
+    const b = pr.byKey[i.key] || { status: 'none' };
+    const lines = linesBy.get(i.key) || [];
+    const summary = lines.length ? lines.map((l) => `${+l.qty}× ${esc(l.part_number)}${+l.waste > 1 ? ` ×${+l.waste}` : ''}${partBy.has(l.part_number) ? '' : ' <span style="color: var(--orange)">(not in catalog)</span>'}`).join(' · ') : '<span class="muted">—</span>';
+    const editor = openItem === i.key ? `<tr><td colspan="8" style="background: #121714; padding: 12px 16px">
+      ${lines.map((l) => `<div style="display: flex; gap: 10px; align-items: center; margin-bottom: 6px">
+        <span style="width: 200px; font-weight: 700">${esc(l.part_number)}</span><span class="muted" style="flex-grow: 1">${esc(partBy.get(l.part_number)?.description || 'not in catalog')}</span>
+        <label class="muted">qty <input class="field" style="width: 80px; padding: 5px 6px" value="${+l.qty}" data-lq="${esc(i.key)}|${esc(l.part_number)}"></label>
+        <label class="muted">waste <input class="field" style="width: 80px; padding: 5px 6px" value="${+l.waste}" data-lw="${esc(i.key)}|${esc(l.part_number)}"></label>
+        <a href="#" class="act" data-ldel="${esc(i.key)}|${esc(l.part_number)}">remove</a></div>`).join('') || '<div class="muted" style="margin-bottom: 6px">No parts yet.</div>'}
+      <div style="display: flex; gap: 10px; align-items: center; margin-top: 8px">
+        <input class="field" id="nl-part" list="parts-dl" placeholder="part number" style="width: 220px; padding: 6px 8px">
+        <label class="muted">qty per ${esc(i.unit)} <input class="field" id="nl-qty" value="1" style="width: 80px; padding: 6px 8px"></label>
+        <label class="muted">waste <input class="field" id="nl-waste" value="1" style="width: 80px; padding: 6px 8px"></label>
+        <button type="button" class="btn green small" id="nl-add" data-key="${esc(i.key)}" data-label="${esc(i.item)}">Add part</button>
+        <span class="muted" style="font-size: 13px">waste 1.05 = 5% extra · a part number not in the catalog can be added to it after</span></div>
+      ${b.missing?.length ? `<div style="color: var(--orange); margin-top: 8px">Left blank: ${esc(b.missing.join(', '))}</div>` : ''}</td></tr>` : '';
+    return `<tr><td>${esc(i.item)}</td><td style="color: var(--amber)">${esc(i.step)}</td><td>${fmtN(i.qty)} <span class="muted">${esc(i.unit)}</span></td>
+      <td class="m">${summary}</td><td>${money(b.unit_cost)}</td><td>${b.labor_min == null ? '—' : fmtN(b.labor_min) + ' min'}</td><td>${pill(b.status)}</td>
+      <td><button type="button" class="btn muted small" data-edit="${esc(i.key)}">${openItem === i.key ? 'Close' : 'Parts'}</button></td></tr>${editor}`;
+  }).join('') : '<tr><td colspan="8" class="m">No confirmed quantities yet.</td></tr>';
+  let dl = document.getElementById('parts-dl');
+  if (!dl) { dl = document.createElement('datalist'); dl.id = 'parts-dl'; document.body.appendChild(dl); }
+  dl.innerHTML = pr.parts.map((p) => `<option value="${esc(p.part_number)}">${esc([p.manufacturer, p.description].filter(Boolean).join(' · '))}</option>`).join('');
+  $('cat-toggle').textContent = `${$('cat-panel').hidden ? 'Show' : 'Hide'} catalog (${pr.parts.length})`;
+  $('cat-body').innerHTML = pr.parts.length ? pr.parts.map((p) => `<tr>
+    <td style="font-weight: 700">${esc(p.part_number)}</td>
+    ${['manufacturer', 'description', 'unit', 'unit_cost', 'labor_min'].map((f) => `<td><input class="field" style="width: ${f === 'description' ? 320 : f === 'unit' ? 60 : 110}px; padding: 5px 6px" value="${esc(p[f] ?? '')}" data-pf="${esc(p.part_number)}|${f}"></td>`).join('')}
+    <td><a href="#" class="act" data-pdel="${esc(p.part_number)}">delete</a></td></tr>`).join('') : '<tr><td colspan="7" class="m">The catalog is empty. Import a workbook or add parts.</td></tr>';
+  wireParts();
+}
+function wireParts() {
+  const pr = data.pricing;
+  document.querySelectorAll('[data-edit]').forEach((b) => b.onclick = () => { openItem = openItem === b.dataset.edit ? null : b.dataset.edit; renderParts(); });
+  const nl = $('nl-add');
+  if (nl) nl.onclick = () => act(() => call('save_line', { item_key: nl.dataset.key, item_label: nl.dataset.label, part_number: $('nl-part').value.trim(), qty: $('nl-qty').value, waste: $('nl-waste').value }), 'Part added to the assembly.');
+  const lineOf = (v) => { const [k, pn] = v.split('|'); return { k, pn, l: pr.assemblies.find((a) => a.item_key === k && a.part_number === pn) }; };
+  document.querySelectorAll('[data-lq],[data-lw]').forEach((inp) => inp.onchange = () => {
+    const { k, pn, l } = lineOf(inp.dataset.lq || inp.dataset.lw);
+    act(() => call('save_line', { item_key: k, item_label: l?.item_label, part_number: pn, qty: inp.dataset.lq ? inp.value : l.qty, waste: inp.dataset.lw ? inp.value : l.waste, note: l?.note }), 'Saved.');
+  });
+  document.querySelectorAll('[data-ldel]').forEach((a) => a.onclick = (e) => { e.preventDefault(); const { k, pn } = lineOf(a.dataset.ldel); act(() => call('delete_line', { item_key: k, part_number: pn }), 'Removed.'); });
+  document.querySelectorAll('[data-pf]').forEach((inp) => inp.onchange = () => {
+    const [pn, f] = inp.dataset.pf.split('|'); const p = pr.parts.find((x) => x.part_number === pn);
+    act(() => call('save_part', { part: { ...p, [f]: inp.value } }), 'Part saved.');
+  });
+  document.querySelectorAll('[data-pdel]').forEach((a) => a.onclick = (e) => { e.preventDefault(); if (confirm(`Delete ${a.dataset.pdel} from the catalog? Assemblies that use it will show it as "not in catalog".`)) act(() => call('delete_part', { part_number: a.dataset.pdel }), 'Deleted.'); });
+}
+async function act(fn, okMsg) { try { await fn(); await load(); status(okMsg, 'ok'); } catch (e) { status(e.message, 'err'); } }
+
+$('cat-toggle').onclick = () => { $('cat-panel').hidden = !$('cat-panel').hidden; renderParts(); };
+$('set-margin').onchange = () => act(() => call('settings', { material_margin: $('set-margin').value.trim() === '' ? null : Number($('set-margin').value) / 100 }), 'Margin saved.');
+$('set-rate').onchange = () => act(() => call('settings', { labor_rate: $('set-rate').value.trim() === '' ? null : Number($('set-rate').value) }), 'Labor rate saved.');
+$('set-basis').onchange = () => act(() => call('settings', { co_pricing_basis: $('set-basis').value }), 'Saved.');
+$('cat-pick').onfocus = async () => {
+  if ($('cat-pick').options.length > 1) return;
+  try { const cats = await call('catalogs'); $('cat-pick').innerHTML = '<option value="">use another catalog…</option>' + cats.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join(''); } catch (e) { status(e.message, 'err'); }
+};
+$('cat-pick').onchange = () => $('cat-pick').value && confirm('Switch this project to that catalog? Assemblies stay; prices come from the new catalog.') && act(() => call('set_catalog', { catalog_id: Number($('cat-pick').value) }), 'Catalog switched.');
+$('part-add').onclick = () => {
+  const pn = prompt('Part number:'); if (!pn || !pn.trim()) return;
+  const description = prompt('Description:', '') ?? '';
+  const unit_cost = prompt('Unit cost ($) — leave blank if unknown:', '') ?? '';
+  const labor_min = prompt('Labor minutes per unit — leave blank if unknown:', '') ?? '';
+  act(() => call('save_part', { part: { part_number: pn.trim(), description, unit_cost, labor_min } }), `${pn.trim()} added to the catalog.`);
+};
+$('tpl-dl').onclick = async () => {
+  if (!window.ExcelJS) { status('Excel library not loaded.', 'err'); return; }
+  const wb = buildTemplate(window.ExcelJS, data.model.items, data.pricing.parts, data.pricing.assemblies);
+  await download(wb, `${safe(data.project.name)}_parts_and_assemblies.xlsx`); status('Template downloaded — fill it in and import it.', 'ok');
+};
+$('imp-file').onchange = async (e) => {
+  const file = e.target.files[0]; e.target.value = '';
+  if (!file) return;
+  try {
+    const wb = new window.ExcelJS.Workbook();
+    await wb.xlsx.load(await file.arrayBuffer());
+    const r = parseImport({ partsRows: sheetRows(wb, 'Parts'), assemblyRows: sheetRows(wb, 'Assemblies') }, new Set(data.model.items.map((i) => i.key)));
+    if (!r.parts.length && !r.assemblies.length) { status(r.errors.length ? r.errors.slice(0, 5).join(' · ') : 'Nothing to import — no Parts or filled Assemblies rows found.', 'err'); return; }
+    const msg = `Import ${r.parts.length} part(s) and ${r.assemblies.length} assembly line(s) for ${r.replace_items.length} BOM item(s)?`
+      + (r.errors.length ? `\n\n${r.errors.length} row(s) will be skipped:\n${r.errors.slice(0, 8).join('\n')}` : '');
+    if (!confirm(msg)) return;
+    const res = await call('import', r);
+    await load();
+    status(`Imported ${res.parts} part(s) and ${res.lines} line(s); ${res.items_replaced} item assembly(ies) replaced.${r.errors.length ? ` ${r.errors.length} row(s) skipped.` : ''}`, 'ok');
+  } catch (err) { status('Import failed: ' + err.message, 'err'); }
+};
+
 function wire() {
   document.querySelectorAll('[data-dl]').forEach((b) => b.onclick = async () => {
     try {
       status('Building the workbook…');
       const s = await call('snapshot', { snapshot_id: Number(b.dataset.dl) });
-      const wb = buildWorkbook(window.ExcelJS, s.quantities.model, { label: s.label, generated_at: s.created_at, project: data.project.name });
+      const wb = buildWorkbook(window.ExcelJS, s.quantities.model, { label: s.label, generated_at: s.created_at, project: data.project.name }, s.prices && s.prices.byKey ? s.prices : null);
       await download(wb, `${safe(data.project.name)}_BOM_${safe(s.label)}.xlsx`); status('Downloaded.', 'ok');
     } catch (e) { status(e.message, 'err'); }
   });
@@ -188,7 +304,7 @@ function wire() {
   document.querySelectorAll('[data-co]').forEach((b) => b.onclick = async () => {
     try {
       const r = await call('co', { change_order_id: Number(b.dataset.co) });
-      const wb = buildCoWorkbook(window.ExcelJS, { number: r.change_order.number, lines: r.lines }, { reference: r.reference_label, generated_at: r.change_order.created_at });
+      const wb = buildCoWorkbook(window.ExcelJS, { number: r.change_order.number, lines: r.lines, margin: r.margin, rate: r.rate }, { reference: r.reference_label, generated_at: r.change_order.created_at });
       await download(wb, `${safe(data.project.name)}_${safe(r.change_order.number)}.xlsx`); status('Downloaded.', 'ok');
     } catch (e) { status(e.message, 'err'); }
   });
@@ -203,7 +319,7 @@ $('generate').onclick = async () => {
   $('generate').disabled = true; status('Generating…');
   try {
     const r = await call('generate', { label: label.trim() });
-    const wb = buildWorkbook(window.ExcelJS, r.model, { label: r.snapshot.label, generated_at: r.snapshot.created_at, project: data.project.name });
+    const wb = buildWorkbook(window.ExcelJS, r.model, { label: r.snapshot.label, generated_at: r.snapshot.created_at, project: data.project.name }, r.prices);
     await download(wb, `${safe(data.project.name)}_BOM_${safe(r.snapshot.label)}.xlsx`);
     await load();
     status(`Generated and saved as “${r.snapshot.label}”.${data.reference ? '' : ' Pin it as the reference on the Snapshots tab when it is the bid.'}`, 'ok');
@@ -226,7 +342,7 @@ $('co-refresh').onclick = async () => {
 $('co-create').onclick = async () => {
   const number = prompt('Change order number:', `CO-${String(data.change_orders.length + 1).padStart(2, '0')}`);
   if (number === null) return;
-  try { const r = await call('create_co', { number }); await load(); status(`${r.change_order.number} created with ${r.lines} line(s).`, 'ok'); $('co-create').disabled = true; }
+  try { const r = await call('create_co', { number, pricing_basis: data.project.co_pricing_basis }); await load(); status(`${r.change_order.number} created with ${r.lines} line(s).`, 'ok'); $('co-create').disabled = true; }
   catch (e) { status(e.message, 'err'); }
 };
 
