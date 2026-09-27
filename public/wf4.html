@@ -118,6 +118,10 @@
             <button type="button" class="btn muted small" id="exit-add">Add exit pin</button>
           </div>
         </div>
+        <div class="panel" style="padding: 12px 16px; display: flex; flex-direction: column; gap: 8px">
+          <div class="small muted">Serving areas — only when parts of this sheet go to different TRs. Draw boxes (two opposite corners) for each TR's area; devices inside go to that TR.</div>
+          <div id="serve-list"></div>
+        </div>
         <div class="panel"><div class="row head">All sheets, by PDF</div><div id="pins-overview"></div></div>
         <details class="small" id="pins-others"></details>
       </section>
@@ -690,6 +694,10 @@ const docName = (id) => documents.find((d) => d.id === id)?.filename || `PDF ${i
 const sheetName = (p) => p ? (p.sheet_number || 'page ' + p.page_number) : '—';
 const onSheet = (pageId) => pins.filter((d) => d.page_id === pageId && d.x_norm != null && d.pin_kind !== 'exit');
 const exitsOn = (pageId) => pins.filter((d) => d.page_id === pageId && d.x_norm != null && d.pin_kind === 'exit');
+// Serving-area boxes on a sheet (page_regions kind 'schematic' tied to a TR pin).
+const servingBoxes = (pageId) => (summary?.page_regions || []).filter((r) => r.page_id === pageId && r.kind === 'schematic' && r.demarc_id != null && r.x0 != null);
+const SERVE_COLORS = ['#2a6ab0', '#b0402a', '#2a9a4a', '#8a3ab0', '#b07800', '#1a8a8a'];
+let serveMode = null;   // { pinId, name, corners: [] } while drawing a serving box
 const allTrNames = () => [...new Set([...trs.map((t) => t.tr_number), ...pins.map((d) => d.name), ...typedTrs])]
   .sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }));
 const pinOf = (name) => pins.find((d) => d.name === name && d.pin_kind !== 'exit' && d.source !== 'off_sheet');
@@ -719,7 +727,7 @@ async function openPins() {
     if (!autoTried && trs.length && plans.length) { autoTried = true; await findTrs(); }
   } catch (e) { status(e.message, 'err'); }
 }
-$('pin-page').onchange = () => { pinPageId = Number($('pin-page').value); pinSel = null; renderPinPage(); };
+$('pin-page').onchange = () => { pinPageId = Number($('pin-page').value); pinSel = null; serveMode = null; renderPinPage(); };
 function renderPinPage() {
   // sheet picker, grouped by PDF
   $('pin-page').innerHTML = plansByPdf().map((g) => `<optgroup label="${esc(g.name)}">${g.list.map((p) =>
@@ -787,6 +795,40 @@ function renderPinPage() {
           <b style="width: 70px">${esc(sheetName(p))}</b><span class="${on.length || exitsOn(p.id).length ? '' : 'muted'}">${[...on.map((d) => esc(d.name)), ...exitsOn(p.id).map((d) => '→ ' + esc(d.name))].join(', ') || 'no TR pin'}</span></button>`; }).join('')}
     </div>`).join('');
   document.querySelectorAll('[data-sheet]').forEach((b) => b.onclick = () => { pinPageId = Number(b.dataset.sheet); pinSel = null; renderPinPage(); });
+
+  // serving areas: one line per TR pin on this sheet (on it, or exit pins)
+  const sheetPins = [...placed, ...exits];
+  const boxesHere = servingBoxes(page.id);
+  $('serve-list').innerHTML = sheetPins.length ? sheetPins.map((d, i) => {
+    const mine = boxesHere.filter((b) => b.demarc_id === d.id);
+    const drawing = serveMode && serveMode.pinId === d.id;
+    return `<div style="display: flex; gap: 8px; align-items: center; font-size: 12px; padding: 4px 0; flex-wrap: wrap">
+      <span style="width: 10px; height: 10px; border-radius: 2px; background: ${SERVE_COLORS[i % SERVE_COLORS.length]}"></span>
+      <b style="flex-grow: 1">${d.pin_kind === 'exit' ? '→ ' : ''}${esc(d.name)} <span class="muted" style="font-weight: 400">· ${mine.length ? mine.length + ' box' + (mine.length === 1 ? '' : 'es') : 'no area (gets devices outside all areas)'}</span></b>
+      ${drawing ? `<span class="muted">${serveMode.corners.length === 0 ? 'click one corner…' : serveMode.corners.length === 1 ? 'click the opposite corner…' : ''}</span>
+        <button type="button" class="btn green small" data-servesave="${d.id}"${serveMode.corners.length === 2 ? '' : ' disabled'}>Save box</button>
+        <button type="button" class="btn muted small" data-servestop="1">Done</button>`
+        : `<button type="button" class="btn muted small" data-serve="${d.id}">Draw box</button>`}
+      ${mine.map((b, j) => `<button type="button" class="btn muted small" data-servedel="${b.id}" title="Delete box ${j + 1}">✕ box ${j + 1}</button>`).join('')}
+    </div>`;
+  }).join('') + (boxesHere.length && !sheetPins.every((d) => boxesHere.some((b) => b.demarc_id === d.id))
+      ? '<div class="small muted" style="margin-top: 4px">Devices outside every area go to the TR with no area.</div>'
+      : boxesHere.length ? '<div class="small" style="margin-top: 4px; color: var(--orange)">Every TR has an area: devices outside all areas are flagged out of scope and get no length.</div>' : '')
+    : '<div class="small muted">Place this sheet\'s TR pins first.</div>';
+  document.querySelectorAll('[data-serve]').forEach((b) => b.onclick = () => {
+    const d = sheetPins.find((x) => x.id === Number(b.dataset.serve));
+    serveMode = { pinId: d.id, name: d.name, corners: [] };
+    status(`Drawing ${d.name}'s serving area: click two opposite corners on the drawing, then Save box. Draw more boxes if the area needs them.`);
+    renderPinPage();
+  });
+  document.querySelectorAll('[data-servestop]').forEach((b) => b.onclick = () => { serveMode = null; renderPinPage(); });
+  document.querySelectorAll('[data-servesave]').forEach((b) => b.onclick = saveServeBox);
+  document.querySelectorAll('[data-servedel]').forEach((b) => b.onclick = async () => {
+    if (!confirm('Delete this serving box?')) return;
+    try { await api('/api/wf/wf4/regions?id=' + b.dataset.servedel, { method: 'DELETE' }); await refreshSummary(); status('Box deleted.', 'ok'); }
+    catch (e) { status(e.message, 'err'); }
+    renderPinPage();
+  });
 
   // the rest of WF2, folded away
   const loadedNames = new Set([...pins.map((d) => d.name), ...[...mentions.values()].flat().map((m) => m.name)]);
@@ -886,6 +928,24 @@ function drawPins(scrollTo = false) {
     g.font = `700 ${big ? 14 : 12}px "JetBrains Mono", monospace`; g.lineWidth = 3; g.strokeStyle = 'rgba(255,255,255,.9)';
     g.strokeText(label, px + 12, py - 8); g.fillStyle = color; g.fillText(label, px + 12, py - 8);
   };
+  const sheetPinsNow = [...onSheet(pinPageId), ...exitsOn(pinPageId)];
+  for (const b of servingBoxes(pinPageId)) {
+    const i = sheetPinsNow.findIndex((d) => d.id === b.demarc_id), c = SERVE_COLORS[(i < 0 ? 0 : i) % SERVE_COLORS.length];
+    const x = b.x0 * o.width, y = b.y0 * o.height, w = (b.x1 - b.x0) * o.width, h = (b.y1 - b.y0) * o.height;
+    g.fillStyle = c + '1f'; g.fillRect(x, y, w, h); g.strokeStyle = c; g.lineWidth = 2; g.setLineDash([10, 5]); g.strokeRect(x, y, w, h); g.setLineDash([]);
+    const name = sheetPinsNow[i]?.name || '';
+    g.font = '700 12px "JetBrains Mono", monospace'; g.lineWidth = 3; g.strokeStyle = 'rgba(255,255,255,.9)';
+    g.strokeText(`area → ${name}`, x + 6, y + 16); g.fillStyle = c; g.fillText(`area → ${name}`, x + 6, y + 16);
+  }
+  if (serveMode) {
+    g.fillStyle = '#e07000';
+    for (const c of serveMode.corners) { g.beginPath(); g.arc(c.x * o.width, c.y * o.height, 6, 0, Math.PI * 2); g.fill(); }
+    if (serveMode.corners.length === 2) {
+      const [a, b] = serveMode.corners;
+      g.strokeStyle = '#e07000'; g.lineWidth = 2; g.setLineDash([7, 4]);
+      g.strokeRect(Math.min(a.x, b.x) * o.width, Math.min(a.y, b.y) * o.height, Math.abs(b.x - a.x) * o.width, Math.abs(b.y - a.y) * o.height); g.setLineDash([]);
+    }
+  }
   for (const m of mentions.get(pinPageId) || []) if (m.kind === 'room' && !onSheet(pinPageId).some((d) => d.name === m.name) && m.name !== pinSel?.name) dot(m.x, m.y, '#b07800', m.name, false, true);
   for (const d of onSheet(pinPageId)) if (!(pinSel && pinSel.kind !== 'exit' && d.name === pinSel.name)) dot(d.x_norm, d.y_norm, '#2a6ab0', d.name, false, false);
   for (const d of exitsOn(pinPageId)) {
@@ -902,12 +962,31 @@ function drawPins(scrollTo = false) {
   }
 }
 $('pin-ovl').addEventListener('click', (e) => {
-  if (!pinSel) { status('Pick a TR first, or add one to this sheet.', 'err'); return; }
   const r = $('pin-ovl').getBoundingClientRect();
+  if (serveMode) {
+    if (serveMode.corners.length >= 2) serveMode.corners = [];
+    serveMode.corners.push({ x: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), y: Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)) });
+    renderPinPage(); return;
+  }
+  if (!pinSel) { status('Pick a TR first, or add one to this sheet.', 'err'); return; }
   pinSel.x = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
   pinSel.y = Math.min(1, Math.max(0, (e.clientY - r.top) / r.height));
   renderPinEdit(); drawPins();
 });
+async function saveServeBox() {
+  if (!serveMode || serveMode.corners.length !== 2) return;
+  const [a, b] = serveMode.corners;
+  const x0 = Math.min(a.x, b.x), y0 = Math.min(a.y, b.y), x1 = Math.max(a.x, b.x), y1 = Math.max(a.y, b.y);
+  if (x1 - x0 < 0.002 || y1 - y0 < 0.002) { status('That box is too small — click two corners further apart.', 'err'); return; }
+  try {
+    await post('/api/wf/wf4/regions', { project_id: Number(projectId), page_id: pinPageId, label: `Serves ${serveMode.name}`, kind: 'schematic',
+      demarc_id: serveMode.pinId, polygon: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], x0, y0, x1, y1 });
+    await refreshSummary();
+    serveMode.corners = [];
+    status(`Box saved for ${serveMode.name}. Draw another, or Done.`, 'ok');
+  } catch (e) { status(e.message, 'err'); }
+  renderPinPage();
+}
 async function savePin() {
   const s = pinSel; if (!s || s.x == null) return;
   $('pin-save').disabled = true;
@@ -1202,11 +1281,13 @@ async function countSheet(p, symTypes) {
   }
 
   // 3. TR pins on this sheet (full-page frame), with the schematic box a pin owns, if any.
+  // A pin with a serving area is sent once per box (the batch gives a device to
+  // the first box containing it); a pin without one takes devices outside all areas.
   const regions = summary.page_regions || [];
-  const demarcPins = (summary.demarcs || []).filter((d) => d.page_id === p.id && d.x_norm != null && d.y_norm != null).map((d) => {
-    const box = regions.find((rg) => rg.page_id === p.id && rg.demarc_id === d.id && rg.x0 != null);
-    return { demarc_id: d.id, name: d.name, x_norm: d.x_norm, y_norm: d.y_norm, stub_ft: Number(d.stub_ft) || 0,
-      scope_box: box ? { x0: box.x0, y0: box.y0, x1: box.x1, y1: box.y1 } : undefined };
+  const demarcPins = (summary.demarcs || []).filter((d) => d.page_id === p.id && d.x_norm != null && d.y_norm != null).flatMap((d) => {
+    const base = { demarc_id: d.id, name: d.name, x_norm: d.x_norm, y_norm: d.y_norm, stub_ft: Number(d.stub_ft) || 0 };
+    const boxes = regions.filter((rg) => rg.page_id === p.id && rg.kind === 'schematic' && rg.demarc_id === d.id && rg.x0 != null);
+    return boxes.length ? boxes.map((b) => ({ ...base, scope_box: { x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1 } })) : [base];
   });
 
   // 4. Symbols: vector first (free), model fallback (metered) — unchanged routing.

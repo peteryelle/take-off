@@ -18,7 +18,8 @@ import { regionToLegacy, REGION_KINDS, wfPageProject } from './utils/wf4-map.js'
 
 // Changing a sheet's exclusion areas un-confirms its setup. Boxes the review
 // map creates when one device is excluded ("Manual exclude — …") do not.
-const clearsReady = (kind, label) => kind === 'exclude' && !String(label || '').startsWith('Manual exclude');
+// Serving-area boxes (kind 'schematic', tied to a TR pin) change setup too.
+const clearsReady = (kind, label) => (kind === 'exclude' || kind === 'schematic') && !String(label || '').startsWith('Manual exclude');
 async function clearReady(db, pageId) {
   const { error } = await db.from('pages').update({ wf4_ready_at: null, wf4_ready_by: null }).eq('id', pageId);
   if (error) console.warn('[wf4-regions] clear ready failed:', error.message);
@@ -75,9 +76,16 @@ export default async function handler(req) {
     const pageProject = await wfPageProject(supabase, page_id, orgId);
     if (!pageProject || String(pageProject) !== String(project_id)) return err('Page not found in this project', 404);
 
+    // Optional: tie the box to a TR pin on this project (a serving area).
+    let trPinId = null;
+    if (body.demarc_id != null) {
+      const { data: pin } = await db.from('tr_pins').select('project_id').eq('id', body.demarc_id).maybeSingle();
+      if (!pin || String(pin.project_id) !== String(project_id)) return err('TR pin not found in this project', 404);
+      trPinId = body.demarc_id;
+    }
     const row = {
       org_id: orgId,
-      project_id, page_id,
+      project_id, page_id, tr_pin_id: trPinId,
       label: label ?? null,
       polygon,
       x0: x0 ?? null, y0: y0 ?? null, x1: x1 ?? null, y1: y1 ?? null,
