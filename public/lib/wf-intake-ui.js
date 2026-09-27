@@ -71,7 +71,7 @@ export function mountIntake(el, opts) {
   el.innerHTML = `
     <section class="panel" aria-label="Sheets in this step">
       <div class="row" style="justify-content: space-between">
-        <div><div style="font-size: 12px; color: var(--muted); letter-spacing: .08em">SHEETS IN THIS STEP</div>
+        <div><div style="font-size: 14px; color: var(--muted); letter-spacing: .08em">SHEETS IN THIS STEP</div>
           <div class="wf-sub" data-el="count" style="margin-top: 4px"></div></div>
         <div style="display: flex; gap: 8px">
           <button type="button" class="btn muted small" data-el="pin" title="Save the current revision of every sheet in this step as the reference for comparisons and change orders">Pin current as reference</button>
@@ -136,7 +136,7 @@ export function mountIntake(el, opts) {
   function renderUploads() {
     const pill = { waiting: 'open', reading: 'in_review', uploading: 'in_review', done: 'confirmed', failed: 'stale' };
     $('uploads').innerHTML = state.uploads.map((u) => `
-      <div class="row" style="font-size: 13px">
+      <div class="row" style="font-size: 15px">
         <span style="width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">${esc(u.file.name)}</span>
         <span class="pill ${pill[u.status]}">${u.status}</span>
         <span class="muted" style="flex-grow: 1; ${u.status === 'failed' ? 'color: var(--red)' : ''}">${esc(u.note)}</span>
@@ -209,8 +209,8 @@ export function mountIntake(el, opts) {
   }
 
   function roleSelect(p, label) {
-    return `<label class="muted" style="font-size: 12px; display: flex; gap: 6px; align-items: center">${label}
-      <select class="field" style="padding: 5px 6px; font-size: 12px" data-role="${p.id}" aria-label="Role for ${esc(p.sheet_number || 'page ' + p.page_number)}">
+    return `<label class="muted" style="font-size: 14px; display: flex; gap: 6px; align-items: center">${label}
+      <select class="field" style="padding: 5px 6px; font-size: 14px" data-role="${p.id}" aria-label="Role for ${esc(p.sheet_number || 'page ' + p.page_number)}">
         <option value="">—</option>${ALL_ROLES.map((r) => `<option value="${r}"${r === p.role ? ' selected' : ''}>${roleLabel(r)}${stepForRole(r) ? ' · ' + stepForRole(r) : ''}</option>`).join('')}
       </select></label>`;
   }
@@ -225,13 +225,13 @@ export function mountIntake(el, opts) {
         : r.is_current ? '' : '<span class="pill open">superseded</span>';
       rev = `${esc(r.rev_label)} ${r.is_reference ? '<span style="color: var(--green)" title="Pinned reference">● ref</span>' : ''} ${tag}`;
     }
-    const cell = (k, w) => `<input class="field" style="width: ${w}px; padding: 5px 6px; font-size: 12px${!p[k] && p.role === 'plan' && k === 'zone' ? '; border-color: var(--orange-bd); background: var(--orange-bg)' : ''}" value="${esc(p[k] || '')}" data-loc="${k}" data-page="${p.id}" aria-label="${k}">`;
+    const cell = (k, w) => `<input class="field" style="width: ${w}px; padding: 5px 6px; font-size: 14px${!p[k] && p.role === 'plan' && k === 'zone' ? '; border-color: var(--orange-bd); background: var(--orange-bg)' : ''}" value="${esc(p[k] || '')}" data-loc="${k}" data-page="${p.id}" aria-label="${k}">`;
     return `
-      <div class="row" style="font-size: 13px${p.is_duplicate ? '; opacity: .55' : ''}">
+      <div class="row" style="font-size: 15px${p.is_duplicate ? '; opacity: .55' : ''}">
         <span style="width: 110px; font-weight: 700">${esc(p.sheet_number || '—')}</span>
         <span style="flex-grow: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap" title="${esc(p.title_text || '')}">${esc(p.title_text || '')}</span>
         <span class="muted" style="width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap" title="${esc(p.filename)}">${esc(p.filename)} · ${p.page_number}</span>
-        <span style="width: 150px">${roleSelect(p, '').replace('<label class="muted" style="font-size: 12px; display: flex; gap: 6px; align-items: center">', '<label style="display: flex">')}</span>
+        <span style="width: 150px">${roleSelect(p, '').replace('<label class="muted" style="font-size: 14px; display: flex; gap: 6px; align-items: center">', '<label style="display: flex">')}</span>
         ${loc ? `<span style="width: 90px">${cell('building', 82)}</span><span style="width: 56px">${cell('level', 48)}</span><span style="width: 70px">${cell('zone', 62)}</span>` : ''}
         <span style="width: 150px">${rev}</span>
       </div>`;

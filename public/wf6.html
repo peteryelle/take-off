@@ -12,42 +12,42 @@
 <style>
 .wf-page { max-width: 1440px; }
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); }
-.tab { font-family: inherit; font-size: 14px; padding: 11px 16px; background: none; border: none; border-bottom: 2px solid transparent; color: var(--muted); cursor: pointer; }
+.tab { font-family: inherit; font-size: 16px; padding: 11px 16px; background: none; border: none; border-bottom: 2px solid transparent; color: var(--muted); cursor: pointer; }
 .tab[aria-selected="true"] { color: var(--green); border-bottom-color: var(--green); font-weight: 700; }
 .cols { display: flex; gap: 24px; align-items: flex-start; }
 .side { width: 340px; flex-shrink: 0; display: flex; flex-direction: column; gap: 10px; }
 .main { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
-.kick { font-size: 12px; color: var(--muted); letter-spacing: .08em; }
-.elev { font-size: 13px; padding: 8px 12px; border-radius: 3px; border: 1px solid var(--line); background: var(--panel); }
-.elev .cap { font-size: 11px; color: var(--muted); margin-top: 3px; }
+.kick { font-size: 14px; color: var(--muted); letter-spacing: .08em; }
+.elev { font-size: 15px; padding: 8px 12px; border-radius: 3px; border: 1px solid var(--line); background: var(--panel); }
+.elev .cap { font-size: 13px; color: var(--muted); margin-top: 3px; }
 .userbox { border: 1px solid var(--purple-bd); background: var(--purple-bg); border-radius: 4px; padding: 12px 14px; display: flex; flex-direction: column; gap: 9px; }
-.userbox .r { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.userbox .r { display: flex; align-items: center; gap: 8px; font-size: 15px; }
 .userbox .r span { flex-grow: 1; }
-.num { width: 64px; font-family: inherit; font-size: 13px; text-align: center; background: var(--bg); color: var(--text); border: 1px solid #3a443f; border-radius: 3px; padding: 5px 4px; }
+.num { width: 64px; font-family: inherit; font-size: 15px; text-align: center; background: var(--bg); color: var(--text); border: 1px solid #3a443f; border-radius: 3px; padding: 5px 4px; }
 .num.need { border-color: var(--orange-bd); }
-.sel { font-family: inherit; font-size: 12px; background: var(--bg); color: var(--text); border: 1px solid #3a443f; border-radius: 3px; padding: 5px 6px; max-width: 100%; }
-.rrow { display: flex; align-items: center; gap: 12px; padding: 8px 16px; border-bottom: 1px solid var(--line-soft); font-size: 13px; cursor: pointer; }
+.sel { font-family: inherit; font-size: 14px; background: var(--bg); color: var(--text); border: 1px solid #3a443f; border-radius: 3px; padding: 5px 6px; max-width: 100%; }
+.rrow { display: flex; align-items: center; gap: 12px; padding: 8px 16px; border-bottom: 1px solid var(--line-soft); font-size: 15px; cursor: pointer; }
 .rrow:hover { background: #18201c; }
 .rrow .ref { width: 58px; color: var(--amber); font-weight: 700; }
 .rrow .item { flex-grow: 1; min-width: 0; }
-.rrow .part { width: 190px; color: var(--muted); font-size: 12px; }
+.rrow .part { width: 190px; color: var(--muted); font-size: 14px; }
 .rrow .ru { width: 34px; text-align: center; }
 .rrow .meth { width: 270px; }
 .rrow .src { width: 110px; text-align: right; }
-.detail { padding: 10px 16px 14px 86px; border-bottom: 1px solid var(--line); background: #121714; font-size: 13px; display: flex; flex-direction: column; gap: 10px; }
-.detail .note { color: var(--muted); font-size: 12px; line-height: 1.6; }
+.detail { padding: 10px 16px 14px 86px; border-bottom: 1px solid var(--line); background: #121714; font-size: 15px; display: flex; flex-direction: column; gap: 10px; }
+.detail .note { color: var(--muted); font-size: 14px; line-height: 1.6; }
 .detail .params { display: flex; flex-wrap: wrap; gap: 10px 22px; }
-.detail .params label { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.detail .params label { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--muted); }
 .pill.sheet { color: var(--green); border-color: #2f6a3a; background: #12241a; }
 .pill.user { color: var(--purple); border-color: var(--purple-bd); background: var(--purple-bg); }
 .pill.warn { color: var(--orange); border-color: var(--orange-bd); background: var(--orange-bg); }
 .pill.none { color: var(--muted); border-color: #3a443f; background: #141816; }
 .pill.calc { color: var(--blue); border-color: var(--blue-bd); background: var(--blue-bg); }
-.pill.review { color: var(--amber); border-color: var(--amber-bd); background: var(--amber-bg); cursor: pointer; }
+.pill.review { color: var(--amber); border-color: var(--amber-bd); background: var(--amber-bg); }
 .pill.ok { color: var(--green); border-color: var(--green-bd); background: var(--green-bg); font-weight: 700; }
-.flags { border: 1px solid var(--orange-bd); background: var(--orange-bg); border-radius: 4px; padding: 10px 18px; font-size: 13px; line-height: 1.7; }
-table.tr { width: 100%; border-collapse: collapse; font-size: 13px; }
-table.tr th { text-align: left; color: var(--muted); font-weight: normal; font-size: 11px; letter-spacing: .05em; text-transform: uppercase; padding: 10px 12px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); }
+.flags { border: 1px solid var(--orange-bd); background: var(--orange-bg); border-radius: 4px; padding: 10px 18px; font-size: 15px; line-height: 1.7; }
+table.tr { width: 100%; border-collapse: collapse; font-size: 15px; }
+table.tr th { text-align: left; color: var(--muted); font-weight: normal; font-size: 13px; letter-spacing: .05em; text-transform: uppercase; padding: 10px 12px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); }
 table.tr td { padding: 8px 12px; border-bottom: 1px solid var(--line-soft); }
 table.tr tr.main-row { cursor: pointer; }
 table.tr tr.main-row:hover td { background: #18201c; }
@@ -85,23 +85,23 @@ table.tr td.muted { color: var(--muted); }
   </nav>
 
   <section data-panel="rules">
-    <div class="muted" style="font-size: 14px; margin-bottom: 14px">Every item, part, RU and count comes from the sheet's coded and drawing notes. Click a rule to review it, set any value the sheet doesn't state, then Confirm rule — only confirmed rules are applied.</div>
+    <div class="muted" style="font-size: 16px; margin-bottom: 14px">Every item, part, RU and count comes from the sheet's coded and drawing notes. Click a rule to review it, set any value the sheet doesn't state, then Confirm rule — only confirmed rules are applied.</div>
     <div class="cols">
       <div class="side">
         <div class="kick">TYPICAL ELEVATIONS (FROM TITLES)</div>
-        <div id="elevs"><div class="muted" style="font-size: 13px">Read a rack elevation sheet above.</div></div>
+        <div id="elevs"><div class="muted" style="font-size: 15px">Read a rack elevation sheet above.</div></div>
         <div class="kick" style="margin-top: 8px">SET BY YOU · NOT STATED ON THE SHEET</div>
-        <div class="userbox" id="userbox"><div class="muted" style="font-size: 13px">Nothing to set yet.</div></div>
+        <div class="userbox" id="userbox"><div class="muted" style="font-size: 15px">Nothing to set yet.</div></div>
       </div>
       <div class="main">
         <div class="panel">
-          <div class="rrow" style="cursor: default; font-size: 11px; color: var(--muted); letter-spacing: .06em">
+          <div class="rrow" style="cursor: default; font-size: 13px; color: var(--muted); letter-spacing: .06em">
             <span class="ref">NOTE</span><span class="item">ITEM (READ FROM NOTE)</span><span class="part">PART</span><span class="ru">RU</span><span class="meth">COUNTED AS</span><span class="src"></span>
           </div>
           <div id="rules"><div class="empty">No rules yet.</div></div>
           <div class="row"><button type="button" class="btn muted small" id="add-rule">+ Add a rule not on the sheet</button>
             <button type="button" class="btn green small" id="confirm-ready">Confirm all ready</button>
-            <span class="muted" id="confirm-count" style="font-size: 12px"></span><span style="flex-grow: 1"></span>
+            <span class="muted" id="confirm-count" style="font-size: 14px"></span><span style="flex-grow: 1"></span>
             <button type="button" class="btn muted small" id="toggle-dn">Show drawing notes</button></div>
           <div id="dnotes" hidden></div>
         </div>
@@ -111,7 +111,7 @@ table.tr td.muted { color: var(--muted); }
   </section>
 
   <section data-panel="trs" hidden>
-    <div class="muted" style="font-size: 14px; margin-bottom: 14px">Confirmed rules applied to each TR: new racks from WF5, patch panels and terminations from WF2, ISP/OSP from WF7. Nothing is stored here — the BOM runs the same rules. Click a TR for every item.</div>
+    <div class="muted" style="font-size: 16px; margin-bottom: 14px">Confirmed rules applied to each TR: new racks from WF5, patch panels and terminations from WF2, ISP/OSP from WF7. Nothing is stored here — the BOM runs the same rules. Click a TR for every item.</div>
     <div class="panel tr-wrap"><table class="tr"><thead><tr id="tr-head"></tr></thead><tbody id="tr-body"></tbody></table></div>
   </section>
 
@@ -225,9 +225,9 @@ const methodSelect = (r) => `<select class="sel" data-meth="${esc(r.rule_key)}" 
 
 function paramInput(r, p) {
   const x = r.params?.[p] || { v: null, source: 'user' };
-  const tag = x.source === 'sheet' ? '<span class="pill sheet" style="font-size: 10px; padding: 2px 6px">sheet</span>'
-    : x.source === 'default' ? '<span class="pill none" style="font-size: 10px; padding: 2px 6px">default</span>'
-    : '<span class="pill user" style="font-size: 10px; padding: 2px 6px">you</span>';
+  const tag = x.source === 'sheet' ? '<span class="pill sheet" style="font-size: 12px; padding: 2px 6px">sheet</span>'
+    : x.source === 'default' ? '<span class="pill none" style="font-size: 12px; padding: 2px 6px">default</span>'
+    : '<span class="pill user" style="font-size: 12px; padding: 2px 6px">you</span>';
   const label = esc(PARAM_LABEL[p] || p.replace(/_/g, ' '));
   if (typeof x.v === 'boolean') return `<label>${label} <input type="checkbox" data-param="${esc(r.rule_key)}:${p}" ${x.v ? 'checked' : ''} ${locked ? 'disabled' : ''}> ${tag}</label>`;
   if (p === 'ru_role') return `<label>RU is <select class="sel" data-param="${esc(r.rule_key)}:${p}" ${locked ? 'disabled' : ''}><option value="height"${x.v === 'height' ? ' selected' : ''}>height it takes</option><option value="capacity"${x.v === 'capacity' ? ' selected' : ''}>rack capacity</option></select> ${tag}</label>`;
@@ -249,7 +249,7 @@ function ruleRow(r) {
     </div>
     ${isOpen ? `<div class="detail">
       ${r.note_text ? `<div class="note">${esc(r.ref)} as read: ${esc(r.note_text)}</div>` : ''}
-      ${r.conflict ? `<div class="banner orange" style="padding: 10px 14px"><div style="flex-grow: 1; font-size: 13px">The sheet now reads: <b>${esc(r.conflict.item)}</b> · ${esc(r.conflict.part_number || '—')} · RU ${esc(r.conflict.ru ?? '—')} · ${esc(METHODS[r.conflict.qty_rule]?.label || r.conflict.qty_rule)}</div>
+      ${r.conflict ? `<div class="banner orange" style="padding: 10px 14px"><div style="flex-grow: 1; font-size: 15px">The sheet now reads: <b>${esc(r.conflict.item)}</b> · ${esc(r.conflict.part_number || '—')} · RU ${esc(r.conflict.ru ?? '—')} · ${esc(METHODS[r.conflict.qty_rule]?.label || r.conflict.qty_rule)}</div>
         <button type="button" class="btn amber small" data-accept="${esc(r.rule_key)}" ${locked ? 'disabled' : ''}>Use the sheet's read</button></div>` : ''}
       <div class="params">
         <label>Item <input class="sel" style="width: 320px" value="${esc(r.item)}" data-field="${esc(r.rule_key)}:item" ${locked ? 'disabled' : ''}></label>
@@ -261,12 +261,12 @@ function ruleRow(r) {
       <div style="display: flex; align-items: center; gap: 14px; flex-wrap: wrap">
         ${countsSomething(r) ? (isConfirmed(r)
           ? `<button type="button" class="btn muted small" data-confirm="${esc(r.rule_key)}:0" ${locked ? 'disabled' : ''}>Unconfirm</button>
-             <span style="font-size: 12px; color: var(--green)">Confirmed ${esc(new Date(r.confirmed_at).toLocaleString())} — applied to Racks per TR. Changing anything above unconfirms it.</span>`
+             <span style="font-size: 14px; color: var(--green)">Confirmed ${esc(new Date(r.confirmed_at).toLocaleString())} — applied to Racks per TR. Changing anything above unconfirms it.</span>`
           : `<button type="button" class="btn green small" data-confirm="${esc(r.rule_key)}:1" ${locked || confirmBlocker(r) ? 'disabled' : ''}>Confirm rule</button>
-             <span style="font-size: 12px; color: ${confirmBlocker(r) ? 'var(--orange)' : 'var(--muted)'}">${esc(confirmBlocker(r) ? 'Can\'t confirm yet: ' + confirmBlocker(r) + '.' : 'Not applied until confirmed.')}</span>`)
-          : '<span class="muted" style="font-size: 12px">Not counted — nothing to confirm. Pick a counting method above to count it.</span>'}
+             <span style="font-size: 14px; color: ${confirmBlocker(r) ? 'var(--orange)' : 'var(--muted)'}">${esc(confirmBlocker(r) ? 'Can\'t confirm yet: ' + confirmBlocker(r) + '.' : 'Not applied until confirmed.')}</span>`)
+          : '<span class="muted" style="font-size: 14px">Not counted — nothing to confirm. Pick a counting method above to count it.</span>'}
       </div>
-      <div class="muted" style="font-size: 12px">${originLine(r)}
+      <div class="muted" style="font-size: 14px">${originLine(r)}
         ${r.source === 'manual' && !locked ? ` · <a href="#" data-del="${esc(r.rule_key)}">Delete this rule</a>` : ''}</div>
     </div>` : ''}`;
 }
@@ -289,7 +289,7 @@ function renderRules() {
   $('elevs').innerHTML = data.elevations.length ? [...data.elevations].sort((a, b) => order(a) - order(b)).map((e) => `
     <div class="elev"><div>${esc(e.rack_count === 'wall_mount' ? 'Wall-mount' : `Typical ${e.rack_count}-rack elevation`)}${e.detail_ref ? ` (${esc(e.detail_ref)})` : ''}</div>
       <div class="cap">${e.capacity_passive != null ? `${e.capacity_passive} passive` : ''}${e.capacity_active != null ? ` · ${e.active_over ? 'over ' : ''}${e.capacity_active} active` : ''}${e.capacity_passive == null && e.capacity_active == null ? esc(e.title) : ''}</div></div>`).join('')
-    : '<div class="muted" style="font-size: 13px">Read a rack elevation sheet above.</div>';
+    : '<div class="muted" style="font-size: 15px">Read a rack elevation sheet above.</div>';
 
   // set by you
   const need = [];
@@ -301,9 +301,9 @@ function renderRules() {
     }
   }
   $('userbox').innerHTML = need.length ? need.map(({ r, p, x }) => `
-    <div class="r"><span>${esc(PARAM_LABEL[p] || p)} <span class="muted" style="font-size: 11px">· ${esc(r.ref || 'yours')}</span></span>
+    <div class="r"><span>${esc(PARAM_LABEL[p] || p)} <span class="muted" style="font-size: 13px">· ${esc(r.ref || 'yours')}</span></span>
       <input class="num ${x?.v == null ? 'need' : ''}" inputmode="decimal" value="${x?.v ?? ''}" data-param="${esc(r.rule_key)}:${p}" ${locked ? 'disabled' : ''} aria-label="${esc(PARAM_LABEL[p] || p)} for ${esc(r.ref)}"></div>`).join('')
-    : '<div class="muted" style="font-size: 13px">Nothing to set — every value was read from the sheet.</div>';
+    : '<div class="muted" style="font-size: 15px">Nothing to set — every value was read from the sheet.</div>';
 
   // no-quantity flags
   const flags = data.rules.filter((r) => r.qty_rule === 'not_stated' || (r.note_kind === 'coded' && r.qty_rule === 'none'));
@@ -405,7 +405,7 @@ function renderTrs() {
     const main = `<tr class="main-row" data-tr="${esc(s.tr_name)}"><td style="font-weight: 700">${esc(s.tr_name)}</td><td>${s.racks ?? '<span class="muted">not in WF5</span>'}</td>
       ${colRules.map((c) => cell(c.rule)).join('')}<td><span class="pill ${lvl}">${esc(s.check.text)}</span></td></tr>`;
     const detail = openTr.has(s.tr_name) ? `<tr><td colspan="${colRules.length + 3}" style="background: #121714">
-      ${s.items.map((i) => `<div style="display: flex; gap: 14px; font-size: 12px; padding: 3px 0"><span style="width: 60px; color: var(--amber)">${esc(i.ref || '')}</span>
+      ${s.items.map((i) => `<div style="display: flex; gap: 14px; font-size: 14px; padding: 3px 0"><span style="width: 60px; color: var(--amber)">${esc(i.ref || '')}</span>
         <span style="flex-grow: 1">${esc(i.item)}${i.part_number ? ` <span class="muted">· ${esc(i.part_number)}</span>` : ''}</span>
         <span style="width: 90px">${i.qty ?? '—'}${i.per_rack && i.per_rack.length > 1 ? ` <span class="muted">(${esc(i.per_rack.join('/'))})</span>` : ''}</span>
         <span class="muted" style="width: 280px">${esc(i.note || '')}</span></div>`).join('')}</td></tr>` : '';

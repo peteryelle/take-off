@@ -86,7 +86,7 @@ async function loadList() {
     $('list').innerHTML = rows.map((p) => `
       <div class="row">
         <span style="width: 320px"><a href="wf-project.html?project_id=${p.id}" style="font-weight: 700; text-decoration: none">${esc(p.name)}</a>
-          ${p.number ? `<span class="muted" style="font-size: 12px"> · ${esc(p.number)}</span>` : ''}</span>
+          ${p.number ? `<span class="muted" style="font-size: 14px"> · ${esc(p.number)}</span>` : ''}</span>
         <span style="width: 160px">${esc(p.client) || '<span class="muted">—</span>'}</span>
         <span style="flex-grow: 1; display: flex; gap: 6px; flex-wrap: wrap">
           ${p.workflow_steps.map((s) => `<span class="pill ${s.status}" title="${s.step_code} · ${s.status}">${s.step_code}</span>`).join('')}

@@ -11,9 +11,9 @@
 <link rel="stylesheet" href="wf.css">
 <style>
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); }
-.tab { font-family: inherit; font-size: 14px; padding: 11px 16px; background: none; border: none; border-bottom: 2px solid transparent; color: var(--muted); cursor: pointer; }
+.tab { font-family: inherit; font-size: 16px; padding: 11px 16px; background: none; border: none; border-bottom: 2px solid transparent; color: var(--muted); cursor: pointer; }
 .tab[aria-selected="true"] { color: var(--green); border-bottom-color: var(--green); font-weight: 700; }
-.cell { font-family: inherit; font-size: 13px; background: var(--bg); color: var(--text); border: 1px solid #3a443f; border-radius: 3px; padding: 5px 6px; }
+.cell { font-family: inherit; font-size: 15px; background: var(--bg); color: var(--text); border: 1px solid #3a443f; border-radius: 3px; padding: 5px 6px; }
 .cell.changed { border-color: var(--orange-bd); color: var(--orange); }
 .pill.manual { color: var(--purple); border-color: var(--purple-bd); background: var(--purple-bg); }
 </style>
@@ -57,7 +57,7 @@
       <div id="tr-rows"></div>
       <div class="row">
         <button type="button" class="btn muted small" id="tr-add">+ Add a TR by hand</button>
-        <span class="muted" id="tr-count" style="flex-grow: 1; font-size: 13px"></span>
+        <span class="muted" id="tr-count" style="flex-grow: 1; font-size: 15px"></span>
         <button type="button" class="btn muted" id="discard" hidden>Discard changes</button>
         <button type="button" class="btn green" id="save" disabled>Save TR list</button>
       </div>
@@ -200,9 +200,9 @@ function renderChanges() {
     ...d.changed.flatMap((c) => c.diffs.map((x) => `
       <div class="row"><span style="width: 130px; font-weight: 700">${esc(c.tr_number)}</span><span style="width: 200px">${label[x.field]}</span>
         <span style="width: 200px"><span class="muted" style="text-decoration: line-through">${esc(x.from)}</span> → <b style="color: var(--orange)">${esc(x.to)}</b></span>
-        <span class="muted" style="flex-grow: 1; font-size: 13px">${x.field === 'cat6a_terminations' && panelsFor(x.from) !== panelsFor(x.to) ? `needs ${panelsFor(x.to)} panels at 48 ports (was ${panelsFor(x.from)}) · ` : ''}rack BOM and WF4 reconciliation will need review</span></div>`)),
-    ...d.added.map((a) => `<div class="row"><span style="width: 130px; font-weight: 700">${esc(a.tr_number)}</span><span class="pill confirmed">new TR</span><span class="muted" style="flex-grow: 1; font-size: 13px">${esc(a.cat6a_terminations)} terminations · ${esc(a.min_patch_panels)} panels</span></div>`),
-    ...d.removed.map((a) => `<div class="row"><span style="width: 130px; font-weight: 700">${esc(a.tr_number)}</span><span class="pill stale">removed</span><span class="muted" style="flex-grow: 1; font-size: 13px">no longer on the schedule</span></div>`),
+        <span class="muted" style="flex-grow: 1; font-size: 15px">${x.field === 'cat6a_terminations' && panelsFor(x.from) !== panelsFor(x.to) ? `needs ${panelsFor(x.to)} panels at 48 ports (was ${panelsFor(x.from)}) · ` : ''}rack BOM and WF4 reconciliation will need review</span></div>`)),
+    ...d.added.map((a) => `<div class="row"><span style="width: 130px; font-weight: 700">${esc(a.tr_number)}</span><span class="pill confirmed">new TR</span><span class="muted" style="flex-grow: 1; font-size: 15px">${esc(a.cat6a_terminations)} terminations · ${esc(a.min_patch_panels)} panels</span></div>`),
+    ...d.removed.map((a) => `<div class="row"><span style="width: 130px; font-weight: 700">${esc(a.tr_number)}</span><span class="pill stale">removed</span><span class="muted" style="flex-grow: 1; font-size: 15px">no longer on the schedule</span></div>`),
   ];
   $('changes').innerHTML = rows.length ? rows.join('') : '<div class="empty">No differences from the saved TR list.</div>';
   document.querySelector('[data-tab="changes"]').textContent = `Changes vs saved (${rows.length})`;

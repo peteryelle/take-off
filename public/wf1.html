@@ -11,9 +11,9 @@
 <link rel="stylesheet" href="wf.css">
 <style>
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); }
-.tab { font-family: inherit; font-size: 14px; padding: 11px 16px; background: none; border: none; border-bottom: 2px solid transparent; color: var(--muted); cursor: pointer; }
+.tab { font-family: inherit; font-size: 16px; padding: 11px 16px; background: none; border: none; border-bottom: 2px solid transparent; color: var(--muted); cursor: pointer; }
 .tab[aria-selected="true"] { color: var(--green); border-bottom-color: var(--green); font-weight: 700; }
-.src { font-size: 11px; }
+.src { font-size: 13px; }
 canvas.preview { max-width: 100%; border: 1px solid var(--line); border-radius: 4px; background: #fff; }
 </style>
 </head>
@@ -180,12 +180,12 @@ function renderRules() {
   if (missing.length) $('phasing-msg').textContent = `The notes refer to ${[...new Set(missing)].join(', ')} for phasing, and it is not uploaded. Upload it here if the bid is phased — phasing can split BOM quantities.`;
 
   $('rules-rows').innerHTML = rules.length ? rules.map((r, i) => `
-    <div class="row" style="font-size: 13px; align-items: flex-start">
-      <span style="width: 170px; font-weight: 700">${r.id ? esc(r.note_ref || '—') : `<input class="field" style="width: 160px; padding: 5px 6px; font-size: 12px" value="${esc(r.note_ref || '')}" data-rule="${i}" data-k="note_ref" placeholder="e.g. T-001 note 28" aria-label="Note reference">`}</span>
-      <span style="flex-grow: 1; min-width: 0" class="muted">${r.id ? esc(r.note_text || '') : `<input class="field" style="width: 100%; padding: 5px 6px; font-size: 12px" value="${esc(r.note_text || '')}" data-rule="${i}" data-k="note_text" placeholder="What the note says" aria-label="Note text">`}</span>
-      <span style="width: 150px"><select class="field" style="width: 142px; padding: 5px 6px; font-size: 12px" data-rule="${i}" data-k="rule_kind" aria-label="Rule">${Object.entries(KINDS).map(([k, v]) => `<option value="${k}"${k === r.rule_kind ? ' selected' : ''}>${v}</option>`).join('')}</select></span>
-      <span style="width: 90px"><input class="field" style="width: 80px; padding: 5px 6px; font-size: 12px" value="${r.rule_value ?? ''}" data-rule="${i}" data-k="rule_value" inputmode="decimal" aria-label="Value"></span>
-      <span style="width: 90px"><select class="field" style="width: 82px; padding: 5px 6px; font-size: 12px" data-rule="${i}" data-k="used_by_step" aria-label="Used by step"><option value="">—</option>${['WF3', 'WF4', 'WF5', 'WF6', 'WF7', 'WF8'].map((s) => `<option${s === r.used_by_step ? ' selected' : ''}>${s}</option>`).join('')}</select></span>
+    <div class="row" style="font-size: 15px; align-items: flex-start">
+      <span style="width: 170px; font-weight: 700">${r.id ? esc(r.note_ref || '—') : `<input class="field" style="width: 160px; padding: 5px 6px; font-size: 14px" value="${esc(r.note_ref || '')}" data-rule="${i}" data-k="note_ref" placeholder="e.g. T-001 note 28" aria-label="Note reference">`}</span>
+      <span style="flex-grow: 1; min-width: 0" class="muted">${r.id ? esc(r.note_text || '') : `<input class="field" style="width: 100%; padding: 5px 6px; font-size: 14px" value="${esc(r.note_text || '')}" data-rule="${i}" data-k="note_text" placeholder="What the note says" aria-label="Note text">`}</span>
+      <span style="width: 150px"><select class="field" style="width: 142px; padding: 5px 6px; font-size: 14px" data-rule="${i}" data-k="rule_kind" aria-label="Rule">${Object.entries(KINDS).map(([k, v]) => `<option value="${k}"${k === r.rule_kind ? ' selected' : ''}>${v}</option>`).join('')}</select></span>
+      <span style="width: 90px"><input class="field" style="width: 80px; padding: 5px 6px; font-size: 14px" value="${r.rule_value ?? ''}" data-rule="${i}" data-k="rule_value" inputmode="decimal" aria-label="Value"></span>
+      <span style="width: 90px"><select class="field" style="width: 82px; padding: 5px 6px; font-size: 14px" data-rule="${i}" data-k="used_by_step" aria-label="Used by step"><option value="">—</option>${['WF3', 'WF4', 'WF5', 'WF6', 'WF7', 'WF8'].map((s) => `<option${s === r.used_by_step ? ' selected' : ''}>${s}</option>`).join('')}</select></span>
       <span style="width: 80px"><span class="pill src ${r.source === 'extracted' ? 'confirmed' : r.source === 'edited' ? 'stale' : 'in_review'}" title="${esc(r.override_basis || '')}">${r.source || 'new'}</span></span>
       <span style="width: 40px"><button type="button" class="btn muted small" data-rule-del="${i}" aria-label="Remove rule">×</button></span>
     </div>`).join('') : '<div class="empty">No rules found yet. They are read from the notes of every sheet you upload, in any step.</div>';

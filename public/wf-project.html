@@ -81,9 +81,9 @@ function render(d) {
     return `
       <div class="row"${na ? ' style="opacity: .6"' : ''}>
         <span style="width: 48px; color: var(--amber); font-weight: 700">${s.code}</span>
-        <span style="width: 200px; font-size: 15px; font-weight: 600">${esc(s.name)}</span>
+        <span style="width: 200px; font-size: 17px; font-weight: 600">${esc(s.name)}</span>
         <span style="width: 110px"><span class="pill ${sum.status}">${esc(sum.label)}</span></span>
-        <span style="flex-grow: 1; font-size: 13px" class="muted">${esc(sum.note)}${files ? ` · ${files} file${files === 1 ? '' : 's'}` : ''}</span>
+        <span style="flex-grow: 1; font-size: 15px" class="muted">${esc(sum.note)}${files ? ` · ${files} file${files === 1 ? '' : 's'}` : ''}</span>
         ${scopeBtn}
         ${na ? '' : `<a class="btn blue small" href="${stepHref(s.code)}">Open</a>`}
       </div>`;

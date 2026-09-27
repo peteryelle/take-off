@@ -12,32 +12,32 @@
 <style>
 .wf-page { max-width: 1500px; }
 .stages { display: flex; gap: 8px; flex-wrap: wrap; }
-.stage { font-family: inherit; font-size: 14px; padding: 10px 16px; border-radius: 3px; cursor: pointer; border: 1px solid var(--line); background: var(--bg); color: var(--muted); }
+.stage { font-family: inherit; font-size: 16px; padding: 10px 16px; border-radius: 3px; cursor: pointer; border: 1px solid var(--line); background: var(--bg); color: var(--muted); }
 .stage.done { background: var(--panel); color: var(--text); }
 .stage[aria-current="step"] { border-color: var(--green-bd); background: var(--green-bg); color: var(--green); font-weight: 700; }
 .split { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 20px; }
 .viewer { position: relative; overflow: auto; border: 1px solid var(--line); border-radius: 4px; background: #f4f2ec; height: 640px; }
 .viewer canvas { position: absolute; left: 0; top: 0; }
 #ovl { cursor: crosshair; }
-.chip { font-family: inherit; font-size: 13px; padding: 8px 12px; border-radius: 3px; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; }
+.chip { font-family: inherit; font-size: 15px; padding: 8px 12px; border-radius: 3px; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; }
 .chip[aria-pressed="true"] { border-color: var(--green-bd); background: var(--green-bg); color: var(--green); font-weight: 700; }
 .card { border: 1px solid var(--line); background: var(--panel); border-radius: 4px; padding: 16px 18px; display: flex; gap: 16px; }
 .card.active { border-color: var(--green-bd); background: #111a14; }
 .crop { width: 96px; height: 72px; flex-shrink: 0; border: 1px dashed #3a443f; border-radius: 3px; object-fit: contain; background: #f4f2ec; }
 .thumb { width: 40px; height: 30px; flex-shrink: 0; border: 1px solid #3a443f; border-radius: 3px; object-fit: contain; background: #f4f2ec; }
 .samples { display: flex; gap: 6px; }
-.samples span { width: 30px; height: 30px; border: 1px solid var(--green-bd); border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 11px; color: var(--green); }
-.small { font-size: 12px; }
-.lib-row .mode { font-size: 12px; color: var(--muted); }
+.samples span { width: 30px; height: 30px; border: 1px solid var(--green-bd); border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 13px; color: var(--green); }
+.small { font-size: 14px; }
+.lib-row .mode { font-size: 14px; color: var(--muted); }
 .placeholder { padding: 28px 24px; }
-.rtab { font-family: inherit; font-size: 14px; padding: 10px 14px; background: none; border: none; border-bottom: 2px solid transparent; color: var(--muted); cursor: pointer; }
+.rtab { font-family: inherit; font-size: 16px; padding: 10px 14px; background: none; border: none; border-bottom: 2px solid transparent; color: var(--muted); cursor: pointer; }
 .rtab[aria-selected="true"] { color: var(--green); border-bottom-color: var(--green); font-weight: 700; }
-.grid { width: 100%; border-collapse: collapse; font-size: 13px; }
-.grid th { text-align: left; font-weight: 400; font-size: 12px; color: var(--muted); letter-spacing: .06em; padding: 11px 14px; border-bottom: 1px solid var(--line-soft); white-space: nowrap; }
+.grid { width: 100%; border-collapse: collapse; font-size: 15px; }
+.grid th { text-align: left; font-weight: 400; font-size: 14px; color: var(--muted); letter-spacing: .06em; padding: 11px 14px; border-bottom: 1px solid var(--line-soft); white-space: nowrap; }
 .grid td { padding: 10px 14px; border-bottom: 1px solid var(--line-soft); white-space: nowrap; }
 .grid td.num, .grid th.num { text-align: right; }
 .grid tr.total td { font-weight: 700; border-top: 1px solid var(--line); }
-.modebtn { font-family: inherit; font-size: 16px; width: 44px; height: 44px; border-radius: 3px; cursor: pointer; border: 1px solid #3a443f; background: var(--bg); color: var(--muted); flex-shrink: 0; }
+.modebtn { font-family: inherit; font-size: 18px; width: 44px; height: 44px; border-radius: 3px; cursor: pointer; border: 1px solid #3a443f; background: var(--bg); color: var(--muted); flex-shrink: 0; }
 .modebtn[aria-pressed="true"] { border-color: var(--green-bd); background: var(--green-bg); color: var(--green); }
 @keyframes spin { to { transform: rotate(360deg); } }
 .spinner { width: 14px; height: 14px; border: 2px solid var(--line); border-top-color: var(--green); border-radius: 50%; animation: spin .8s linear infinite; display: inline-block; flex-shrink: 0; }
@@ -45,9 +45,9 @@
 .progress > div { height: 100%; background: var(--green); transition: width .3s; }
 #run-toast { position: fixed; right: 20px; bottom: 20px; z-index: 50; min-width: 280px; max-width: 420px; background: var(--panel); border: 1px solid var(--green-bd); border-radius: 4px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; box-shadow: 0 6px 24px rgba(0,0,0,.5); }
 .modes-sw { display: inline-flex; border: 1px solid var(--line); border-radius: 3px; overflow: hidden; }
-.modes-sw button { font-family: inherit; font-size: 12px; padding: 6px 10px; background: var(--bg); color: var(--muted); border: none; cursor: pointer; }
+.modes-sw button { font-family: inherit; font-size: 14px; padding: 6px 10px; background: var(--bg); color: var(--muted); border: none; cursor: pointer; }
 .modes-sw button[aria-pressed="true"] { background: var(--green-bg); color: var(--green); font-weight: 700; }
-.cell { font-family: inherit; font-size: 12px; background: var(--bg); color: var(--text); border: 1px solid #3a443f; border-radius: 3px; padding: 5px 6px; }
+.cell { font-family: inherit; font-size: 14px; background: var(--bg); color: var(--text); border: 1px solid #3a443f; border-radius: 3px; padding: 5px 6px; }
 @media (max-width: 1000px) { .split { grid-template-columns: 1fr; } }
 </style>
 </head>
@@ -80,7 +80,7 @@
       <section>
         <div class="row" style="padding: 0 0 10px; border: none; gap: 8px; flex-wrap: wrap">
           <label class="small muted" for="page-sel">Plan</label>
-          <select id="page-sel" class="field" style="padding: 6px 8px; font-size: 13px; min-width: 260px"></select>
+          <select id="page-sel" class="field" style="padding: 6px 8px; font-size: 15px; min-width: 260px"></select>
           <span style="flex-grow: 1"></span>
           <button type="button" class="btn muted small" data-zoom="fit">Fit</button>
           <button type="button" class="btn muted small" data-zoom="1">100%</button>
@@ -109,7 +109,7 @@
     </div>
     <div class="split" style="grid-template-columns: minmax(300px, 0.75fr) minmax(0, 1.6fr)">
       <section style="display: flex; flex-direction: column; gap: 14px; min-width: 0">
-        <label class="lbl" style="letter-spacing: 0">Sheet<select class="field" id="pin-page" style="padding: 8px 10px; font-size: 13px"></select></label>
+        <label class="lbl" style="letter-spacing: 0">Sheet<select class="field" id="pin-page" style="padding: 8px 10px; font-size: 15px"></select></label>
         <div class="panel"><div class="row head" id="pins-head">TRs on this sheet</div><div id="pins-list"></div></div>
         <div class="panel" style="padding: 12px 16px; display: flex; flex-direction: column; gap: 8px">
           <div class="small muted">Add a TR to this sheet</div>
@@ -186,7 +186,7 @@
           <div class="card" style="flex-direction: column; gap: 10px">
             <div style="font-weight: 700">Exclusion area</div>
             <div class="small muted" id="areas-step">Click one corner of the box on the drawing, then the opposite corner.</div>
-            <label class="lbl" style="letter-spacing: 0">Note (boxes with the same note make one area)<input class="field" id="areas-note" style="padding: 7px 9px; font-size: 13px" value="Out of scope"></label>
+            <label class="lbl" style="letter-spacing: 0">Note (boxes with the same note make one area)<input class="field" id="areas-note" style="padding: 7px 9px; font-size: 15px" value="Out of scope"></label>
             <div style="display: flex; gap: 8px"><button type="button" class="btn green small" id="areas-add" disabled>Confirm box</button><button type="button" class="btn muted small" id="areas-clear">Clear corners</button></div>
           </div>
           <div class="panel"><div class="row head" id="areas-head">Areas on this sheet</div><div id="areas-list"></div></div>
@@ -242,7 +242,7 @@
   <div class="status-line" id="status" role="status"></div>
 </main>
 <div id="run-toast" hidden role="status" aria-live="polite">
-  <div style="display: flex; gap: 10px; align-items: center"><span class="spinner"></span><b id="run-toast-title" style="font-size: 13px">Counting…</b></div>
+  <div style="display: flex; gap: 10px; align-items: center"><span class="spinner"></span><b id="run-toast-title" style="font-size: 15px">Counting…</b></div>
   <div class="progress"><div id="run-toast-bar" style="width: 0%"></div></div>
   <div class="small muted" id="run-toast-step"></div>
 </div>
@@ -473,7 +473,7 @@ async function analyze() {
 function renderCard(kind, msg = '') {
   const crop = cropB64 ? `<img class="crop" alt="Cropped symbol" src="data:image/jpeg;base64,${cropB64}">` : '<div class="crop"></div>';
   if (kind === 'hint' || (!cropB64 && !symbol)) {
-    $('card').innerHTML = `<div class="card"><div class="crop" style="display: flex; align-items: center; justify-content: center; font-size: 10px; color: var(--muted)">crop</div><div class="muted small" style="align-self: center">Drag a box around one device symbol on the plan.</div></div>`;
+    $('card').innerHTML = `<div class="card"><div class="crop" style="display: flex; align-items: center; justify-content: center; font-size: 12px; color: var(--muted)">crop</div><div class="muted small" style="align-self: center">Drag a box around one device symbol on the plan.</div></div>`;
     return;
   }
   if (kind === 'analyzing') { $('card').innerHTML = `<div class="card active">${crop}<div class="muted" style="align-self: center">Reading the symbol…</div></div>`; return; }
@@ -502,7 +502,7 @@ function renderCard(kind, msg = '') {
         <label class="check small" style="gap: 8px"><input type="checkbox" id="c-ring"${v.ring ? ' checked' : ''}${v.ringFound ? '' : ''}>
           Must have a circle around it${v.ringFound ? ' <span class="muted">(your marked instances have one)</span>' : ' <span class="muted">(not found around your marked instances)</span>'}</label>
         <div class="small">Count &amp; route will find <b>${tot}</b> on ${sheets.length} plan${sheets.length === 1 ? '' : 's'}${v.ring ? ` <span class="muted">· ${v.totals.plain} without the circle check</span>` : ''}.</div>
-        <div class="small" style="display: flex; flex-wrap: wrap; gap: 6px">${v.pages.map((pg) => `<button type="button" class="chip" style="padding: 4px 8px; font-size: 12px" data-vpage="${pg.page_id}" aria-pressed="${current?.id === pg.page_id}">${esc(pg.sheet)} ${pg[set].length}</button>`).join('')}</div>
+        <div class="small" style="display: flex; flex-wrap: wrap; gap: 6px">${v.pages.map((pg) => `<button type="button" class="chip" style="padding: 4px 8px; font-size: 14px" data-vpage="${pg.page_id}" aria-pressed="${current?.id === pg.page_id}">${esc(pg.sheet)} ${pg[set].length}</button>`).join('')}</div>
         <div class="small muted">Matches are marked in orange on the plan — pick a sheet above to check it.</div>
         ${topLabels.length ? `<div class="small">Printed next to them: ${topLabels.map(([t, c]) => `${esc(t)} ×${c}`).join(', ')}</div>` : ''}
         ${labelledShare >= 0.5 ? `<div class="small" style="color: var(--orange)">Most of these matches have a label printed beside them. If this symbol normally carries a label, crop it again with the label so each labelled type is counted separately.</div>` : ''}`;
@@ -767,16 +767,16 @@ function renderPinPage() {
   const row = (name, pin, extra) => {
     const sel = pinSel && pinSel.name === name;
     const [st, cls] = !pin ? ['found here', 'in_review'] : pin.source === 'user_pin' ? ['placed by hand', 'stale'] : ['at room label', 'confirmed'];
-    return `<div class="row" style="font-size: 13px; padding-top: 9px; padding-bottom: 9px; gap: 10px;${sel ? ' background: var(--green-bg);' : ''}">
+    return `<div class="row" style="font-size: 15px; padding-top: 9px; padding-bottom: 9px; gap: 10px;${sel ? ' background: var(--green-bg);' : ''}">
       <span style="font-weight: 700; flex-grow: 1">${esc(name)}${trIdOf(name) == null ? ' <span class="small muted" title="Typed here — not in the WF2 schedule">typed</span>' : ''}${pin && Number(pin.stub_ft) ? ` <span class="small muted">+${Number(pin.stub_ft)} ft</span>` : ''}</span>
       <span class="pill ${cls}">${st}</span>${extra}</div>`;
   };
-  const exitRow = (d) => `<div class="row" style="font-size: 13px; padding-top: 9px; padding-bottom: 9px; gap: 10px;${pinSel && pinSel.kind === 'exit' && pinSel.name === d.name ? ' background: var(--green-bg);' : ''}">
+  const exitRow = (d) => `<div class="row" style="font-size: 15px; padding-top: 9px; padding-bottom: 9px; gap: 10px;${pinSel && pinSel.kind === 'exit' && pinSel.name === d.name ? ' background: var(--green-bg);' : ''}">
       <span style="font-weight: 700; flex-grow: 1">→ ${esc(d.name)} <span class="small muted">TR room on ${esc(trRoomSheet(d.name, d).sheet || 'sheet not set')} · +${Number(d.stub_ft) || 0} ft from the exit</span></span>
       <span class="pill in_review">exit pin</span><button type="button" class="btn blue small" data-exit="${esc(d.name)}">Move</button></div>`;
   $('pins-list').innerHTML = (placed.map((d) => row(d.name, d, `<button type="button" class="btn blue small" data-pin="${esc(d.name)}">Move</button>`)).join('')
     + exits.map(exitRow).join('')
-    + notes.map((m) => `<div class="row" style="font-size: 13px; padding-top: 9px; padding-bottom: 9px; gap: 10px; flex-wrap: wrap">
+    + notes.map((m) => `<div class="row" style="font-size: 15px; padding-top: 9px; padding-bottom: 9px; gap: 10px; flex-wrap: wrap">
         <span style="flex-grow: 1; min-width: 0"><b>${esc(m.name)}</b> <span class="small muted">named in a note</span>
           <div class="small muted" style="white-space: normal">“${esc(m.text)}”</div></span>
         <button type="button" class="btn blue small" data-noteexit="${esc(m.name)}" title="This sheet's cable goes to that TR on another sheet">Exit pin to ${esc(m.name)}</button>
@@ -812,7 +812,7 @@ function renderPinPage() {
     <div class="row" style="flex-direction: column; align-items: stretch; gap: 6px; padding-top: 10px; padding-bottom: 10px">
       <div class="small muted" title="${esc(g.name)}" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">${esc(g.name)}</div>
       ${g.list.map((p) => { const on = onSheet(p.id);
-        return `<button type="button" class="chip" data-sheet="${p.id}" aria-pressed="${p.id === pinPageId}" style="text-align: left; display: flex; gap: 10px; font-size: 12px">
+        return `<button type="button" class="chip" data-sheet="${p.id}" aria-pressed="${p.id === pinPageId}" style="text-align: left; display: flex; gap: 10px; font-size: 14px">
           <b style="width: 70px">${esc(sheetName(p))}</b><span class="${on.length || exitsOn(p.id).length ? '' : 'muted'}">${[...on.map((d) => esc(d.name)), ...exitsOn(p.id).map((d) => '→ ' + esc(d.name))].join(', ') || 'no TR pin'}</span></button>`; }).join('')}
     </div>`).join('');
   document.querySelectorAll('[data-sheet]').forEach((b) => b.onclick = () => { pinPageId = Number(b.dataset.sheet); pinSel = null; renderPinPage(); });
@@ -823,7 +823,7 @@ function renderPinPage() {
   $('serve-list').innerHTML = sheetPins.length ? sheetPins.map((d, i) => {
     const mine = boxesHere.filter((b) => b.demarc_id === d.id);
     const drawing = serveMode && serveMode.pinId === d.id;
-    return `<div style="display: flex; gap: 8px; align-items: center; font-size: 12px; padding: 4px 0; flex-wrap: wrap">
+    return `<div style="display: flex; gap: 8px; align-items: center; font-size: 14px; padding: 4px 0; flex-wrap: wrap">
       <span style="width: 10px; height: 10px; border-radius: 2px; background: ${SERVE_COLORS[i % SERVE_COLORS.length]}"></span>
       <b style="flex-grow: 1">${d.pin_kind === 'exit' ? '→ ' : ''}${esc(d.name)} <span class="muted" style="font-weight: 400">· ${mine.length ? mine.length + ' box' + (mine.length === 1 ? '' : 'es') : 'no area (gets devices outside all areas)'}</span></b>
       ${drawing ? `<span class="muted">${serveMode.corners.length === 0 ? 'click one corner…' : serveMode.corners.length === 1 ? 'click the opposite corner…' : ''}</span>
@@ -900,11 +900,11 @@ function renderPinEdit() {
   if (!pinSel) { $('pin-edit').innerHTML = '<div class="muted small">Pick a TR on the left, or add one to this sheet.</div>'; return; }
   const from = pinSel.movesFrom != null ? plans.find((p) => p.id === pinSel.movesFrom) : null;
   $('pin-edit').innerHTML = `<div style="display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; width: 100%">
-    <div style="font-weight: 700; font-size: 15px; align-self: center; min-width: 90px">${pinSel.kind === 'exit' ? '→ ' : ''}${esc(pinSel.name)}${pinSel.kind === 'exit' ? '<div class="small muted" style="font-weight: 400">exit pin — TR is off this sheet</div>' : ''}</div>
-    <label class="lbl" style="letter-spacing: 0" title="${pinSel.kind === 'exit' ? 'Feet of cable from this exit point to the TR (measured on the TR\'s sheet, or the riser run)' : 'Fixed extra cable to the TR, e.g. a jumper'}">${pinSel.kind === 'exit' ? 'Stub ft (exit → TR)' : 'Stub ft'}<input class="field" id="pin-stub" type="number" min="0" step="1" style="padding: 6px 8px; font-size: 13px; width: 90px" value="${pinSel.stub}"></label>
+    <div style="font-weight: 700; font-size: 17px; align-self: center; min-width: 90px">${pinSel.kind === 'exit' ? '→ ' : ''}${esc(pinSel.name)}${pinSel.kind === 'exit' ? '<div class="small muted" style="font-weight: 400">exit pin — TR is off this sheet</div>' : ''}</div>
+    <label class="lbl" style="letter-spacing: 0" title="${pinSel.kind === 'exit' ? 'Feet of cable from this exit point to the TR (measured on the TR\'s sheet, or the riser run)' : 'Fixed extra cable to the TR, e.g. a jumper'}">${pinSel.kind === 'exit' ? 'Stub ft (exit → TR)' : 'Stub ft'}<input class="field" id="pin-stub" type="number" min="0" step="1" style="padding: 6px 8px; font-size: 15px; width: 90px" value="${pinSel.stub}"></label>
     ${pinSel.kind === 'exit' ? (pinSel.trPinned
       ? `<span class="small" style="align-self: center">TR room on <b>${esc(pinSel.trSheet)}</b> <span class="muted">(pinned there)</span></span>`
-      : `<label class="lbl" style="letter-spacing: 0">TR room on sheet<input class="field" id="pin-trsheet" list="pin-sheets" style="padding: 6px 8px; font-size: 13px; width: 110px" value="${esc(pinSel.trSheet || '')}" placeholder="e.g. T1.1.H"></label>
+      : `<label class="lbl" style="letter-spacing: 0">TR room on sheet<input class="field" id="pin-trsheet" list="pin-sheets" style="padding: 6px 8px; font-size: 15px; width: 110px" value="${esc(pinSel.trSheet || '')}" placeholder="e.g. T1.1.H"></label>
          <datalist id="pin-sheets">${plans.map((p) => `<option value="${esc(sheetName(p))}">`).join('')}</datalist>`) : ''}
     <span class="small muted" style="align-self: center; flex-grow: 1">${pinSel.x == null ? (pinSel.kind === 'exit' ? 'Click where the cable leaves this sheet.' : 'Click the drawing to place it.') : `(${pinSel.x.toFixed(3)}, ${pinSel.y.toFixed(3)})`}${from ? ` · saving moves it from ${esc(sheetName(from))}` : ''}</span>
     <button type="button" class="btn green small" id="pin-save"${pinSel.x == null ? ' disabled' : ''}>Save pin</button>
@@ -1187,7 +1187,7 @@ function renderRun() {
     <div class="row" style="gap: 14px;${r.mode === m ? ' background: #111a14;' : ''}">
       <button type="button" class="modebtn" data-mode="${m}" aria-pressed="${r.mode === m}" aria-label="Use ${modeLabel(m)}">${r.mode === m ? '●' : '○'}</button>
       <span style="flex-grow: 1; min-width: 0"><div style="font-weight: 700">${modeLabel(m)}</div><div class="small muted">${MODE_INFO[m][1]}</div></span>
-      <label class="small muted" style="display: flex; gap: 6px; align-items: center">×<input class="cell" style="width: 64px; font-size: 13px" type="number" step="0.05" min="0.05" max="5" data-mult="${m}" value="${Number(r.multipliers?.[m] ?? DEFAULT_MULTIPLIERS[m]).toFixed(2)}" aria-label="${modeLabel(m)} multiplier"></label>
+      <label class="small muted" style="display: flex; gap: 6px; align-items: center">×<input class="cell" style="width: 64px; font-size: 15px" type="number" step="0.05" min="0.05" max="5" data-mult="${m}" value="${Number(r.multipliers?.[m] ?? DEFAULT_MULTIPLIERS[m]).toFixed(2)}" aria-label="${modeLabel(m)} multiplier"></label>
     </div>`).join('');
   document.querySelectorAll('[data-mode]').forEach((b) => b.onclick = () => saveSettings({ route_mode: b.dataset.mode }));
   document.querySelectorAll('[data-mult]').forEach((i) => i.onchange = () => saveSettings({ [`${i.dataset.mult}_multiplier`]: Number(i.value) }));
@@ -1203,7 +1203,7 @@ function renderRun() {
     const row = pageRow(p.id), [st, cls] = pageStatus(p, recount);
     const ov = row.route_mode || row.route_multiplier != null;
     const needsScale = st === 'needs scale';
-    return `<div class="row" style="font-size: 13px; padding-top: 9px; padding-bottom: 9px; flex-wrap: wrap">
+    return `<div class="row" style="font-size: 15px; padding-top: 9px; padding-bottom: 9px; flex-wrap: wrap">
       <span style="width: 100px; font-weight: 700">${esc(p.sheet_number || 'page ' + p.page_number)}</span>
       <span style="width: 80px">${esc(p.level || '—')}</span>
       <span style="width: 230px; display: flex; gap: 6px; align-items: center">
@@ -1525,8 +1525,8 @@ function renderAreaList() {
   $('areas-head').textContent = `Areas on this sheet (${groups.size} · ${boxes.length} box${boxes.length === 1 ? '' : 'es'})`;
   $('areas-list').innerHTML = boxes.length ? [...groups.entries()].map(([label, list]) => `
     <div class="row" style="flex-direction: column; align-items: stretch; gap: 6px; padding-top: 10px; padding-bottom: 10px">
-      <div style="font-weight: 700; font-size: 13px">${esc(label)} <span class="muted small">· ${list.length} box${list.length === 1 ? '' : 'es'}</span></div>
-      ${list.map((b, i) => `<div style="display: flex; gap: 8px; align-items: center; font-size: 12px">
+      <div style="font-weight: 700; font-size: 15px">${esc(label)} <span class="muted small">· ${list.length} box${list.length === 1 ? '' : 'es'}</span></div>
+      ${list.map((b, i) => `<div style="display: flex; gap: 8px; align-items: center; font-size: 14px">
         <span class="muted" style="flex-grow: 1">Box ${i + 1} · (${b.x0.toFixed(3)}, ${b.y0.toFixed(3)}) – (${b.x1.toFixed(3)}, ${b.y1.toFixed(3)})</span>
         <button type="button" class="btn muted small" data-delbox="${b.id}">Delete</button></div>`).join('')}
     </div>`).join('') : '<div class="row muted small">No exclusion areas yet.</div>';
@@ -1662,7 +1662,7 @@ function renderMapAreasList() {
     ...excl.map((b) => ({ id: b.id, text: `excluded: ${b.label || 'out of scope'}`, color: '#888', b })),
   ];
   $('map-areas-head').textContent = `Areas on this sheet (${rows.length})`;
-  $('map-areas-list').innerHTML = rows.length ? rows.map((r) => `<button type="button" class="row" data-goarea="${r.id}" style="width: 100%; background: none; border: none; border-bottom: 1px solid var(--line-soft); color: var(--text); font: inherit; font-size: 12px; cursor: pointer; text-align: left; gap: 8px">
+  $('map-areas-list').innerHTML = rows.length ? rows.map((r) => `<button type="button" class="row" data-goarea="${r.id}" style="width: 100%; background: none; border: none; border-bottom: 1px solid var(--line-soft); color: var(--text); font: inherit; font-size: 14px; cursor: pointer; text-align: left; gap: 8px">
       <span style="width: 10px; height: 10px; border-radius: 2px; background: ${r.color}; flex-shrink: 0"></span><span style="flex-grow: 1">${esc(r.text)}</span><span class="muted">go →</span></button>`).join('')
     : '<div class="row muted small">No serving or exclusion areas on this sheet.</div>';
   document.querySelectorAll('[data-goarea]').forEach((btn) => btn.onclick = () => {
@@ -1826,7 +1826,7 @@ function renderMapCard() {
   if (mapAdd) {
     const types = (summary.device_types || []).filter((t) => t.verified);
     card.innerHTML = `<div style="font-weight: 700">Add a device here</div>
-      <label class="lbl" style="letter-spacing: 0">Type<select class="field" id="add-type" style="padding: 7px 8px; font-size: 13px">${types.map((t) => `<option value="${t.id}"${String(t.id) === String(defaultAddTypeId(types)) ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}</select></label>
+      <label class="lbl" style="letter-spacing: 0">Type<select class="field" id="add-type" style="padding: 7px 8px; font-size: 15px">${types.map((t) => `<option value="${t.id}"${String(t.id) === String(defaultAddTypeId(types)) ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}</select></label>
       <div class="small muted">Its cable length is measured at the next count of this sheet. Added devices are kept when the sheet is re-counted.</div>
       <div style="display: flex; gap: 8px"><button type="button" class="btn green small" id="add-go"${types.length ? '' : ' disabled'}>Add device</button><button type="button" class="btn muted small" id="add-cancel">Cancel</button></div>`;
     $('add-go').onclick = addManualDevice;

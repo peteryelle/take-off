@@ -18,19 +18,19 @@
 .viewer canvas { display: block; }
 .viewer canvas.ov { position: absolute; top: 0; left: 0; pointer-events: none; }
 .grid-wrap { max-height: 46vh; overflow: auto; }
-table.grid { width: 100%; border-collapse: collapse; font-size: 13px; }
-table.grid th { position: sticky; top: 0; z-index: 1; background: var(--panel); color: var(--muted); font-weight: normal; font-size: 11px;
+table.grid { width: 100%; border-collapse: collapse; font-size: 15px; }
+table.grid th { position: sticky; top: 0; z-index: 1; background: var(--panel); color: var(--muted); font-weight: normal; font-size: 13px;
   letter-spacing: .05em; text-transform: uppercase; padding: 8px 4px; border-bottom: 1px solid var(--line); text-align: center; white-space: nowrap; }
 table.grid th.tr, table.grid td.tr { text-align: left; padding-left: 12px; }
 table.grid td { padding: 4px; border-bottom: 1px solid var(--line-soft); text-align: center; }
 table.grid tr.checked td { background: #111d16; }
 table.grid tr.dirty td.tr { color: var(--orange); }
-table.grid td.tr button { font-family: inherit; font-size: 13px; background: none; border: none; color: inherit; padding: 0; cursor: pointer; text-decoration: underline dotted; }
-.cell { width: 64px; font-family: inherit; font-size: 13px; text-align: center; background: var(--bg); color: var(--text); border: 1px solid #3a443f; border-radius: 3px; padding: 5px 4px; }
+table.grid td.tr button { font-family: inherit; font-size: 15px; background: none; border: none; color: inherit; padding: 0; cursor: pointer; text-decoration: underline dotted; }
+.cell { width: 64px; font-family: inherit; font-size: 15px; text-align: center; background: var(--bg); color: var(--text); border: 1px solid #3a443f; border-radius: 3px; padding: 5px 4px; }
 .cell.changed { border-color: var(--orange-bd); color: var(--orange); }
 .cell:disabled { opacity: .7; }
 .done-btn { min-width: 92px; }
-.readout { font-size: 13px; color: var(--green); }
+.readout { font-size: 15px; color: var(--green); }
 </style>
 </head>
 <body>
@@ -51,23 +51,23 @@ table.grid td.tr button { font-family: inherit; font-size: 13px; background: non
 
   <section class="panel" aria-label="Room plan viewer">
     <div class="toolbar">
-      <label class="muted" style="font-size: 12px">Sheet
-        <select class="field" id="sheet" style="padding: 5px 6px; font-size: 13px; margin-left: 6px" aria-label="Room plan sheet"></select></label>
+      <label class="muted" style="font-size: 14px">Sheet
+        <select class="field" id="sheet" style="padding: 5px 6px; font-size: 15px; margin-left: 6px" aria-label="Room plan sheet"></select></label>
       <button type="button" class="btn muted small" id="prev" aria-label="Previous sheet">‹</button>
       <button type="button" class="btn muted small" id="next" aria-label="Next sheet">›</button>
       <span class="sep"></span>
       <button type="button" class="btn muted small" id="zout" aria-label="Zoom out">−</button>
-      <span class="muted" id="zpct" style="min-width: 44px; text-align: center; font-size: 12px">100%</span>
+      <span class="muted" id="zpct" style="min-width: 44px; text-align: center; font-size: 14px">100%</span>
       <button type="button" class="btn muted small" id="zin" aria-label="Zoom in">+</button>
       <button type="button" class="btn muted small" id="zfit">Fit</button>
       <span class="sep"></span>
-      <label class="muted" style="font-size: 12px">Scale
-        <select class="field" id="scale" style="padding: 5px 6px; font-size: 13px; margin-left: 6px" aria-label="Drawing scale">
+      <label class="muted" style="font-size: 14px">Scale
+        <select class="field" id="scale" style="padding: 5px 6px; font-size: 15px; margin-left: 6px" aria-label="Drawing scale">
           <option value="8">1/8" = 1'-0"</option><option value="5.3333">3/16" = 1'-0"</option><option value="4">1/4" = 1'-0"</option>
           <option value="2.6667">3/8" = 1'-0"</option><option value="2" selected>1/2" = 1'-0"</option><option value="1.3333">3/4" = 1'-0"</option>
           <option value="1">1" = 1'-0"</option><option value="0.6667">1-1/2" = 1'-0"</option><option value="0.3333">3" = 1'-0"</option>
         </select></label>
-      <span class="muted" id="scale-src" style="font-size: 12px"></span>
+      <span class="muted" id="scale-src" style="font-size: 14px"></span>
       <button type="button" class="btn muted small" id="measure">Measure</button>
       <button type="button" class="btn muted small" id="mclear">Clear</button>
       <span class="readout" id="readout"></span>
@@ -84,12 +84,12 @@ table.grid td.tr button { font-family: inherit; font-size: 13px; background: non
 
   <section class="panel" aria-label="TR rooms">
     <div class="toolbar">
-      <span style="font-size: 12px; color: var(--muted); letter-spacing: .08em">SET ONE COLUMN</span>
-      <select class="field" id="bulk-cat" style="padding: 5px 6px; font-size: 13px" aria-label="Column"></select>
+      <span style="font-size: 14px; color: var(--muted); letter-spacing: .08em">SET ONE COLUMN</span>
+      <select class="field" id="bulk-cat" style="padding: 5px 6px; font-size: 15px" aria-label="Column"></select>
       <span class="muted">=</span>
       <input class="cell" id="bulk-val" inputmode="decimal" value="1" aria-label="Value (blank clears)">
       <button type="button" class="btn blue small" id="bulk-apply">Apply to checked (0)</button>
-      <label class="check" style="font-size: 12px"><input type="checkbox" id="bulk-all"> all rooms</label>
+      <label class="check" style="font-size: 14px"><input type="checkbox" id="bulk-all"> all rooms</label>
       <span style="flex-grow: 1"></span>
       <button type="button" class="btn muted small" id="check-all">Check all</button>
       <button type="button" class="btn muted small" id="check-none">Check none</button>
@@ -101,7 +101,7 @@ table.grid td.tr button { font-family: inherit; font-size: 13px; background: non
       </table>
     </div>
     <div class="row">
-      <span class="muted" id="grid-msg" style="flex-grow: 1; font-size: 13px"></span>
+      <span class="muted" id="grid-msg" style="flex-grow: 1; font-size: 15px"></span>
       <button type="button" class="btn muted" id="discard" hidden>Discard changes</button>
       <button type="button" class="btn green" id="save" disabled>Save changes</button>
     </div>

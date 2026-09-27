@@ -12,15 +12,15 @@
 <style>
 .wf-page { max-width: 1440px; }
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); }
-.tab { font-family: inherit; font-size: 14px; padding: 11px 16px; background: none; border: none; border-bottom: 2px solid transparent; color: var(--muted); cursor: pointer; }
+.tab { font-family: inherit; font-size: 16px; padding: 11px 16px; background: none; border: none; border-bottom: 2px solid transparent; color: var(--muted); cursor: pointer; }
 .tab[aria-selected="true"] { color: var(--green); border-bottom-color: var(--green); font-weight: 700; }
-.lead { font-size: 14px; color: var(--muted); margin-bottom: 12px; }
-table.g { width: 100%; border-collapse: collapse; font-size: 13px; }
-table.g th { text-align: left; color: var(--muted); font-weight: normal; font-size: 11px; letter-spacing: .05em; text-transform: uppercase; padding: 10px 10px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); z-index: 1; }
+.lead { font-size: 16px; color: var(--muted); margin-bottom: 12px; }
+table.g { width: 100%; border-collapse: collapse; font-size: 15px; }
+table.g th { text-align: left; color: var(--muted); font-weight: normal; font-size: 13px; letter-spacing: .05em; text-transform: uppercase; padding: 10px 10px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); z-index: 1; }
 table.g td { padding: 7px 10px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
-table.g td.m { color: var(--muted); font-size: 12px; }
+table.g td.m { color: var(--muted); font-size: 14px; }
 .wrap { max-height: 62vh; overflow: auto; }
-.sel, .inp { font-family: inherit; font-size: 12px; background: var(--bg); color: var(--text); border: 1px solid #3a443f; border-radius: 3px; padding: 5px 6px; }
+.sel, .inp { font-family: inherit; font-size: 14px; background: var(--bg); color: var(--text); border: 1px solid #3a443f; border-radius: 3px; padding: 5px 6px; }
 .inp { width: 70px; text-align: center; }
 .pill.isp { color: var(--green); border-color: #2f6a3a; background: #12241a; }
 .pill.osp { color: var(--blue); border-color: var(--blue-bd); background: var(--blue-bg); }
@@ -29,10 +29,10 @@ table.g td.m { color: var(--muted); font-size: 12px; }
 .pill.warn { color: var(--orange); border-color: var(--orange-bd); background: var(--orange-bg); }
 .pill.none { color: var(--muted); border-color: #3a443f; background: #141816; }
 .pill.added { color: var(--purple); border-color: var(--purple-bd); background: var(--purple-bg); }
-.link { background: none; border: none; color: var(--blue); font-family: inherit; font-size: 12px; cursor: pointer; padding: 0; text-decoration: underline; }
-.checks { border: 1px solid var(--line); background: var(--panel); border-radius: 4px; padding: 10px 18px; font-size: 13px; line-height: 1.8; margin-top: 12px; }
+.link { background: none; border: none; color: var(--blue); font-family: inherit; font-size: 14px; cursor: pointer; padding: 0; text-decoration: underline; }
+.checks { border: 1px solid var(--line); background: var(--panel); border-radius: 4px; padding: 10px 18px; font-size: 15px; line-height: 1.8; margin-top: 12px; }
 .grp { border: 1px solid var(--line); background: var(--panel); border-radius: 4px; margin-bottom: 14px; }
-.grp h3 { margin: 0; padding: 11px 16px; font-size: 13px; color: var(--amber); letter-spacing: .06em; font-weight: normal; border-bottom: 1px solid var(--line); }
+.grp h3 { margin: 0; padding: 11px 16px; font-size: 15px; color: var(--amber); letter-spacing: .06em; font-weight: normal; border-bottom: 1px solid var(--line); }
 .bar { display: flex; gap: 12px; align-items: center; padding: 10px 16px; flex-wrap: wrap; }
 </style>
 </head>
@@ -61,7 +61,7 @@ table.g td.m { color: var(--muted); font-size: 12px; }
   </section>
 
   <section class="banner amber" id="scope-banner" hidden>
-    <div style="flex-grow: 1"><div class="msg" id="scope-a" style="font-size: 14px; margin-top: 0"></div><div class="muted" id="scope-b" style="font-size: 13px; margin-top: 4px"></div></div>
+    <div style="flex-grow: 1"><div class="msg" id="scope-a" style="font-size: 16px; margin-top: 0"></div><div class="muted" id="scope-b" style="font-size: 15px; margin-top: 4px"></div></div>
     <button type="button" class="btn amber small" id="show-out">Show not on schedule</button>
   </section>
 
@@ -81,11 +81,11 @@ table.g td.m { color: var(--muted); font-size: 12px; }
     <div class="lead">All TRs on the riser diagram, as drawn. TRs found on the schedule (WF2) are in automatically; a TR that isn't on the schedule is left out until you click Add in — that adds it to the TR list, so WF5, WF6 and the BOM include it.</div>
     <div class="panel">
       <div class="bar">
-        <label class="muted" style="font-size: 12px">Show <select class="sel" id="filter">
+        <label class="muted" style="font-size: 14px">Show <select class="sel" id="filter">
           <option value="all">all</option><option value="in">in</option><option value="sched">on the schedule</option>
           <option value="close">close match to accept</option><option value="out">not on the schedule</option><option value="added">added in</option><option value="todo">to review</option></select></label>
         <span style="flex-grow: 1"></span>
-        <span class="muted" id="feed-count" style="font-size: 12px"></span>
+        <span class="muted" id="feed-count" style="font-size: 14px"></span>
         <button type="button" class="btn green small" id="confirm-feeds">Confirm all ready</button>
       </div>
       <div class="wrap"><table class="g"><thead><tr><th>On the riser</th><th>On the schedule</th><th>Level</th><th>Core A</th><th>Core B</th><th>Type</th><th>Strands</th><th>Check</th><th></th></tr></thead><tbody id="feed-body"></tbody></table></div>
@@ -95,7 +95,7 @@ table.g td.m { color: var(--muted); font-size: 12px; }
   <section data-panel="allow" hidden>
     <div class="lead">Each diagram note that says "carry an allowance" becomes lines: quantity per unit read from the note × the unit count read from the same note. The system is the diagram's title.</div>
     <div id="allow-groups"></div>
-    <div class="bar" style="padding-left: 0"><button type="button" class="btn green small" id="confirm-allow">Confirm all ready</button><span class="muted" id="allow-count" style="font-size: 12px"></span></div>
+    <div class="bar" style="padding-left: 0"><button type="button" class="btn green small" id="confirm-allow">Confirm all ready</button><span class="muted" id="allow-count" style="font-size: 14px"></span></div>
   </section>
 
   <section class="panel">
@@ -185,7 +185,7 @@ const statusPill = (item, blocker) => {
   if (/^add it in|^accept/.test(blocker)) return '<span class="pill none">out</span>';
   if (/cable type not (confirmed|set)/.test(blocker)) {
     const notes = [...new Set([item.core_a_note, item.core_b_note].filter((n) => n != null))].map((n) => 'CN ' + n).join(' + ');
-    return `<button type="button" class="pill warn" data-gocab="1" style="cursor: pointer; font-family: inherit" title="Confirm the cable type on the Cable types tab first">confirm ${esc(notes)} first →</button>`;
+    return `<span class="pill warn">cable not confirmed</span> <button type="button" class="btn amber small" data-gocab="1" title="Open Cable types to confirm it">Confirm ${esc(notes)} →</button>`;
   }
   return `<span class="pill warn" title="${esc(blocker)}">${esc(blocker.length > 40 ? blocker.slice(0, 38) + '…' : blocker)}</span>`;
 };
@@ -203,10 +203,10 @@ function renderCables() {
     const bl = cableBlocker(c);
     return `<tr>
       <td style="color: var(--amber); font-weight: 700">CN ${c.note_number}</td>
-      <td>${esc(c.note_text)}${c.conflict ? '<div style="color: var(--orange); font-size: 12px">The sheet now reads differently.</div>' : ''}</td>
+      <td>${esc(c.note_text)}${c.conflict ? '<div style="color: var(--orange); font-size: 14px">The sheet now reads differently.</div>' : ''}</td>
       <td>${esc(c.strands_text || '—')}</td>
       <td><select class="sel" data-cabtype="${c.note_number}" ${locked ? 'disabled' : ''}><option value="">—</option><option value="isp"${c.isp_osp === 'isp' ? ' selected' : ''}>ISP</option><option value="osp"${c.isp_osp === 'osp' ? ' selected' : ''}>OSP</option></select>
-        <span class="m" style="font-size: 12px; color: var(--muted)">${c.source === 'edited' ? 'set by you' : esc(c.basis || 'nothing to go on — set it')}</span></td>
+        <span class="m" style="font-size: 14px; color: var(--muted)">${c.source === 'edited' ? 'set by you' : esc(c.basis || 'nothing to go on — set it')}</span></td>
       <td class="m">${useBy.get(c.note_number) ? `${useBy.get(c.note_number)} cores` : heBy.get(c.note_number) ? `head end ${esc(heBy.get(c.note_number).join(', '))}` : 'not used'}</td>
       <td style="text-align: right; white-space: nowrap">${statusPill(c, bl)} ${confirmBtn('cable', c.note_number, c, bl)}</td></tr>`;
   }).join('') : '<tr><td colspan="6" class="m">Read the riser sheet above.</td></tr>';
@@ -224,7 +224,7 @@ function renderCables() {
 const trNames = () => data.trs.map((t) => t.tr_number);
 function scheduleCell(f) {
   if (f.tr_name) {
-    const tag = f.match_kind === 'added' ? '<span class="pill added">added in</span>' : f.match_kind === 'manual' ? '<span class="muted" style="font-size: 11px">matched by you</span>' : f.match_kind === 'close' ? '<span class="muted" style="font-size: 11px">close match</span>' : '';
+    const tag = f.match_kind === 'added' ? '<span class="pill added">added in</span>' : f.match_kind === 'manual' ? '<span class="muted" style="font-size: 13px">matched by you</span>' : f.match_kind === 'close' ? '<span class="muted" style="font-size: 13px">close match</span>' : '';
     return `<span style="color: ${f.match_kind === 'added' ? 'var(--purple)' : 'var(--green)'}">✓ ${esc(f.tr_name)}</span> ${tag}${locked ? '' : ` <button type="button" class="link" data-out="${esc(f.riser_key)}">take out</button>`}`;
   }
   if (locked) return '<span class="muted">out</span>';
@@ -277,7 +277,7 @@ function renderAllow() {
     <div class="grp"><h3>${esc(lines[0].note_ref || sys)}</h3>
       <table class="g"><thead><tr><th>Item (as read)</th><th>Per unit</th><th>Unit</th><th>× Count</th><th>Total</th><th></th></tr></thead><tbody>
       ${lines.map((a) => { const bl = allowanceBlocker(a); return `<tr>
-        <td>${esc(a.item)}${a.conflict ? '<div style="color: var(--orange); font-size: 12px">The sheet now reads differently.</div>' : ''}${a.per_text ? `<div class="muted" style="font-size: 11px">${esc(a.per_text)}</div>` : ''}</td>
+        <td>${esc(a.item)}${a.conflict ? '<div style="color: var(--orange); font-size: 14px">The sheet now reads differently.</div>' : ''}${a.per_text ? `<div class="muted" style="font-size: 13px">${esc(a.per_text)}</div>` : ''}</td>
         <td><input class="inp" inputmode="decimal" value="${a.per_unit_qty ?? ''}" data-allow="${esc(a.allowance_key)}:per_unit_qty" ${locked ? 'disabled' : ''}></td>
         <td class="m">${esc(a.unit || '—')}</td>
         <td><input class="inp" inputmode="numeric" value="${a.unit_count ?? ''}" data-allow="${esc(a.allowance_key)}:unit_count" ${locked ? 'disabled' : ''}></td>
