@@ -42,7 +42,7 @@ table.grid td.tr button { font-family: inherit; font-size: 13px; background: non
     <div>
       <a class="wf-crumb" id="crumb" href="wf-projects.html">← Project</a>
       <h1 class="wf-title"><span class="code">WF5</span> · TR rooms</h1>
-      <div class="wf-sub">Enter what each enlarged TR room plan (T-40x) shows, one row per TR. Manual entry — no cost.</div>
+      <div class="wf-sub">Enter what each enlarged TR room plan shows, one row per TR. Manual entry — no cost.</div>
     </div>
     <span class="pill" id="step-pill">…</span>
   </div>
@@ -78,7 +78,7 @@ table.grid td.tr button { font-family: inherit; font-size: 13px; background: non
         <canvas class="ov" id="marks"></canvas>
         <canvas class="ov" id="mov"></canvas>
       </div>
-      <div class="empty" id="viewer-empty">No room plan sheets yet. Add the T-40x PDFs above.</div>
+      <div class="empty" id="viewer-empty">No room plan sheets yet. Add the enlarged TR room plan PDFs above.</div>
     </div>
   </section>
 
@@ -97,7 +97,7 @@ table.grid td.tr button { font-family: inherit; font-size: 13px; background: non
     <div class="grid-wrap">
       <table class="grid">
         <thead><tr id="grid-head"></tr></thead>
-        <tbody id="grid-body"><tr><td colspan="13" class="empty">Loading…</td></tr></tbody>
+        <tbody id="grid-body"><tr><td colspan="14" class="empty">Loading…</td></tr></tbody>
       </table>
     </div>
     <div class="row">
@@ -119,7 +119,7 @@ table.grid td.tr button { font-family: inherit; font-size: 13px; background: non
 
 <script type="module">
 import { mountIntake, api, post } from './lib/wf-intake-ui.js';
-import { CATEGORIES, CATEGORY_LABEL, CATEGORY_UNIT, parseCell, buildRows, rowDirty, changedCells, applyBulk, summary, sheetScale } from './lib/wf5-rows.js';
+import { CATEGORIES, CATEGORY_LABEL, CATEGORY_UNIT, FLAG_LABEL, parseCell, buildRows, rowDirty, changedCells, applyBulk, summary, sheetScale } from './lib/wf5-rows.js';
 
 const projectId = new URLSearchParams(location.search).get('project_id');
 if (!projectId) location.replace('wf-projects.html');
@@ -312,7 +312,7 @@ async function toggleDone(tr) {
 
 // ── grid ──
 $('grid-head').innerHTML = `<th><input type="checkbox" id="head-check" aria-label="Check all rooms"></th><th class="tr">TR</th>`
-  + CATEGORIES.map((c) => `<th>${esc(CATEGORY_LABEL[c])}</th>`).join('') + '<th>Done</th>';
+  + CATEGORIES.map((c) => `<th>${esc(CATEGORY_LABEL[c])}</th>`).join('') + `<th title="Room uses a wall-mount enclosure instead of floor racks">${esc(FLAG_LABEL.wall_mount)}</th><th>Done</th>`;
 $('bulk-cat').innerHTML = CATEGORIES.map((c) => `<option value="${c}">${esc(CATEGORY_LABEL[c])}</option>`).join('');
 $('head-check').onchange = (e) => { rows.forEach((r) => (r.checked = e.target.checked)); renderGrid(); };
 $('check-all').onclick = () => { rows.forEach((r) => (r.checked = true)); renderGrid(); };
@@ -327,7 +327,7 @@ function noteEdit(r) {
 function renderGrid() {
   const body = $('grid-body');
   if (!rows.length) {
-    body.innerHTML = '<tr><td colspan="13" class="empty">No TRs yet. Confirm the TR list in WF2 first — WF5 has one row per TR.</td></tr>';
+    body.innerHTML = '<tr><td colspan="14" class="empty">No TRs yet. Confirm the TR list in WF2 first — WF5 has one row per TR.</td></tr>';
   } else {
     body.innerHTML = rows.map((r, i) => `
       <tr class="${r.checked ? 'checked' : ''} ${rowDirty(r) ? 'dirty' : ''}">
@@ -335,6 +335,8 @@ function renderGrid() {
         <td class="tr">${r.mark ? `<button type="button" data-goto="${i}" title="Show its room plan">${esc(r.tr_name)}</button>` : esc(r.tr_name)}</td>
         ${CATEGORIES.map((c) => `<td><input class="cell ${(r.counts[c] ?? null) !== (r.saved[c] ?? null) ? 'changed' : ''}" inputmode="${CATEGORY_UNIT[c] === 'ft' ? 'decimal' : 'numeric'}"
           value="${r.counts[c] ?? ''}" data-i="${i}" data-c="${c}" ${locked ? 'disabled' : ''} aria-label="${esc(r.tr_name)} ${esc(CATEGORY_LABEL[c])}"></td>`).join('')}
+        <td><input type="checkbox" data-wm="${i}" ${r.counts.wall_mount === 1 ? 'checked' : ''} ${locked ? 'disabled' : ''} aria-label="${esc(r.tr_name)} wall-mount"
+          ${(r.counts.wall_mount ?? null) !== (r.saved.wall_mount ?? null) ? 'style="outline: 2px solid var(--orange-bd)"' : ''}></td>
         <td><button type="button" class="btn small done-btn ${r.mark ? 'green' : placing === r.tr_name ? 'amber' : 'muted'}" data-done="${i}">${r.mark ? '😊 Done' : placing === r.tr_name ? 'Click plan…' : 'Mark done'}</button></td>
       </tr>`).join('');
   }
@@ -343,6 +345,9 @@ function renderGrid() {
   body.querySelectorAll('[data-goto]').forEach((b) => b.onclick = () => {
     const s = sheets.find((x) => x.id === rows[+b.dataset.goto].mark.page_id);
     if (s) showSheet(s, cur?.id !== s.id); else status('That room plan sheet is no longer in this step.', 'err');
+  });
+  body.querySelectorAll('[data-wm]').forEach((b) => b.onchange = () => {
+    const r = rows[+b.dataset.wm]; r.counts.wall_mount = b.checked ? 1 : null; noteEdit(r); renderGrid();
   });
   body.querySelectorAll('[data-c]').forEach((inp) => inp.onchange = () => {
     const r = rows[+inp.dataset.i], c = inp.dataset.c;
@@ -358,7 +363,7 @@ function renderGrid() {
   $('save').disabled = locked || !s.unsaved;
   $('discard').hidden = !s.unsaved;
   $('save').textContent = s.unsaved ? `Save changes (${s.unsaved} room${s.unsaved === 1 ? '' : 's'})` : 'Save changes';
-  $('grid-msg').textContent = `${s.rooms} TRs · ${s.with_values} with values · ${s.racks_new} new racks · ${s.tray_ft} ft tray`;
+  $('grid-msg').textContent = `${s.rooms} TRs · ${s.with_values} with values · ${s.racks_new} new racks · ${s.wall_mount} wall-mount · ${s.tray_ft} ft tray`;
   renderFooter(s);
 }
 

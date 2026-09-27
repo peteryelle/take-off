@@ -47,7 +47,11 @@ export function parseCodedNotes(textItems = [], opts = {}) {
   );
   if (!region.length) return [];
 
-  const leftEdge = Math.min(...region.map((it) => it.cx_norm));
+  // leftEdge from the rows just under the title only. On T-407 a plan callout
+  // ("14", parking garage 2) sits below the legend at x 0.811 and dragged a
+  // page-wide min left of the note-number column, so no numbers qualified.
+  const headRows = region.filter((it) => it.cy_norm <= titleItem.cy_norm + (opts.headWindow ?? 0.04));
+  const leftEdge = Math.min(...(headRows.length ? headRows : region).map((it) => it.cx_norm));
 
   // Cap the legend column's own width. Confirmed on the real sheet: note body
   // text tops out around leftEdge+0.07; the sheet's own right-margin
@@ -83,7 +87,18 @@ export function parseCodedNotes(textItems = [], opts = {}) {
   });
   if (!numberCandidates.length) return [];
 
-  const starts = [...numberCandidates].sort((a, b) => a.cy_norm - b.cy_norm);
+  // A merged "N TEXT" item is only a note start when N continues the
+  // sequence. T-501 note 3 wraps onto a line reading "12 STRANDS OF OS1 PER
+  // CORE..." -- without this it became a phantom note 12 and cut note 3 short.
+  // Rejected items stay in legendRegion and are read as body text.
+  const sorted = [...numberCandidates].sort((a, b) => a.cy_norm - b.cy_norm);
+  const starts = [];
+  let lastNum = null;
+  for (const it of sorted) {
+    const n = parseInt(it.str, 10);
+    if (remainderOf.has(it) && lastNum != null && n !== lastNum + 1) { remainderOf.delete(it); continue; }
+    starts.push(it); lastNum = n;
+  }
 
   // Stop at the first anomalously large gap. Real note-to-note marker
   // spacing on the one real sheet this was verified against ran ~0.01-0.025

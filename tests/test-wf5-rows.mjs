@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { CATEGORIES, parseCell, buildRows, rowDirty, changedCells, validateCells, applyBulk, summary,
+import { CATEGORIES, FLAGS, parseCell, buildRows, rowDirty, changedCells, validateCells, applyBulk, summary,
   feetPerInchFromLabel, sheetScale, polylineFeet } from '../public/lib/wf5-rows.js';
 
 let pass = 0, fail = 0;
@@ -77,7 +77,19 @@ eq('bulk blank clears', (applyBulk(rows, 'backboard', null), rows.map((r) => r.c
 
 // summary
 rows = buildRows(trs, values, marks);
-eq('summary', summary(rows), { rooms: 3, done: 2, with_values: 2, done_empty: 1, values_not_done: 1, unsaved: 0, racks_new: 5, tray_ft: 38.5 });
+eq('summary', summary(rows), { rooms: 3, done: 2, with_values: 2, done_empty: 1, values_not_done: 1, unsaved: 0, racks_new: 5, wall_mount: 0, tray_ft: 38.5 });
+
+// wall-mount flag: row with quantity 1 = yes, no row = no
+eq('flags', FLAGS, ['wall_mount']);
+eq('flag parse yes', [parseCell('wall_mount', true), parseCell('wall_mount', 1), parseCell('wall_mount', '1')], [1, 1, 1]);
+eq('flag parse no', [parseCell('wall_mount', false), parseCell('wall_mount', 0), parseCell('wall_mount', null)], [null, null, null]);
+eq('flag parse bad', parseCell('wall_mount', 2), undefined);
+rows = buildRows(trs, [...values, { tr_name: 'FB28L-1', category: 'wall_mount', quantity: 1 }], marks);
+eq('flag loaded', rows.map((r) => r.saved.wall_mount), [null, null, 1]);
+rows[0].counts.wall_mount = 1; rows[2].counts.wall_mount = null;
+eq('flag changes are cells', changedCells(rows).map((c) => [c.tr_name, c.category, c.quantity]), [['A030A-1', 'wall_mount', 1], ['FB28L-1', 'wall_mount', null]]);
+eq('flag validated', validateCells([{ tr_name: 'A030A-1', category: 'wall_mount', quantity: 1 }], names).cells[0].quantity, 1);
+eq('flag counted in summary', summary(buildRows(trs, [{ tr_name: 'FB28L-1', category: 'wall_mount', quantity: 1 }], [])).wall_mount, 1);
 
 // scale labels
 eq('1/2 -> 2 ft/in', feetPerInchFromLabel(`1/2" = 1'-0"`), 2);

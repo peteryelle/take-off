@@ -26,7 +26,7 @@ canvas.preview { max-width: 100%; border: 1px solid var(--line); border-radius: 
     <div>
       <a class="wf-crumb" id="crumb" href="wf-projects.html">← Project</a>
       <h1 class="wf-title"><span class="code">WF1</span> · Legend &amp; notes</h1>
-      <div class="wf-sub">Upload T-001 (legend) and T-002 (general &amp; phasing notes). Read from the text layer — no cost.</div>
+      <div class="wf-sub">Upload the legend and the general &amp; phasing notes sheets. Read from the text layer — no cost.</div>
     </div>
     <span class="pill" id="step-pill">…</span>
   </div>
@@ -115,7 +115,7 @@ function renderLegend() {
       <span style="flex-grow: 1">${esc(p.title_text || '')}</span>
       <span class="pill ${p.role === 'legend' ? 'confirmed' : 'in_review'}">${p.role}</span>
       <button type="button" class="btn blue small" data-view="${p.document_id}:${p.page_number}" data-title="${esc((p.sheet_number || '') + ' ' + (p.title_text || ''))}">View</button>
-    </div>`).join('') : '<div class="empty">No legend or notes sheet yet. Upload T-001 above.</div>';
+    </div>`).join('') : '<div class="empty">No legend or notes sheet yet. Upload it above.</div>';
   document.querySelectorAll('[data-view]').forEach((b) => b.onclick = () => preview(b.dataset.view, b.dataset.title));
 }
 

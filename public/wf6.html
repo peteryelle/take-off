@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WF6 · Rack &amp; details — Take-off</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="auth.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
+<link rel="stylesheet" href="wf.css">
+<style>
+.wf-page { max-width: 1440px; }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); }
+.tab { font-family: inherit; font-size: 14px; padding: 11px 16px; background: none; border: none; border-bottom: 2px solid transparent; color: var(--muted); cursor: pointer; }
+.tab[aria-selected="true"] { color: var(--green); border-bottom-color: var(--green); font-weight: 700; }
+.cols { display: flex; gap: 24px; align-items: flex-start; }
+.side { width: 340px; flex-shrink: 0; display: flex; flex-direction: column; gap: 10px; }
+.main { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.kick { font-size: 12px; color: var(--muted); letter-spacing: .08em; }
+.elev { font-size: 13px; padding: 8px 12px; border-radius: 3px; border: 1px solid var(--line); background: var(--panel); }
+.elev .cap { font-size: 11px; color: var(--muted); margin-top: 3px; }
+.userbox { border: 1px solid var(--purple-bd); background: var(--purple-bg); border-radius: 4px; padding: 12px 14px; display: flex; flex-direction: column; gap: 9px; }
+.userbox .r { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.userbox .r span { flex-grow: 1; }
+.num { width: 64px; font-family: inherit; font-size: 13px; text-align: center; background: var(--bg); color: var(--text); border: 1px solid #3a443f; border-radius: 3px; padding: 5px 4px; }
+.num.need { border-color: var(--orange-bd); }
+.sel { font-family: inherit; font-size: 12px; background: var(--bg); color: var(--text); border: 1px solid #3a443f; border-radius: 3px; padding: 5px 6px; max-width: 100%; }
+.rrow { display: flex; align-items: center; gap: 12px; padding: 8px 16px; border-bottom: 1px solid var(--line-soft); font-size: 13px; cursor: pointer; }
+.rrow:hover { background: #18201c; }
+.rrow .ref { width: 58px; color: var(--amber); font-weight: 700; }
+.rrow .item { flex-grow: 1; min-width: 0; }
+.rrow .part { width: 190px; color: var(--muted); font-size: 12px; }
+.rrow .ru { width: 34px; text-align: center; }
+.rrow .meth { width: 270px; }
+.rrow .src { width: 110px; text-align: right; }
+.detail { padding: 10px 16px 14px 86px; border-bottom: 1px solid var(--line); background: #121714; font-size: 13px; display: flex; flex-direction: column; gap: 10px; }
+.detail .note { color: var(--muted); font-size: 12px; line-height: 1.6; }
+.detail .params { display: flex; flex-wrap: wrap; gap: 10px 22px; }
+.detail .params label { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.pill.sheet { color: var(--green); border-color: #2f6a3a; background: #12241a; }
+.pill.user { color: var(--purple); border-color: var(--purple-bd); background: var(--purple-bg); }
+.pill.warn { color: var(--orange); border-color: var(--orange-bd); background: var(--orange-bg); }
+.pill.none { color: var(--muted); border-color: #3a443f; background: #141816; }
+.pill.calc { color: var(--blue); border-color: var(--blue-bd); background: var(--blue-bg); }
+.flags { border: 1px solid var(--orange-bd); background: var(--orange-bg); border-radius: 4px; padding: 10px 18px; font-size: 13px; line-height: 1.7; }
+table.tr { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.tr th { text-align: left; color: var(--muted); font-weight: normal; font-size: 11px; letter-spacing: .05em; text-transform: uppercase; padding: 10px 12px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); }
+table.tr td { padding: 8px 12px; border-bottom: 1px solid var(--line-soft); }
+table.tr tr.main-row { cursor: pointer; }
+table.tr tr.main-row:hover td { background: #18201c; }
+table.tr td.muted { color: var(--muted); }
+.tr-wrap { max-height: 62vh; overflow: auto; }
+</style>
+</head>
+<body>
+<nav id="to-nav"></nav>
+<script src="nav.js"></script>
+
+<main class="wf-page">
+  <div class="wf-head">
+    <div>
+      <a class="wf-crumb" id="crumb" href="wf-projects.html">← Project</a>
+      <h1 class="wf-title"><span class="code">WF6</span> · Rack &amp; details</h1>
+      <div class="wf-sub">Typical rack elevation sheet · rules read from its coded and drawing notes · no cost</div>
+    </div>
+    <span class="pill" id="step-pill">…</span>
+  </div>
+
+  <div id="intake"></div>
+
+  <section class="panel" aria-label="Rack elevation sheets">
+    <div class="row head"><span style="width: 110px">Sheet</span><span style="flex-grow: 1">Title</span><span style="width: 140px">Revision</span><span style="width: 160px"></span></div>
+    <div id="rack-pages"><div class="empty">Loading…</div></div>
+  </section>
+  <section class="banner orange" id="read-banner" hidden>
+    <div style="flex-grow: 1"><div class="kicker" id="read-kicker">READ</div><div class="msg" id="read-msg"></div></div>
+  </section>
+
+  <nav class="tabs" role="tablist" aria-label="WF6 sections">
+    <button type="button" class="tab" role="tab" aria-selected="true" data-tab="rules" id="tab-rules">Rules from the sheet</button>
+    <button type="button" class="tab" role="tab" aria-selected="false" data-tab="trs">Racks per TR</button>
+  </nav>
+
+  <section data-panel="rules">
+    <div class="muted" style="font-size: 14px; margin-bottom: 14px">Every item, part, RU and count comes from the sheet's coded and drawing notes. Pick how each item is counted; values the sheet doesn't state are set by you and flagged.</div>
+    <div class="cols">
+      <div class="side">
+        <div class="kick">TYPICAL ELEVATIONS (FROM TITLES)</div>
+        <div id="elevs"><div class="muted" style="font-size: 13px">Read a rack elevation sheet above.</div></div>
+        <div class="kick" style="margin-top: 8px">SET BY YOU · NOT STATED ON THE SHEET</div>
+        <div class="userbox" id="userbox"><div class="muted" style="font-size: 13px">Nothing to set yet.</div></div>
+      </div>
+      <div class="main">
+        <div class="panel">
+          <div class="rrow" style="cursor: default; font-size: 11px; color: var(--muted); letter-spacing: .06em">
+            <span class="ref">NOTE</span><span class="item">ITEM (READ FROM NOTE)</span><span class="part">PART</span><span class="ru">RU</span><span class="meth">COUNTED AS</span><span class="src"></span>
+          </div>
+          <div id="rules"><div class="empty">No rules yet.</div></div>
+          <div class="row"><button type="button" class="btn muted small" id="add-rule">+ Add a rule not on the sheet</button><span style="flex-grow: 1"></span>
+            <button type="button" class="btn muted small" id="toggle-dn">Show drawing notes</button></div>
+          <div id="dnotes" hidden></div>
+        </div>
+        <div class="flags" id="flags" hidden></div>
+      </div>
+    </div>
+  </section>
+
+  <section data-panel="trs" hidden>
+    <div class="muted" style="font-size: 14px; margin-bottom: 14px">The rules applied to each TR: new racks from WF5, patch panels and terminations from WF2, ISP/OSP from WF7. Nothing is stored here — the BOM runs the same rules. Click a TR for every item.</div>
+    <div class="panel tr-wrap"><table class="tr"><thead><tr id="tr-head"></tr></thead><tbody id="tr-body"></tbody></table></div>
+  </section>
+
+  <section class="panel">
+    <div class="row">
+      <span id="footer-msg" style="flex-grow: 1"></span>
+      <button type="button" class="btn muted" id="reopen" hidden>Reopen</button>
+      <button type="button" class="btn green" id="confirm" style="font-weight: 700">Confirm rack rules</button>
+    </div>
+  </section>
+  <div class="status-line" id="status" role="status"></div>
+</main>
+
+<script type="module">
+import { mountIntake, api, post } from './lib/wf-intake-ui.js';
+import { parseCodedNotes } from './lib/parse-coded-notes.js';
+import { linesFromTextContent, readDrawingNotes, readElevations, suggestRules, METHODS, METHOD_KEYS, PARAM_LABEL,
+  missingParams, sizeTr, summaryOf } from './lib/wf6-rules.js';
+
+const projectId = new URLSearchParams(location.search).get('project_id');
+if (!projectId) location.replace('wf-projects.html');
+try { sessionStorage.setItem('to_project_id', projectId); } catch {}
+document.getElementById('crumb').href = 'wf-project.html?project_id=' + projectId;
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const status = (m, c = '') => { $('status').className = 'status-line ' + c; $('status').textContent = m; };
+const PID = Number(projectId);
+
+let data = { rules: [], elevations: [], trs: [] };
+let sheetLabel = 'the sheet';
+let open = new Set();       // expanded rule keys
+let openTr = new Set();
+let locked = false;
+
+document.querySelectorAll('.tab').forEach((t) => t.onclick = () => {
+  document.querySelectorAll('.tab').forEach((x) => x.setAttribute('aria-selected', String(x === t)));
+  document.querySelectorAll('[data-panel]').forEach((p) => p.hidden = p.dataset.panel !== t.dataset.tab);
+});
+
+// ── intake + rack sheets ──
+mountIntake($('intake'), { projectId, stepCode: 'WF6', showLocation: false, onData: renderRackPages });
+function renderRackPages(intake) {
+  const pages = intake.pages.filter((p) => p.role === 'rack' && !p.is_duplicate && p.revision && p.revision.status !== 'rejected');
+  if (pages.length) sheetLabel = pages[0].sheet_number || 'the sheet';
+  $('tab-rules').textContent = 'Rules from ' + sheetLabel;
+  $('rack-pages').innerHTML = pages.length ? pages.map((p) => `
+    <div class="row">
+      <span style="width: 110px; font-weight: 700">${esc(p.sheet_number || '—')}</span>
+      <span style="flex-grow: 1">${esc(p.title_text || '')}</span>
+      <span style="width: 140px">${esc(p.revision.rev_label)} ${p.revision.is_current ? '' : '<span class="pill open">not current</span>'}</span>
+      <span style="width: 160px; text-align: right"><button type="button" class="btn blue small" data-read="${p.id}" ${p.revision.status === 'pending' ? 'disabled title="Accept this revision above first"' : ''}>Read sheet</button></span>
+    </div>`).join('') : '<div class="empty">No rack elevation sheet yet. Upload it above (its role should read "rack").</div>';
+  document.querySelectorAll('[data-read]').forEach((b) => b.onclick = () => readSheet(pages.find((p) => String(p.id) === b.dataset.read)));
+}
+
+async function readSheet(p) {
+  if (locked) { status('Reopen WF6 before reading the sheet again.', 'err'); return; }
+  const label = `${p.sheet_number || 'page ' + p.page_number} ${p.revision.rev_label}`;
+  status(`Reading ${label}…`);
+  try {
+    const { url } = await post('/api/wf/documents', { action: 'file_url', document_id: Number(p.document_id) });
+    const doc = await pdfjsLib.getDocument(url).promise;
+    const page = await doc.getPage(Number(p.page_number));
+    const vp = page.getViewport({ scale: 1 });
+    const tc = await page.getTextContent();
+    await doc.destroy();
+    const runs = linesFromTextContent(tc.items, vp.width, vp.height);
+    const coded = parseCodedNotes(runs), drawing = readDrawingNotes(runs), elevations = readElevations(runs);
+    $('read-banner').hidden = false;
+    if (!coded.length) {
+      $('read-kicker').textContent = 'NO CODED NOTES FOUND';
+      $('read-msg').textContent = `No coded notes were recognised on ${label}. You can add rules by hand below.`;
+      status(''); return;
+    }
+    const rules = suggestRules(coded, drawing);
+    const r = await post('/api/wf/wf6/rules', { action: 'save_read', project_id: PID, page_id: p.id, sheet_revision_id: p.revision.id, rules, elevations });
+    $('read-kicker').textContent = `READ ${label.toUpperCase()}`;
+    $('read-msg').textContent = `${coded.length} coded notes, ${drawing.length} drawing notes, ${elevations.length} elevations. `
+      + `${r.inserted} new, ${r.updated} updated${r.conflicts ? `, ${r.conflicts} rule(s) you edited differ from the new read` : ''}${r.removed ? `, ${r.removed} removed` : ''}.`;
+    await load();
+    post('/api/wf/projects', { action: 'touch_step', project_id: PID, step_code: 'WF6' }).then(loadStep).catch(() => {});
+    status('');
+  } catch (e) { status(e.message, 'err'); }
+}
+
+// ── rules tab ──
+const srcPill = (r) => {
+  if (r.conflict) return '<span class="pill warn" title="The sheet now reads differently">sheet changed</span>';
+  if (r.source === 'manual') return '<span class="pill user">added by you</span>';
+  if (r.source === 'edited') return '<span class="pill user">you set</span>';
+  if (missingParams(r).length) return '<span class="pill warn">needs a value</span>';
+  if (['none', 'layout'].includes(r.qty_rule)) return '<span class="pill none">not counted</span>';
+  return r.stated_on_sheet ? '<span class="pill sheet">sheet</span>' : '<span class="pill user">confirm</span>';
+};
+const methodSelect = (r) => `<select class="sel" data-meth="${esc(r.rule_key)}" ${locked ? 'disabled' : ''} aria-label="Counted as">
+  ${METHOD_KEYS.filter((k) => k !== 'per_elevation').map((k) => `<option value="${k}"${k === r.qty_rule ? ' selected' : ''}>${esc(METHODS[k].label)}</option>`).join('')}</select>`;
+
+function paramInput(r, p) {
+  const x = r.params?.[p] || { v: null, source: 'user' };
+  const tag = x.source === 'sheet' ? '<span class="pill sheet" style="font-size: 10px; padding: 2px 6px">sheet</span>'
+    : x.source === 'default' ? '<span class="pill none" style="font-size: 10px; padding: 2px 6px">default</span>'
+    : '<span class="pill user" style="font-size: 10px; padding: 2px 6px">you</span>';
+  const label = esc(PARAM_LABEL[p] || p.replace(/_/g, ' '));
+  if (typeof x.v === 'boolean') return `<label>${label} <input type="checkbox" data-param="${esc(r.rule_key)}:${p}" ${x.v ? 'checked' : ''} ${locked ? 'disabled' : ''}> ${tag}</label>`;
+  if (p === 'ru_role') return `<label>RU is <select class="sel" data-param="${esc(r.rule_key)}:${p}" ${locked ? 'disabled' : ''}><option value="height"${x.v === 'height' ? ' selected' : ''}>height it takes</option><option value="capacity"${x.v === 'capacity' ? ' selected' : ''}>rack capacity</option></select> ${tag}</label>`;
+  const need = (METHODS[r.qty_rule]?.params || []).includes(p) && (x.v == null || x.v === '');
+  return `<label>${label} <input class="num ${need ? 'need' : ''}" inputmode="decimal" value="${x.v ?? ''}" data-param="${esc(r.rule_key)}:${p}" ${locked ? 'disabled' : ''}> ${tag}</label>`;
+}
+
+function ruleRow(r) {
+  const isOpen = open.has(r.rule_key);
+  const params = [...new Set([...(METHODS[r.qty_rule]?.params || []), ...Object.keys(r.params || {})])].filter((p) => p !== 'no_quantity');
+  return `
+    <div class="rrow" data-open="${esc(r.rule_key)}">
+      <span class="ref">${esc(r.ref || (r.source === 'manual' ? 'You' : ''))}</span>
+      <span class="item">${esc(r.item)}</span>
+      <span class="part">${esc(r.part_number || '—')}</span>
+      <span class="ru">${esc(r.ru ?? '—')}</span>
+      <span class="meth" onclick="event.stopPropagation()">${methodSelect(r)}</span>
+      <span class="src">${srcPill(r)}</span>
+    </div>
+    ${isOpen ? `<div class="detail">
+      ${r.note_text ? `<div class="note">${esc(r.ref)} as read: ${esc(r.note_text)}</div>` : ''}
+      ${r.conflict ? `<div class="banner orange" style="padding: 10px 14px"><div style="flex-grow: 1; font-size: 13px">The sheet now reads: <b>${esc(r.conflict.item)}</b> · ${esc(r.conflict.part_number || '—')} · RU ${esc(r.conflict.ru ?? '—')} · ${esc(METHODS[r.conflict.qty_rule]?.label || r.conflict.qty_rule)}</div>
+        <button type="button" class="btn amber small" data-accept="${esc(r.rule_key)}" ${locked ? 'disabled' : ''}>Use the sheet's read</button></div>` : ''}
+      <div class="params">
+        <label>Item <input class="sel" style="width: 320px" value="${esc(r.item)}" data-field="${esc(r.rule_key)}:item" ${locked ? 'disabled' : ''}></label>
+        <label>Part <input class="sel" style="width: 200px" value="${esc(r.part_number || '')}" data-field="${esc(r.rule_key)}:part_number" ${locked ? 'disabled' : ''}></label>
+        <label>RU <input class="num" value="${esc(r.ru ?? '')}" data-field="${esc(r.rule_key)}:ru" ${locked ? 'disabled' : ''}></label>
+        <label>Zone <select class="sel" data-field="${esc(r.rule_key)}:zone" ${locked ? 'disabled' : ''}>${['', 'top', 'middle', 'bottom', 'side'].map((z) => `<option value="${z}"${(r.zone || '') === z ? ' selected' : ''}>${z || '—'}</option>`).join('')}</select></label>
+      </div>
+      ${params.length ? `<div class="params">${params.map((p) => paramInput(r, p)).join('')}</div>` : ''}
+      <div class="muted" style="font-size: 12px">${r.source === 'edited' || r.source === 'manual' ? `Reason kept: ${esc(r.override_basis || '')}` : 'As read from the sheet.'}
+        ${r.source === 'manual' && !locked ? ` · <a href="#" data-del="${esc(r.rule_key)}">Delete this rule</a>` : ''}</div>
+    </div>` : ''}`;
+}
+
+function renderRules() {
+  const counted = data.rules.filter((r) => r.note_kind !== 'drawing');
+  const drawing = data.rules.filter((r) => r.note_kind === 'drawing');
+  $('rules').innerHTML = counted.length ? counted.map(ruleRow).join('') : '<div class="empty">No rules yet. Read the rack elevation sheet above.</div>';
+  $('dnotes').innerHTML = drawing.map(ruleRow).join('');
+  $('toggle-dn').textContent = `${$('dnotes').hidden ? 'Show' : 'Hide'} drawing notes (${drawing.length})`;
+  $('add-rule').disabled = locked;
+
+  // elevations
+  const order = (e) => (e.rack_count === 'wall_mount' ? 9 : Number(e.rack_count));
+  $('elevs').innerHTML = data.elevations.length ? [...data.elevations].sort((a, b) => order(a) - order(b)).map((e) => `
+    <div class="elev"><div>${esc(e.rack_count === 'wall_mount' ? 'Wall-mount' : `Typical ${e.rack_count}-rack elevation`)}${e.detail_ref ? ` (${esc(e.detail_ref)})` : ''}</div>
+      <div class="cap">${e.capacity_passive != null ? `${e.capacity_passive} passive` : ''}${e.capacity_active != null ? ` · ${e.active_over ? 'over ' : ''}${e.capacity_active} active` : ''}${e.capacity_passive == null && e.capacity_active == null ? esc(e.title) : ''}</div></div>`).join('')
+    : '<div class="muted" style="font-size: 13px">Read a rack elevation sheet above.</div>';
+
+  // set by you
+  const need = [];
+  for (const r of counted) {
+    if (['none', 'layout'].includes(r.qty_rule)) continue;
+    for (const p of METHODS[r.qty_rule]?.params || []) {
+      const x = r.params?.[p];
+      if (!x || x.source === 'user' || x.v == null) need.push({ r, p, x });
+    }
+  }
+  $('userbox').innerHTML = need.length ? need.map(({ r, p, x }) => `
+    <div class="r"><span>${esc(PARAM_LABEL[p] || p)} <span class="muted" style="font-size: 11px">· ${esc(r.ref || 'yours')}</span></span>
+      <input class="num ${x?.v == null ? 'need' : ''}" inputmode="decimal" value="${x?.v ?? ''}" data-param="${esc(r.rule_key)}:${p}" ${locked ? 'disabled' : ''} aria-label="${esc(PARAM_LABEL[p] || p)} for ${esc(r.ref)}"></div>`).join('')
+    : '<div class="muted" style="font-size: 13px">Nothing to set — every value was read from the sheet.</div>';
+
+  // no-quantity flags
+  const flags = data.rules.filter((r) => r.qty_rule === 'not_stated' || (r.note_kind === 'coded' && r.qty_rule === 'none'));
+  $('flags').hidden = !flags.length;
+  $('flags').innerHTML = `<div style="color: var(--orange); font-weight: 700">No quantity on the sheet (${flags.length})</div>`
+    + flags.map((r) => `<div>· ${esc(r.ref)}: ${esc(r.item)}</div>`).join('');
+
+  wireRules();
+}
+
+function wireRules() {
+  document.querySelectorAll('[data-open]').forEach((el) => el.onclick = () => {
+    const k = el.dataset.open; open.has(k) ? open.delete(k) : open.add(k); renderRules();
+  });
+  document.querySelectorAll('[data-meth]').forEach((s) => s.onchange = () =>
+    saveRule(s.dataset.meth, { qty_rule: s.value }, 'Counting method chosen by user'));
+  document.querySelectorAll('[data-param]').forEach((inp) => inp.onchange = () => {
+    const [key, p] = inp.dataset.param.split(':');
+    let v;
+    if (inp.type === 'checkbox') v = inp.checked;
+    else if (inp.tagName === 'SELECT') v = inp.value;
+    else if (inp.value.trim() === '') v = null;
+    else { v = Number(inp.value); if (!(v >= 0)) { status('Enter a number (0 or more).', 'err'); inp.value = ''; return; } }
+    saveRule(key, { params: { [p]: { v, source: 'user' } } }, `${PARAM_LABEL[p] || p} set by user — not stated on the sheet`);
+  });
+  document.querySelectorAll('[data-field]').forEach((inp) => inp.onchange = () => {
+    const [key, f] = inp.dataset.field.split(':');
+    const v = f === 'ru' ? (inp.value.trim() === '' ? null : Number(inp.value)) : (inp.value.trim() || null);
+    if (f === 'item' && !v) { status('Item cannot be empty.', 'err'); return; }
+    saveRule(key, { [f]: v }, `${f.replace('_', ' ')} edited by user`);
+  });
+  document.querySelectorAll('[data-accept]').forEach((b) => b.onclick = async () => {
+    try { await post('/api/wf/wf6/rules', { action: 'accept_read', project_id: PID, rule_key: b.dataset.accept }); await load(); status('Took the sheet\'s read.', 'ok'); }
+    catch (e) { status(e.message, 'err'); }
+  });
+  document.querySelectorAll('[data-del]').forEach((a) => a.onclick = async (e) => {
+    e.preventDefault();
+    if (!confirm('Delete this rule?')) return;
+    try { await post('/api/wf/wf6/rules', { action: 'delete_rule', project_id: PID, rule_key: a.dataset.del }); await load(); }
+    catch (err) { status(err.message, 'err'); }
+  });
+}
+
+async function saveRule(rule_key, patch, basis) {
+  try {
+    const row = await post('/api/wf/wf6/rules', { action: 'save_rule', project_id: PID, rule_key, patch, basis });
+    data.rules = data.rules.map((r) => (r.rule_key === rule_key ? row : r));
+    renderAll(); status('Saved.', 'ok');
+  } catch (e) { status(e.message, 'err'); renderAll(); }
+}
+
+$('toggle-dn').onclick = () => { $('dnotes').hidden = !$('dnotes').hidden; renderRules(); };
+$('add-rule').onclick = async () => {
+  const item = prompt('Item (as it should appear on the BOM):');
+  if (!item || !item.trim()) return;
+  const basis = prompt('Why is it needed? (kept with the rule)', 'Not on the sheet — added by user') || '';
+  try {
+    const row = await post('/api/wf/wf6/rules', { action: 'add_rule', project_id: PID, rule: { item, qty_rule: 'not_stated', params: {} }, basis });
+    open.add(row.rule_key); await load(); status('Rule added — pick how it is counted.', 'ok');
+  } catch (e) { status(e.message, 'err'); }
+};
+
+// ── racks per TR ──
+// Columns come from the counting METHOD of each rule, not from item names.
+const COLS = [
+  ['schedule_div_racks', 'Patch pnl'], ['terminations_div_ports', 'Switches'], ['racks_plus_one', 'Sidecars'],
+  ['unused_ru', 'Blanks'], ['strands_div_cassette', 'Cassettes'],
+];
+function renderTrs() {
+  const colRules = COLS.map(([m, label]) => ({ label, rule: data.rules.find((r) => r.qty_rule === m && r.note_kind !== 'drawing') })).filter((c) => c.rule);
+  $('tr-head').innerHTML = `<th>TR</th><th>New racks</th>${colRules.map((c) => `<th>${esc(c.label)}</th>`).join('')}<th>Check</th>`;
+  const sized = data.trs.map((t) => sizeTr(data.rules, t, data.elevations));
+  $('tr-body').innerHTML = sized.length ? sized.map((s) => {
+    const cell = (rule) => {
+      const it = s.items.find((i) => i.rule_key === rule.rule_key);
+      if (!it) return '<td class="muted">—</td>';
+      if (it.qty == null) return `<td class="muted" title="${esc(it.note || '')}">${esc(it.note && /WF7/.test(it.note) ? 'waits on WF7' : '—')}</td>`;
+      return `<td title="${esc(it.note || '')}">${it.per_rack && it.per_rack.length > 1 ? esc(it.per_rack.join(' / ')) : esc(it.qty)}${it.note ? ' <span style="color: var(--orange)">!</span>' : ''}</td>`;
+    };
+    const lvl = { ok: 'sheet', warn: 'warn', none: 'none', open: 'none' }[s.check.level] || 'none';
+    const main = `<tr class="main-row" data-tr="${esc(s.tr_name)}"><td style="font-weight: 700">${esc(s.tr_name)}</td><td>${s.racks ?? '<span class="muted">not in WF5</span>'}</td>
+      ${colRules.map((c) => cell(c.rule)).join('')}<td><span class="pill ${lvl}">${esc(s.check.text)}</span></td></tr>`;
+    const detail = openTr.has(s.tr_name) ? `<tr><td colspan="${colRules.length + 3}" style="background: #121714">
+      ${s.items.map((i) => `<div style="display: flex; gap: 14px; font-size: 12px; padding: 3px 0"><span style="width: 60px; color: var(--amber)">${esc(i.ref || '')}</span>
+        <span style="flex-grow: 1">${esc(i.item)}${i.part_number ? ` <span class="muted">· ${esc(i.part_number)}</span>` : ''}</span>
+        <span style="width: 90px">${i.qty ?? '—'}${i.per_rack && i.per_rack.length > 1 ? ` <span class="muted">(${esc(i.per_rack.join('/'))})</span>` : ''}</span>
+        <span class="muted" style="width: 280px">${esc(i.note || '')}</span></div>`).join('')}</td></tr>` : '';
+    return main + detail;
+  }).join('') : `<tr><td colspan="${colRules.length + 3}" class="muted">No TRs yet — the TR list comes from WF2.</td></tr>`;
+  document.querySelectorAll('[data-tr]').forEach((r) => r.onclick = () => { const k = r.dataset.tr; openTr.has(k) ? openTr.delete(k) : openTr.add(k); renderTrs(); });
+  return sized;
+}
+
+// ── footer / step ──
+let stepRow = null;
+function renderFooter(sized) {
+  const s = summaryOf(data.rules, sized);
+  if (!stepRow) return;
+  const done = stepRow.status === 'confirmed';
+  $('confirm').hidden = done; $('reopen').hidden = !done;
+  const parts = [
+    data.rules.length ? `${sheetLabel} read · ${s.coded} coded notes` : 'Sheet not read yet',
+    `${s.user_set} value${s.user_set === 1 ? '' : 's'} set by you`,
+  ];
+  if (s.user_missing) parts.push(`${s.user_missing} still to set`);
+  parts.push(`${s.trs} TRs`);
+  if (s.over_capacity) parts.push(`${s.over_capacity} over elevation capacity or without one`);
+  if (s.waits_wf7) parts.push(`cassettes wait on WF7 for ${s.waits_wf7} TRs`);
+  $('footer-msg').textContent = (done ? 'Rack rules confirmed · ' : stepRow.status === 'stale' ? `Needs review: ${stepRow.stale_reason || 'a sheet changed'} · ` : '') + parts.join(' · ');
+}
+function renderAll() { renderRules(); const sized = renderTrs(); renderFooter(sized); }
+
+async function load() { data = await api('/api/wf/wf6/rules?project_id=' + projectId); renderAll(); }
+async function loadStep() {
+  const d = await api('/api/wf/projects?id=' + projectId);
+  $('crumb').textContent = '← ' + d.project.name;
+  stepRow = d.steps.find((x) => x.step_code === 'WF6');
+  $('step-pill').className = 'pill ' + stepRow.status;
+  $('step-pill').textContent = stepRow.status === 'stale' ? 'changed' : stepRow.status.replace('_', ' ');
+  locked = stepRow.status === 'confirmed';
+  renderAll();
+}
+$('confirm').onclick = async () => {
+  const s = summaryOf(data.rules, data.trs.map((t) => sizeTr(data.rules, t, data.elevations)));
+  if (!data.rules.length && !confirm('No rules have been read. Confirm rack rules anyway?')) return;
+  if (s.user_missing && !confirm(`${s.user_missing} value(s) are still not set, so some quantities can't be counted. Confirm anyway?`)) return;
+  if (data.rules.some((r) => r.conflict) && !confirm('Some rules you edited differ from the latest sheet read. Confirm anyway?')) return;
+  try { await post('/api/wf/projects', { action: 'confirm_step', project_id: PID, step_code: 'WF6' }); status('Rack rules confirmed.', 'ok'); loadStep(); }
+  catch (e) { status(e.message, 'err'); }
+};
+$('reopen').onclick = async () => {
+  try { await post('/api/wf/projects', { action: 'reopen_step', project_id: PID, step_code: 'WF6' }); loadStep(); }
+  catch (e) { status(e.message, 'err'); }
+};
+
+load().catch((e) => status(e.message, 'err'));
+loadStep().catch((e) => status(e.message, 'err'));
+</script>
+</body>
+</html>

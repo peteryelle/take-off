@@ -27,7 +27,7 @@
     <div>
       <a class="wf-crumb" id="crumb" href="wf-projects.html">← Project</a>
       <h1 class="wf-title"><span class="code">WF2</span> · Schedule</h1>
-      <div class="wf-sub">Upload the TR schedule sheet (T-500). Read from the text layer — no cost.</div>
+      <div class="wf-sub">Upload the TR schedule sheet. Read from the text layer — no cost.</div>
     </div>
     <span class="pill" id="step-pill">…</span>
   </div>
@@ -113,7 +113,7 @@ function renderSchedPages(intake) {
       <span style="flex-grow: 1">${esc(p.title_text || '')}</span>
       <span style="width: 140px">${esc(p.revision.rev_label)} ${p.revision.is_current ? '' : '<span class="pill open">not current</span>'}</span>
       <span style="width: 160px; text-align: right"><button type="button" class="btn blue small" data-read="${p.document_id}:${p.page_number}:${p.revision.id}:${esc(p.sheet_number + ' ' + p.revision.rev_label)}" ${p.revision.status === 'pending' ? 'disabled title="Accept this revision above first"' : ''}>Read schedule</button></span>
-    </div>`).join('') : '<div class="empty">No schedule sheet yet. Upload T-500 above.</div>';
+    </div>`).join('') : '<div class="empty">No schedule sheet yet. Upload it above.</div>';
   document.querySelectorAll('[data-read]').forEach((b) => b.onclick = () => readSheet(...b.dataset.read.split(':')));
 }
 
@@ -207,7 +207,7 @@ $('save').onclick = async () => {
   const needsReason = working.some((r) => r.source !== 'extracted');
   let basis = '';
   if (needsReason) {
-    basis = prompt('Reason for edited or hand-entered rows (kept with those rows):', 'Checked against the T-500 sheet') || '';
+    basis = prompt('Reason for edited or hand-entered rows (kept with those rows):', 'Checked against the schedule sheet') || '';
     if (!basis.trim()) { status('A reason is needed for edited or hand-entered rows.', 'err'); return; }
   }
   $('save').disabled = true;

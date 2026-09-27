@@ -20,11 +20,16 @@ export const CATEGORY_LABEL = {
 // Everything is a unit count except cable_tray, which is feet (one decimal).
 export const CATEGORY_UNIT = { cable_tray: 'ft' };
 
-export const isCategory = (c) => CATEGORIES.includes(c);
+// Yes/no room attributes, stored as a row with quantity 1 (no row = no).
+export const FLAGS = ['wall_mount'];
+export const FLAG_LABEL = { wall_mount: 'Wall-mount' };
+
+export const isCategory = (c) => CATEGORIES.includes(c) || FLAGS.includes(c);
 
 // Typed text -> stored value. '' / null -> null (blank = not entered).
 // Anything unreadable or negative -> undefined (invalid; the caller rejects it).
 export function parseCell(category, raw) {
+  if (FLAGS.includes(category)) return raw === true || raw === 1 || raw === '1' ? 1 : raw === false || raw === 0 || raw === '0' || raw == null || raw === '' ? null : undefined;
   if (raw === '' || raw == null) return null;
   const s = String(raw).trim();
   if (s === '') return null;
@@ -48,17 +53,17 @@ export function buildRows(trs, values = [], marks = []) {
     .filter((t) => t.tr_number)
     .sort((a, b) => String(a.tr_number).localeCompare(String(b.tr_number), undefined, { numeric: true }))
     .map((t) => {
-      const saved = Object.fromEntries(CATEGORIES.map((c) => [c, byTr.get(t.tr_number)?.[c] ?? null]));
+      const saved = Object.fromEntries([...CATEGORIES, ...FLAGS].map((c) => [c, byTr.get(t.tr_number)?.[c] ?? null]));
       return { tr_id: t.id, tr_name: t.tr_number, saved, counts: { ...saved }, mark: markBy.get(t.tr_number) || null, checked: false };
     });
 }
 
-export const rowDirty = (r) => CATEGORIES.some((c) => (r.counts[c] ?? null) !== (r.saved[c] ?? null));
+export const rowDirty = (r) => [...CATEGORIES, ...FLAGS].some((c) => (r.counts[c] ?? null) !== (r.saved[c] ?? null));
 
 // Cells that changed since the last load. quantity null = delete that cell.
 export function changedCells(rows) {
   const out = [];
-  for (const r of rows) for (const c of CATEGORIES) {
+  for (const r of rows) for (const c of [...CATEGORIES, ...FLAGS]) {
     const now = r.counts[c] ?? null;
     if (now !== (r.saved[c] ?? null)) out.push({ tr_name: r.tr_name, category: c, quantity: now, page_id: r.edit_page_id ?? null, basis: r.edit_basis ?? null });
   }
@@ -75,9 +80,9 @@ export function validateCells(cells, trNames) {
     if (!c || !known.has(c.tr_name)) { errors.push(`cell ${i}: unknown TR "${c?.tr_name}"`); continue; }
     if (!isCategory(c.category)) { errors.push(`cell ${i}: unknown column "${c.category}"`); continue; }
     const q = c.quantity == null ? null : parseCell(c.category, c.quantity);
-    if (q === undefined) { errors.push(`${c.tr_name} ${CATEGORY_LABEL[c.category]}: "${c.quantity}" is not a valid ${CATEGORY_UNIT[c.category] === 'ft' ? 'length' : 'count'}`); continue; }
+    if (q === undefined) { errors.push(`${c.tr_name} ${CATEGORY_LABEL[c.category] || FLAG_LABEL[c.category]}: "${c.quantity}" is not a valid ${FLAGS.includes(c.category) ? 'yes/no' : CATEGORY_UNIT[c.category] === 'ft' ? 'length' : 'count'}`); continue; }
     const key = c.tr_name + '|' + c.category;
-    if (seen.has(key)) { errors.push(`${c.tr_name} ${CATEGORY_LABEL[c.category]}: sent twice`); continue; }
+    if (seen.has(key)) { errors.push(`${c.tr_name} ${CATEGORY_LABEL[c.category] || FLAG_LABEL[c.category]}: sent twice`); continue; }
     seen.add(key);
     out.push({ ...c, quantity: q });
   }
@@ -103,6 +108,7 @@ export function summary(rows) {
     values_not_done: rows.filter((r) => !r.mark && hasValue(r)).length,
     unsaved: rows.filter(rowDirty).length,
     racks_new: rows.reduce((s, r) => s + (r.saved.rack_new || 0), 0),
+    wall_mount: rows.filter((r) => r.saved.wall_mount === 1).length,
     tray_ft: Math.round(rows.reduce((s, r) => s + (r.saved.cable_tray || 0), 0) * 10) / 10,
   };
 }
