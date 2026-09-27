@@ -182,6 +182,7 @@ async function readSheet(p) {
     const runs = linesFromTextContent(tc.items, vp.width, vp.height);
     const coded = parseCodedNotes(runs), drawing = readDrawingNotes(runs), elevations = readElevations(runs);
     $('read-banner').hidden = false;
+    $('read-banner').className = 'banner orange';
     if (!coded.length) {
       $('read-kicker').textContent = 'NO CODED NOTES FOUND';
       $('read-msg').textContent = `No coded notes were recognised on ${label}. You can add rules by hand below.`;
@@ -195,7 +196,15 @@ async function readSheet(p) {
     await load();
     post('/api/wf/projects', { action: 'touch_step', project_id: PID, step_code: 'WF6' }).then(loadStep).catch(() => {});
     status('');
-  } catch (e) { status(e.message, 'err'); }
+  } catch (e) { showError('READ FAILED', e.message); }
+}
+// Errors go in the banner at the top, where the user is looking, as well as the status line.
+function showError(kicker, msg) {
+  $('read-banner').hidden = false;
+  $('read-banner').className = 'banner red';
+  $('read-kicker').textContent = kicker;
+  $('read-msg').textContent = msg;
+  status(msg, 'err');
 }
 
 // ── rules tab ──
@@ -449,7 +458,7 @@ $('reopen').onclick = async () => {
   catch (e) { status(e.message, 'err'); }
 };
 
-load().catch((e) => status(e.message, 'err'));
+load().catch((e) => showError('COULD NOT LOAD WF6', e.message));
 loadStep().catch((e) => status(e.message, 'err'));
 </script>
 </body>
