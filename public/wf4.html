@@ -743,7 +743,7 @@ function renderPinPage() {
       <span class="pill ${cls}">${st}</span>${extra}</div>`;
   };
   const exitRow = (d) => `<div class="row" style="font-size: 13px; padding-top: 9px; padding-bottom: 9px; gap: 10px;${pinSel && pinSel.kind === 'exit' && pinSel.name === d.name ? ' background: var(--green-bg);' : ''}">
-      <span style="font-weight: 700; flex-grow: 1">→ ${esc(d.name)} <span class="small muted">off this sheet · +${Number(d.stub_ft) || 0} ft to the TR</span></span>
+      <span style="font-weight: 700; flex-grow: 1">→ ${esc(d.name)} <span class="small muted">TR room on ${esc(trRoomSheet(d.name, d).sheet || 'sheet not set')} · +${Number(d.stub_ft) || 0} ft from the exit</span></span>
       <span class="pill in_review">exit pin</span><button type="button" class="btn blue small" data-exit="${esc(d.name)}">Move</button></div>`;
   $('pins-list').innerHTML = (placed.map((d) => row(d.name, d, `<button type="button" class="btn blue small" data-pin="${esc(d.name)}">Move</button>`)).join('')
     + exits.map(exitRow).join('')
@@ -808,10 +808,23 @@ function selectPin(name, suggest = null, quiet = false) {
     stub: Number(pin?.stub_ft) || 0, pinId: onThis ? pin.id : null, movesFrom: pin && !onThis ? pin.page_id : null };
   if (!quiet) renderPinPage(); else { renderPinEdit(); renderPinViewer(); }
 }
+// Where the TR room is: its own pin if it has one; else what the exit pin saved;
+// else "REFER TO SHEET X" in the note that named it on this sheet.
+const TR_SHEET_RE = /TR room on sheet (\S+)/i;
+function trRoomSheet(name, exitPin, noteText) {
+  const own = pinOf(name);
+  if (own?.page_id) return { sheet: sheetName(plans.find((p) => p.id === own.page_id)), pinned: true };
+  const saved = exitPin?.note?.match(TR_SHEET_RE)?.[1];
+  if (saved) return { sheet: saved, pinned: false };
+  const ref = String(noteText || '').match(/SHEET\s+([A-Z]{1,3}[\d.\-]*\d[A-Z0-9.\-]*)/i)?.[1];
+  return ref ? { sheet: ref.replace(/[.,;]+$/, '').toUpperCase(), pinned: false } : { sheet: '', pinned: false };
+}
 function selectExit(name) {
   const ex = exitsOn(pinPageId).find((d) => d.name === name);
+  const note = (mentions.get(pinPageId) || []).find((m) => m.name === name && m.kind === 'note');
+  const where = trRoomSheet(name, ex, note?.text);
   pinSel = { kind: 'exit', name, tr_id: ex?.tr_id ?? trIdOf(name), page_id: pinPageId, x: ex?.x_norm ?? null, y: ex?.y_norm ?? null,
-    stub: Number(ex?.stub_ft) || 0, pinId: ex?.id ?? null, movesFrom: null };
+    stub: Number(ex?.stub_ft) || 0, pinId: ex?.id ?? null, movesFrom: null, trSheet: where.sheet, trPinned: where.pinned };
   renderPinPage();
 }
 $('exit-add').onclick = () => {
@@ -826,11 +839,16 @@ function renderPinEdit() {
   $('pin-edit').innerHTML = `<div style="display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; width: 100%">
     <div style="font-weight: 700; font-size: 15px; align-self: center; min-width: 90px">${pinSel.kind === 'exit' ? '→ ' : ''}${esc(pinSel.name)}${pinSel.kind === 'exit' ? '<div class="small muted" style="font-weight: 400">exit pin — TR is off this sheet</div>' : ''}</div>
     <label class="lbl" style="letter-spacing: 0" title="${pinSel.kind === 'exit' ? 'Feet of cable from this exit point to the TR (measured on the TR\'s sheet, or the riser run)' : 'Fixed extra cable to the TR, e.g. a jumper'}">${pinSel.kind === 'exit' ? 'Stub ft (exit → TR)' : 'Stub ft'}<input class="field" id="pin-stub" type="number" min="0" step="1" style="padding: 6px 8px; font-size: 13px; width: 90px" value="${pinSel.stub}"></label>
-    <span class="small muted" style="align-self: center; flex-grow: 1">${pinSel.x == null ? 'Click the drawing to place it.' : `(${pinSel.x.toFixed(3)}, ${pinSel.y.toFixed(3)})`}${from ? ` · saving moves it from ${esc(sheetName(from))}` : ''}</span>
+    ${pinSel.kind === 'exit' ? (pinSel.trPinned
+      ? `<span class="small" style="align-self: center">TR room on <b>${esc(pinSel.trSheet)}</b> <span class="muted">(pinned there)</span></span>`
+      : `<label class="lbl" style="letter-spacing: 0">TR room on sheet<input class="field" id="pin-trsheet" list="pin-sheets" style="padding: 6px 8px; font-size: 13px; width: 110px" value="${esc(pinSel.trSheet || '')}" placeholder="e.g. T1.1.H"></label>
+         <datalist id="pin-sheets">${plans.map((p) => `<option value="${esc(sheetName(p))}">`).join('')}</datalist>`) : ''}
+    <span class="small muted" style="align-self: center; flex-grow: 1">${pinSel.x == null ? (pinSel.kind === 'exit' ? 'Click where the cable leaves this sheet.' : 'Click the drawing to place it.') : `(${pinSel.x.toFixed(3)}, ${pinSel.y.toFixed(3)})`}${from ? ` · saving moves it from ${esc(sheetName(from))}` : ''}</span>
     <button type="button" class="btn green small" id="pin-save"${pinSel.x == null ? ' disabled' : ''}>Save pin</button>
     ${pinSel.pinId ? '<button type="button" class="btn muted small" id="pin-clear">Remove pin</button>' : ''}
   </div>`;
   $('pin-stub').oninput = (e) => { pinSel.stub = Math.max(0, Number(e.target.value) || 0); };
+  if ($('pin-trsheet')) $('pin-trsheet').oninput = (e) => { pinSel.trSheet = e.target.value.trim().toUpperCase(); };
   $('pin-save').onclick = savePin;
   if ($('pin-clear')) $('pin-clear').onclick = clearPin;
 }
@@ -875,7 +893,8 @@ function drawPins(scrollTo = false) {
     const px = d.x_norm * o.width, py = d.y_norm * o.height;
     g.fillStyle = '#7a3ab0'; g.beginPath(); g.moveTo(px, py - 8); g.lineTo(px + 8, py); g.lineTo(px, py + 8); g.lineTo(px - 8, py); g.closePath(); g.fill();
     g.font = '700 12px "JetBrains Mono", monospace'; g.lineWidth = 3; g.strokeStyle = 'rgba(255,255,255,.9)';
-    const t = `→ ${d.name} +${Number(d.stub_ft) || 0} ft`; g.strokeText(t, px + 12, py - 8); g.fillStyle = '#7a3ab0'; g.fillText(t, px + 12, py - 8);
+    const where = trRoomSheet(d.name, d).sheet;
+    const t = `→ ${d.name}${where ? ' (' + where + ')' : ''} +${Number(d.stub_ft) || 0} ft`; g.strokeText(t, px + 12, py - 8); g.fillStyle = '#7a3ab0'; g.fillText(t, px + 12, py - 8);
   }
   if (pinSel && pinSel.x != null) {
     dot(pinSel.x, pinSel.y, '#0b7a2a', (pinSel.kind === 'exit' ? '→ ' : '') + pinSel.name, true, false);
@@ -895,7 +914,8 @@ async function savePin() {
   try {
     // A TR has one serving pin: saving on this sheet moves it here if it was elsewhere.
     await post('/api/wf/wf4/pins', { project_id: Number(projectId), page_id: pinPageId, name: s.name, tr_id: s.tr_id, source: 'user_pin',
-      pin_kind: s.kind === 'exit' ? 'exit' : undefined, x_norm: s.x, y_norm: s.y, stub_ft: s.stub });
+      pin_kind: s.kind === 'exit' ? 'exit' : undefined, x_norm: s.x, y_norm: s.y, stub_ft: s.stub,
+      note: s.kind === 'exit' && s.trSheet ? `TR room on sheet ${s.trSheet}` : undefined });
     if (s.movesFrom != null) { const old = pins.find((d) => d.name === s.name && d.page_id === s.movesFrom && d.pin_kind !== 'exit'); if (old) await api('/api/wf/wf4/pins?id=' + old.id, { method: 'DELETE' }).catch(() => {}); }
     pins = await api('/api/wf/wf4/pins?project_id=' + projectId);
     status(`${s.kind === 'exit' ? 'Exit pin' : 'Pin'} saved for ${s.name} on ${sheetName(plans.find((p) => p.id === pinPageId))}.`, 'ok');
@@ -956,12 +976,18 @@ async function findTrs() {
         }
         return words;
       };
+      // The note around a box: its line and the lines just above/below, in reading order.
+      const noteText = (it) => {
+        const hh = Math.hypot(it.transform[2], it.transform[3]) || 1, x0 = it.transform[4], x1 = x0 + (it.width || 0), y = it.transform[5];
+        return boxes.filter((b) => b.y <= y + hh * 1.6 && b.y >= y - hh * 2.6 && b.x1 >= x0 - hh * 40 && b.x0 <= x1 + hh * 40 && Math.abs(b.h - hh) <= hh * 0.3)
+          .sort((a, b) => (b.y - a.y) || (a.x0 - b.x0)).map((b) => b.str).join(' ').replace(/\s+/g, ' ').trim();
+      };
       for (const it of tc.items) {
         // A room label is text that is just the TR name (optionally "TR ..."); a
         // name inside a sentence ("SERVED FROM TR H133-1 REFER TO …") is a note:
         // it points at a TR elsewhere and must never place a pin by itself.
         const words = String(it.str || '').trim().split(/\s+/).filter(Boolean);
-        const isRoom = words.length <= 2 && inLine(it) < 2;
+        const isRoom = words.length <= 2 && inLine(it) === 0;
         for (const tok of words) {
           // TR-like tokens only: has a digit, and a letter or a hyphen (A502-1, EB51A, 110-12)
           if (tok.length < 3 || !/\d/.test(tok) || !(/[A-Z]/i.test(tok) || tok.includes('-'))) continue;
@@ -970,7 +996,7 @@ async function findTrs() {
           const h = Math.hypot(it.transform[2], it.transform[3]);
           const [px, py] = v1.convertToViewportPoint(it.transform[4] + (it.width || 0) / 2, it.transform[5] + h / 2);
           const occ = { page_id: p.id, x: Math.min(1, Math.max(0, px / v1.width)), y: Math.min(1, Math.max(0, py / v1.height)), h,
-            kind: isRoom ? 'room' : 'note', text: String(it.str || '').trim() };
+            kind: isRoom ? 'room' : 'note', text: isRoom ? String(it.str || '').trim() : noteText(it) };
           const prev = onPage.get(m.match);
           // on a sheet, a room label beats a note; then bigger text wins
           if (!prev || (occ.kind === 'room' && prev.kind === 'note') || (occ.kind === prev.kind && h > prev.h)) onPage.set(m.match, occ);
@@ -980,6 +1006,18 @@ async function findTrs() {
       mentions.set(p.id, [...onPage.entries()].map(([name, o]) => ({ name, tr_id: trIdOf(name), x: o.x, y: o.y, kind: o.kind, text: o.text })));
       page.cleanup();
     }
+    // Clean-up: pins the earlier version placed automatically on a NOTE (not a
+    // room label). Only automatic pins; pins placed or moved by hand are kept.
+    let cleaned = 0;
+    for (const d of pins.filter((x) => x.source === 'auto' && x.pin_kind !== 'exit' && x.page_id && x.x_norm != null)) {
+      const onIt = mentions.get(d.page_id) || [];
+      const room = onIt.find((m) => m.name === d.name && m.kind === 'room');
+      const note = onIt.find((m) => m.name === d.name && m.kind === 'note');
+      if (!room && note && Math.hypot(note.x - d.x_norm, note.y - d.y_norm) < 0.03) {
+        try { await api('/api/wf/wf4/pins?id=' + d.id, { method: 'DELETE' }); cleaned++; } catch (e) { console.warn('[pins cleanup]', e.message); }
+      }
+    }
+    if (cleaned) pins = await api('/api/wf/wf4/pins?project_id=' + projectId);
     let placed = 0;
     for (const t of trs) {
       const b = best.get(t.tr_number);
@@ -991,7 +1029,7 @@ async function findTrs() {
     const all = [...mentions.values()].flat();
     const rooms = new Set(all.filter((m) => m.kind === 'room').map((m) => m.name)).size;
     const inNotes = new Set(all.filter((m) => m.kind === 'note').map((m) => m.name)).size;
-    status(`${rooms} TR room label${rooms === 1 ? '' : 's'} on the loaded plans${inNotes ? ` · ${inNotes} TR${inNotes === 1 ? '' : 's'} named in notes` : ''}${placed ? ` · ${placed} pin${placed === 1 ? '' : 's'} placed` : ''}.`, 'ok');
+    status(`${rooms} TR room label${rooms === 1 ? '' : 's'} on the loaded plans${inNotes ? ` · ${inNotes} TR${inNotes === 1 ? '' : 's'} named in notes` : ''}${placed ? ` · ${placed} pin${placed === 1 ? '' : 's'} placed` : ''}${cleaned ? ` · ${cleaned} pin${cleaned === 1 ? '' : 's'} removed that had been placed on a note` : ''}.`, 'ok');
     pinSel = null; renderPinPage();
   } catch (e) { status(e.message, 'err'); }
   $('pins-find').disabled = false;
