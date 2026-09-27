@@ -1706,7 +1706,7 @@ function openMap(pageId) {
 }
 $('map-back').onclick = () => { mapPageId = null; mapSel = null; mapAdd = null; renderReview(); };
 document.querySelectorAll('[data-mzoom]').forEach((b) => b.onclick = () => { mapZoom = b.dataset.mzoom; renderMap(); });
-$('map-type').onchange = () => { mapType = $('map-type').value; drawMap(); };
+$('map-type').onchange = () => { mapType = $('map-type').value; drawMap(); if (mapAdd) renderMapCard(); };
 $('map-recount').onclick = async () => {
   const p = mapPage(); if (!p) return;
   await runSheets([p]);
@@ -1811,13 +1811,22 @@ $('map-ovl').addEventListener('click', (e) => {
   drawMap(); renderMapCard();
 });
 
+// Add device defaults to the type the map is filtered to; otherwise to the type used last.
+let lastAddTypeId = null;
+function defaultAddTypeId(types) {
+  const byFilter = mapType && types.find((t) => t.name === mapType);
+  if (byFilter) return byFilter.id;
+  if (lastAddTypeId != null && types.some((t) => String(t.id) === String(lastAddTypeId))) return lastAddTypeId;
+  return types[0]?.id ?? null;
+}
+
 function renderMapCard() {
   if (mapPageId == null) return;
   const card = $('map-card');
   if (mapAdd) {
     const types = (summary.device_types || []).filter((t) => t.verified);
     card.innerHTML = `<div style="font-weight: 700">Add a device here</div>
-      <label class="lbl" style="letter-spacing: 0">Type<select class="field" id="add-type" style="padding: 7px 8px; font-size: 13px">${types.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select></label>
+      <label class="lbl" style="letter-spacing: 0">Type<select class="field" id="add-type" style="padding: 7px 8px; font-size: 13px">${types.map((t) => `<option value="${t.id}"${String(t.id) === String(defaultAddTypeId(types)) ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}</select></label>
       <div class="small muted">Its cable length is measured at the next count of this sheet. Added devices are kept when the sheet is re-counted.</div>
       <div style="display: flex; gap: 8px"><button type="button" class="btn green small" id="add-go"${types.length ? '' : ' disabled'}>Add device</button><button type="button" class="btn muted small" id="add-cancel">Cancel</button></div>`;
     $('add-go').onclick = addManualDevice;
@@ -1892,6 +1901,7 @@ async function restoreDevice(d) {
 }
 async function addManualDevice() {
   const typeId = Number($('add-type').value); if (!typeId || !mapAdd) return;
+  lastAddTypeId = typeId;
   $('add-go').disabled = true;
   try {
     await post('/api/wf/wf4/manual', { project_id: Number(projectId), page_id: mapPageId, device_type_id: typeId, x_norm: mapAdd.x, y_norm: mapAdd.y });
