@@ -178,9 +178,17 @@ async function readSheet(p) {
 }
 
 // ── shared bits ──
-const statusPill = (item, blocker) => item.confirmed_at ? '<span class="pill ok">✓ confirmed</span>'
-  : blocker ? `<span class="pill warn" title="${esc(blocker)}">${esc(/^add it in|^accept/.test(blocker) ? 'out' : 'needs attention')}</span>`
-  : '<span class="pill review">to review</span>';
+// Say what is needed, not just that something is: e.g. "confirm CN 1 first" (click → Cable types).
+const statusPill = (item, blocker) => {
+  if (item.confirmed_at) return '<span class="pill ok">✓ confirmed</span>';
+  if (!blocker) return '<span class="pill review">to review</span>';
+  if (/^add it in|^accept/.test(blocker)) return '<span class="pill none">out</span>';
+  if (/cable type not (confirmed|set)/.test(blocker)) {
+    const notes = [...new Set([item.core_a_note, item.core_b_note].filter((n) => n != null))].map((n) => 'CN ' + n).join(' + ');
+    return `<button type="button" class="pill warn" data-gocab="1" style="cursor: pointer; font-family: inherit" title="Confirm the cable type on the Cable types tab first">confirm ${esc(notes)} first →</button>`;
+  }
+  return `<span class="pill warn" title="${esc(blocker)}">${esc(blocker.length > 40 ? blocker.slice(0, 38) + '…' : blocker)}</span>`;
+};
 const confirmBtn = (kind, key, item, blocker) => locked ? '' : item.confirmed_at
   ? `<button type="button" class="link" data-unconfirm="${kind}:${esc(key)}">unconfirm</button>`
   : `<button type="button" class="btn green small" data-confirm="${kind}:${esc(key)}" ${blocker ? `disabled title="${esc(blocker)}"` : ''}>Confirm</button>`;
@@ -284,6 +292,7 @@ function renderAllow() {
 
 // ── wiring ──
 function wire() {
+  document.querySelectorAll('[data-gocab]').forEach((b) => b.onclick = () => document.querySelector('[data-tab="cab"]').click());
   document.querySelectorAll('[data-cabtype]').forEach((s) => s.onchange = () => act(() => call('set_cable', { note_number: Number(s.dataset.cabtype), isp_osp: s.value || null, basis: 'ISP/OSP set by user' }), 'Saved — confirm it when right.'));
   document.querySelectorAll('[data-confirm]').forEach((b) => b.onclick = () => confirmItem(b.dataset.confirm, true));
   document.querySelectorAll('[data-unconfirm]').forEach((b) => b.onclick = () => confirmItem(b.dataset.unconfirm, false));
