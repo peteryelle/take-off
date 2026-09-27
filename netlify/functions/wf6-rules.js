@@ -12,14 +12,17 @@
 //   { action:'accept_read', project_id, rule_key }     take the sheet's newer read for an edited row
 //   { action:'add_rule', project_id, rule:{ item, part_number?, ru?, qty_rule, params? }, basis? }
 //   { action:'delete_rule', project_id, rule_key }      rows the user added only
+//   { action:'confirm_rule', project_id, rule_key, confirmed:true|false }
+//   { action:'confirm_ready', project_id }             confirm every counting rule with nothing missing
+//   Any edit to a rule, or a re-read that changes it, clears its confirmation.
 // ─────────────────────────────────────────────────────────────────
 
 import { ok, err, CORS } from './utils/clients.js';
 import { requireOrg } from './utils/auth.js';
 import { td, assertWfProjectInOrg } from './utils/takeoff-db.js';
-import { METHOD_KEYS } from '../../public/lib/wf6-rules.js';
+import { METHOD_KEYS, confirmBlocker, countsSomething } from '../../public/lib/wf6-rules.js';
 
-const RULE_COLS = 'id, rule_key, note_kind, note_number, ref, item, part_number, ru, qty_rule, zone, params, note_text, stated_on_sheet, source, page_id, sheet_revision_id, original_value, override_basis, conflict, entered_at';
+const RULE_COLS = 'id, rule_key, note_kind, note_number, ref, item, part_number, ru, qty_rule, zone, params, note_text, stated_on_sheet, source, page_id, sheet_revision_id, original_value, override_basis, conflict, entered_at, confirmed_at, confirmed_by';
 const ZONES = [null, 'top', 'middle', 'bottom', 'side'];
 const SHEET_FIELDS = ['item', 'part_number', 'ru', 'qty_rule', 'zone', 'params', 'note_text', 'stated_on_sheet', 'ref', 'note_kind', 'note_number'];
 
@@ -117,13 +120,15 @@ export default async function handler(req) {
           if (error) return err(`${r.rule_key}: ${error.message}`, 500);
           inserted++;
         } else if (cur.source === 'extracted' || cur.source === 'imported') {
-          const { error } = await db.from('rack_rules').update({ ...r, ...base, conflict: null, entered_by: user.id, entered_at: now }).eq('id', cur.id);
+          const unchanged = same(sheetView(r), sheetView(cur));
+          const keep = unchanged ? {} : { confirmed_at: null, confirmed_by: null };
+          const { error } = await db.from('rack_rules').update({ ...r, ...base, ...keep, conflict: null, entered_by: user.id, entered_at: now }).eq('id', cur.id);
           if (error) return err(`${r.rule_key}: ${error.message}`, 500);
           updated++;
         } else {
           const was = cur.original_value || sheetView(cur);
           const conflict = same(sheetView(r), was) ? null : sheetView(r);
-          const { error } = await db.from('rack_rules').update({ conflict }).eq('id', cur.id);
+          const { error } = await db.from('rack_rules').update(conflict ? { conflict, confirmed_at: null, confirmed_by: null } : { conflict }).eq('id', cur.id);
           if (error) return err(`${r.rule_key}: ${error.message}`, 500);
           if (conflict) conflicts++;
         }
@@ -157,7 +162,7 @@ export default async function handler(req) {
         item: next.item, part_number: next.part_number, ru: next.ru, qty_rule: next.qty_rule, zone: next.zone, params: next.params,
         source: cur.source === 'manual' ? 'manual' : 'edited', override_basis: basis,
         original_value: cur.source === 'extracted' ? sheetView(cur) : cur.original_value,
-        entered_by: user.id, entered_at: now,
+        entered_by: user.id, entered_at: now, confirmed_at: null, confirmed_by: null,
       };
       const { data, error } = await db.from('rack_rules').update(upd).eq('id', cur.id).select(RULE_COLS).single();
       if (error) return err(error.message, 500);
@@ -169,7 +174,7 @@ export default async function handler(req) {
       if (!cur || !cur.conflict) return err('No newer sheet read for this rule', 404);
       const r = cleanRule({ ...cur.conflict, rule_key: cur.rule_key });
       const { data, error } = await db.from('rack_rules')
-        .update({ ...r, source: 'extracted', override_basis: null, original_value: null, conflict: null, entered_by: user.id, entered_at: now })
+        .update({ ...r, source: 'extracted', override_basis: null, original_value: null, conflict: null, entered_by: user.id, entered_at: now, confirmed_at: null, confirmed_by: null })
         .eq('id', cur.id).select(RULE_COLS).single();
       if (error) return err(error.message, 500);
       return ok(data);
@@ -192,6 +197,33 @@ export default async function handler(req) {
       const { error } = await db.from('rack_rules').delete().eq('id', cur.id);
       if (error) return err(error.message, 500);
       return ok({ deleted: b.rule_key });
+    }
+
+    if (b.action === 'confirm_rule') {
+      const cur = await getRule(b.rule_key);
+      if (!cur) return err('Rule not found', 404);
+      if (b.confirmed !== false) {
+        if (!countsSomething(cur)) return err('This rule is not counted — nothing to confirm');
+        const why = confirmBlocker(cur);
+        if (why) return err(`${cur.ref || cur.rule_key}: ${why}`);
+      }
+      const { data, error } = await db.from('rack_rules')
+        .update(b.confirmed === false ? { confirmed_at: null, confirmed_by: null } : { confirmed_at: now, confirmed_by: user.id })
+        .eq('id', cur.id).select(RULE_COLS).single();
+      if (error) return err(error.message, 500);
+      return ok(data);
+    }
+
+    if (b.action === 'confirm_ready') {
+      const { data: all, error } = await db.from('rack_rules').select(RULE_COLS).eq('project_id', P);
+      if (error) return err(error.message, 500);
+      const ready = all.filter((r) => countsSomething(r) && !r.confirmed_at && !confirmBlocker(r));
+      if (ready.length) {
+        const { error: uErr } = await db.from('rack_rules').update({ confirmed_at: now, confirmed_by: user.id }).in('id', ready.map((r) => r.id));
+        if (uErr) return err(uErr.message, 500);
+      }
+      const left = all.filter((r) => countsSomething(r) && !r.confirmed_at && confirmBlocker(r));
+      return ok({ confirmed: ready.length, blocked: left.map((r) => ({ rule_key: r.rule_key, ref: r.ref, why: confirmBlocker(r) })) });
     }
 
     return err('Unknown action');

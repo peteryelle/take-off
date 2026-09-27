@@ -269,9 +269,22 @@ export function capacityFor(elevations, racks) {
   return e ? { passive: e.capacity_passive ?? null, active: e.capacity_active ?? null, detail_ref: e.detail_ref } : null;
 }
 
+// A rule that counts something needs the user's confirmation before it is applied.
+export const countsSomething = (r) => r.note_kind !== 'drawing' && !['layout', 'none'].includes(r.qty_rule);
+export const isConfirmed = (r) => !!r.confirmed_at;
+// Why a rule can't be confirmed yet (null = it can).
+export function confirmBlocker(r) {
+  if (r.conflict) return 'the sheet now reads differently — take the new read or edit, then confirm';
+  const miss = missingParams(r);
+  if (miss.length) return 'set ' + miss.map((p) => PARAM_LABEL[p] || p).join(', ') + ' first';
+  if (r.qty_rule === 'not_stated') return 'pick how it is counted first';
+  return null;
+}
+
 // Apply confirmed rules to one TR.
 // tr: { tr_name, racks (WF5 new racks|null), panels (WF2), terminations (WF2), isp_osp ('isp'|'osp'|null), wall_mount (bool|null) }
-export function sizeTr(rules, tr, elevations = []) {
+export function sizeTr(rules, tr, elevations = [], opts = {}) {
+  const requireConfirmed = !!opts.requireConfirmed;
   const racks = tr.racks == null ? null : Number(tr.racks);
   const out = [];
   const byKey = new Map();
@@ -280,7 +293,8 @@ export function sizeTr(rules, tr, elevations = []) {
   for (const r of counted.filter((x) => x.qty_rule !== 'unused_ru')) {
     const miss = missingParams(r);
     let qty = null, per_rack = null, note = null;
-    if (racks == null && r.qty_rule !== 'per_wall_mount') note = 'rack count not entered in WF5';
+    if (requireConfirmed && !isConfirmed(r)) note = 'rule not confirmed';
+    else if (racks == null && r.qty_rule !== 'per_wall_mount') note = 'rack count not entered in WF5';
     else if (miss.length) note = 'set ' + miss.map((p) => PARAM_LABEL[p] || p).join(', ');
     else switch (r.qty_rule) {
       case 'per_rack': qty = racks * pv(r, 'each', 1); break;
@@ -321,7 +335,8 @@ export function sizeTr(rules, tr, elevations = []) {
     const miss = missingParams(r);
     let qty = null, note = null;
     const cap = [...byKey.values()].find((x) => x.rule.params?.ru_role?.v === 'capacity' && x.rule.qty_rule === 'per_rack');
-    if (racks == null) note = 'rack count not entered in WF5';
+    if (requireConfirmed && !isConfirmed(r)) note = 'rule not confirmed';
+    else if (racks == null) note = 'rack count not entered in WF5';
     else if (!(racks > 0)) qty = 0;
     else if (miss.length) note = 'set ' + miss.map((p) => PARAM_LABEL[p] || p).join(', ');
     else if (!cap || !cap.rule.ru) note = 'no rack RU on the sheet';
@@ -358,7 +373,10 @@ export function sizeTr(rules, tr, elevations = []) {
 export function summaryOf(rules, sized) {
   const userMissing = rules.filter((r) => r.note_kind !== 'drawing').reduce((n, r) => n + missingParams(r).length, 0);
   const userSet = rules.reduce((n, r) => n + Object.values(r.params || {}).filter((p) => p && p.source === 'user' && p.v != null && p.v !== '').length, 0);
+  const counting = rules.filter(countsSomething);
   return {
+    rules_counting: counting.length,
+    confirmed: counting.filter(isConfirmed).length,
     coded: rules.filter((r) => r.note_kind === 'coded' && !r.rule_key.includes('-')).length,
     user_set: userSet, user_missing: userMissing,
     trs: sized.length,

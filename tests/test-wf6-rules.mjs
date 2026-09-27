@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { parseCodedNotes } from '../public/lib/parse-coded-notes.js';
 import { linesFromTextContent, readDrawingNotes, readElevations, readNoteFields, suggestRules, missingParams,
-  sizeTr, splitEven, capacityFor, summaryOf, METHOD_KEYS } from '../public/lib/wf6-rules.js';
+  sizeTr, splitEven, capacityFor, summaryOf, METHOD_KEYS, confirmBlocker, countsSomething, isConfirmed } from '../public/lib/wf6-rules.js';
 
 let pass = 0, fail = 0;
 const eq = (name, got, want) => {
@@ -115,7 +115,21 @@ eq('wall-mount unknown when WF5 is empty', sizeTr(rules, { tr_name: 'G2', racks:
 set('CN3-cassette', 'fibers_per_cassette', 24);
 eq('24 fibers per cassette -> ceil(36/24)x2', sizeTr(rules, tr, el).items.find((i) => i.rule_key === 'CN3-cassette').qty, 4);
 
-eq('summary', summaryOf(rules, [s, over, none]), { coded: 10, user_set: 6, user_missing: 0, trs: 3, over_capacity: 1, waits_wf7: 0 });
+eq('summary', summaryOf(rules, [s, over, none]), { rules_counting: 10, confirmed: 0, coded: 10, user_set: 6, user_missing: 0, trs: 3, over_capacity: 1, waits_wf7: 0 });
+
+// confirmation: only confirmed rules are applied when the page asks for it
+eq('counting rules (drawing notes and "not counted" excluded)', rules.filter(countsSomething).map((r) => r.rule_key),
+  ['CN1', 'CN2', 'CN3', 'CN3-cassette', 'CN4', 'CN5', 'CN6', 'CN7', 'CN9', 'CN10']);
+eq('unconfirmed rule not applied', sizeTr(rules, tr, el, { requireConfirmed: true }).items.find((i) => i.rule_key === 'CN1').note, 'rule not confirmed');
+R('CN1').confirmed_at = '2026-09-27T15:00:00Z';
+eq('confirmed rule applied', sizeTr(rules, tr, el, { requireConfirmed: true }).items.find((i) => i.rule_key === 'CN1').qty, 3);
+eq('blanks wait for confirmation too', sizeTr(rules, tr, el, { requireConfirmed: true }).items.find((i) => i.rule_key === 'CN5').note, 'rule not confirmed');
+eq('can confirm when complete', confirmBlocker(R('CN4')), null);
+const blankCopy = { ...R('CN5'), params: { ...R('CN5').params, switch_ru: { v: null, source: 'user' } } };
+eq('cannot confirm with a missing value', confirmBlocker(blankCopy), 'set RU per switch first');
+eq('cannot confirm with a changed sheet', confirmBlocker({ ...R('CN4'), conflict: { item: 'x' } }).startsWith('the sheet now reads'), true);
+eq('cannot confirm "quantity not stated"', confirmBlocker({ ...R('CN4'), qty_rule: 'not_stated' }), 'pick how it is counted first');
+eq('summary counts confirmed', summaryOf(rules, []).confirmed, 1);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
