@@ -15,7 +15,7 @@ export const STEPS = [
   { code: 'WF5', name: 'TR rooms', roles: ['tr_room'], page: 'wf5.html' },
   { code: 'WF6', name: 'Rack & details', roles: ['rack', 'detail'], page: 'wf6.html' },
   { code: 'WF7', name: 'Riser', roles: ['riser'], page: 'wf7.html' },
-  { code: 'WF8', name: 'BOM', roles: [], page: 'wf-soon.html' },
+  { code: 'WF8', name: 'BOM', roles: [], page: 'wf8.html' },
 ];
 
 export const STEP_CODES = STEPS.map((s) => s.code);

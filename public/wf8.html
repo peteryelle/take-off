@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WF8 · BOM — Take-off</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="auth.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+<link rel="stylesheet" href="wf.css">
+<style>
+.wf-page { max-width: 1440px; }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); }
+.tab { font-family: inherit; font-size: 16px; padding: 11px 16px; background: none; border: none; border-bottom: 2px solid transparent; color: var(--muted); cursor: pointer; }
+.tab[aria-selected="true"] { color: var(--green); border-bottom-color: var(--green); font-weight: 700; }
+.lead { font-size: 16px; color: var(--muted); margin-bottom: 12px; }
+table.g { width: 100%; border-collapse: collapse; font-size: 15px; }
+table.g th { text-align: left; color: var(--muted); font-weight: normal; font-size: 13px; letter-spacing: .05em; text-transform: uppercase; padding: 10px 12px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); }
+table.g td { padding: 8px 12px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
+table.g td.m { color: var(--muted); font-size: 14px; }
+.wrap { max-height: 60vh; overflow: auto; }
+.pill.ok { color: var(--green); border-color: var(--green-bd); background: var(--green-bg); font-weight: 700; }
+.pill.review { color: var(--amber); border-color: var(--amber-bd); background: var(--amber-bg); }
+.pill.warn { color: var(--orange); border-color: var(--orange-bd); background: var(--orange-bg); }
+.pill.none { color: var(--muted); border-color: #3a443f; background: #141816; }
+.pill.ref { color: var(--purple); border-color: var(--purple-bd); background: var(--purple-bg); font-weight: 700; }
+.pill.add { color: var(--green); border-color: #2f6a3a; background: #12241a; }
+.bar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 12px 0; }
+</style>
+</head>
+<body>
+<nav id="to-nav"></nav>
+<script src="nav.js"></script>
+
+<main class="wf-page">
+  <div class="wf-head">
+    <div>
+      <a class="wf-crumb" id="crumb" href="wf-projects.html">← Project</a>
+      <h1 class="wf-title"><span class="code">WF8</span> · BOM</h1>
+      <div class="wf-sub">Output only · quantities from confirmed WF2–WF7 data, written as values · the workbook layout gives sheets, columns and the pricing arithmetic · cost, margin and labor are filled in the workbook</div>
+    </div>
+  </div>
+
+  <section class="banner red" id="err-banner" hidden><div style="flex-grow: 1"><div class="kicker" id="err-kicker">ERROR</div><div class="msg" id="err-msg"></div></div></section>
+
+  <nav class="tabs" role="tablist" aria-label="WF8 sections">
+    <button type="button" class="tab" role="tab" aria-selected="true" data-tab="sec">Sheets</button>
+    <button type="button" class="tab" role="tab" aria-selected="false" data-tab="parts">Parts &amp; prices</button>
+    <button type="button" class="tab" role="tab" aria-selected="false" data-tab="chk" id="tab-chk">Cross-checks</button>
+    <button type="button" class="tab" role="tab" aria-selected="false" data-tab="snap" id="tab-snap">Snapshots</button>
+    <button type="button" class="tab" role="tab" aria-selected="false" data-tab="co">Change orders</button>
+  </nav>
+
+  <section data-panel="sec">
+    <div class="lead">One row per workbook sheet. A sheet is ready when its step is confirmed and the items it uses are confirmed. You can generate at any time — a sheet that isn't ready is generated with what is confirmed and flagged in Notes &amp; Assumptions.</div>
+    <div class="panel wrap"><table class="g"><thead><tr><th>Sheet</th><th>From</th><th>Status</th><th>Why</th><th>What goes in</th><th></th></tr></thead><tbody id="sec-body"></tbody></table></div>
+  </section>
+
+  <section data-panel="parts" hidden>
+    <div class="lead">Every quantity the BOM carries, as it will be snapshotted. Parts, assemblies and price import (workbook or manual entry) come in the next build — until then cost, margin and labor are filled in the generated workbook.</div>
+    <div class="panel wrap"><table class="g"><thead><tr><th>BOM item</th><th>From</th><th>Qty</th><th>Unit</th><th>Detail</th><th>Parts</th></tr></thead><tbody id="items-body"></tbody></table></div>
+  </section>
+
+  <section data-panel="chk" hidden>
+    <div class="lead">Cross-checks between steps, from confirmed data. Each is either a missed item or an RFI; failing checks are listed in Notes &amp; Assumptions.</div>
+    <div class="panel wrap"><table class="g"><thead><tr><th>Check</th><th>Steps</th><th>Result</th><th>Detail</th></tr></thead><tbody id="chk-body"></tbody></table></div>
+  </section>
+
+  <section data-panel="snap" hidden>
+    <div class="lead">Every Generate saves a locked snapshot: the quantities, the sheet revisions they came from, and everything needed to rebuild the workbook. Pin one as the reference — usually the bid — and change orders compare against it.</div>
+    <div class="panel wrap"><table class="g"><thead><tr><th>Snapshot</th><th>When</th><th>Kind</th><th>What</th><th></th></tr></thead><tbody id="snap-body"></tbody></table></div>
+  </section>
+
+  <section data-panel="co" hidden>
+    <div class="lead">Current confirmed data vs the reference snapshot, line by line with the cause. Quantities here; prices are filled in the change-order workbook (same pricing columns and arithmetic as the BOM).</div>
+    <div class="bar"><span id="co-ref" class="muted"></span><span style="flex-grow: 1"></span>
+      <button type="button" class="btn blue small" id="co-refresh">Compare with the reference</button>
+      <button type="button" class="btn green small" id="co-create" disabled>Create change order</button></div>
+    <div class="panel wrap"><table class="g"><thead><tr><th>Line</th><th>Item</th><th>From</th><th>Ref</th><th>Now</th><th>Delta</th><th>Cause</th></tr></thead><tbody id="co-body"><tr><td colspan="7" class="m">Click “Compare with the reference”.</td></tr></tbody></table></div>
+    <h3 style="font-size: 15px; color: var(--muted); letter-spacing: .06em; margin: 22px 0 8px">CHANGE ORDERS</h3>
+    <div class="panel"><table class="g"><thead><tr><th>Number</th><th>Created</th><th>Status</th><th></th></tr></thead><tbody id="cos-body"></tbody></table></div>
+  </section>
+
+  <section class="panel">
+    <div class="row">
+      <span id="footer-msg" style="flex-grow: 1"></span>
+      <button type="button" class="btn green" id="generate" style="font-weight: 700">Generate workbook</button>
+    </div>
+  </section>
+  <div class="status-line" id="status" role="status"></div>
+</main>
+
+<script type="module">
+import { api, post } from './lib/wf-intake-ui.js';
+import { buildWorkbook, buildCoWorkbook } from './lib/wf8-workbook.js';
+
+const projectId = new URLSearchParams(location.search).get('project_id');
+if (!projectId) location.replace('wf-projects.html');
+try { sessionStorage.setItem('to_project_id', projectId); } catch {}
+document.getElementById('crumb').href = 'wf-project.html?project_id=' + projectId;
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const status = (m, c = '') => { $('status').className = 'status-line ' + c; $('status').textContent = m; };
+const PID = Number(projectId);
+const call = (action, body = {}) => post('/api/wf/wf8/bom', { action, project_id: PID, ...body });
+const fmtN = (n) => n == null ? '—' : Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 });
+const when = (t) => new Date(t).toLocaleString();
+const STEP_PAGE = { WF2: 'wf2.html', WF4: 'wf4.html', WF5: 'wf5.html', WF6: 'wf6.html', WF7: 'wf7.html' };
+const WHAT = {
+  tr_schedule: 'TR list, terminations and patch panels (WF2); new/existing racks and wall-mount (WF5); ISP/OSP (WF7)',
+  rack_bom: 'one row per new rack; a column per confirmed per-rack rule, with per-rack splits',
+  tr_summary: 'per TR: every confirmed rack rule, the capacity check, and anything not counted yet',
+  summary: 'rack hardware totals with basis of design, and the pricing columns',
+  device_counts: 'devices by level × type', lengths: 'cable feet by level × type', floor_assemblies: 'faceplates and jacks from counts × ports per outlet',
+  ancillary: 'TR room items (backboard, busbar, tray ft, sleeves, access control, cameras, motion)',
+  backbone: 'confirmed riser feeds per TR and core runs per cable type', allowances: 'confirmed allowance lines: per unit × count', notes: 'every value you set, every override with its reason, routing, checks',
+};
+let data = null, preview = null;
+
+function showError(k, m) { $('err-banner').hidden = false; $('err-kicker').textContent = k; $('err-msg').textContent = m; status(m, 'err'); }
+document.querySelectorAll('.tab').forEach((t) => t.onclick = () => {
+  document.querySelectorAll('.tab').forEach((x) => x.setAttribute('aria-selected', String(x === t)));
+  document.querySelectorAll('[data-panel]').forEach((p) => p.hidden = p.dataset.panel !== t.dataset.tab);
+});
+
+async function download(wb, name) {
+  const buf = await wb.xlsx.writeBuffer();
+  const url = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+  const a = Object.assign(document.createElement('a'), { href: url, download: name });
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+const safe = (s) => String(s || '').replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 60);
+
+function render() {
+  const m = data.model;
+  const pill = (s) => s === 'ready' ? '<span class="pill ok">✓ ready</span>' : s === 'written' ? '<span class="pill none">written for you</span>'
+    : s === 'to review' ? '<span class="pill review">to review</span>' : s === 'waiting' ? '<span class="pill warn">waiting</span>' : '<span class="pill none">no data</span>';
+  $('sec-body').innerHTML = m.sections.map((s) => `<tr>
+    <td style="font-weight: 700">${esc(s.name)}</td><td style="color: var(--amber)">${esc(s.steps.join(' · ') || 'all steps')}</td>
+    <td>${pill(s.status)}</td><td class="m">${esc(s.why)}</td><td class="m">${esc(WHAT[s.key] || '')}</td>
+    <td style="white-space: nowrap">${s.steps.filter((c) => STEP_PAGE[c]).map((c) => `<a class="act" href="${STEP_PAGE[c]}?project_id=${projectId}">${c} →</a>`).join(' ')}</td></tr>`).join('');
+
+  $('items-body').innerHTML = m.items.length ? m.items.map((i) => `<tr><td>${esc(i.item)}</td><td style="color: var(--amber)">${esc(i.step)}</td>
+    <td>${fmtN(i.qty)}</td><td class="m">${esc(i.unit)}</td><td class="m">${esc(i.detail || '')}</td><td><span class="pill none">no parts yet</span></td></tr>`).join('')
+    : '<tr><td colspan="6" class="m">No confirmed quantities yet.</td></tr>';
+
+  const bad = m.checks.filter((c) => !c.ok).length;
+  document.getElementById('tab-chk').textContent = `Cross-checks${bad ? ` (${bad})` : ''}`;
+  $('chk-body').innerHTML = m.checks.map((c) => `<tr><td style="font-weight: 700">${esc(c.name)}</td><td style="color: var(--amber)">${esc(c.steps)}</td>
+    <td>${c.ok ? '<span class="pill ok">ok</span>' : `<span class="pill warn">${esc(c.result)}</span>`}</td><td class="m">${esc(c.detail)}</td></tr>`).join('');
+
+  document.getElementById('tab-snap').textContent = `Snapshots (${data.snapshots.length})`;
+  const kindPill = (k) => k === 'reference' ? '<span class="pill ref">reference</span>' : k === 'co' ? '<span class="pill review">change order</span>' : '<span class="pill none">generated</span>';
+  $('snap-body').innerHTML = data.snapshots.length ? data.snapshots.map((s) => `<tr>
+    <td style="font-weight: 700">${esc(s.label || '#' + s.id)}</td><td class="m">${esc(when(s.created_at))}</td><td>${kindPill(s.kind)}</td>
+    <td class="m">${s.stats ? `${s.stats.trs} TRs · ${s.stats.racks} racks · ${s.stats.items} quantities` : ''} · ${Object.keys(s.sheet_revisions || {}).length} sheet revisions</td>
+    <td style="text-align: right; white-space: nowrap"><button type="button" class="btn blue small" data-dl="${s.id}">Download</button>
+      ${s.kind === 'generated' ? ` <button type="button" class="btn amber small" data-pin="${s.id}">Pin as reference</button>` : ''}</td></tr>`).join('')
+    : '<tr><td colspan="5" class="m">No snapshots yet — Generate workbook saves the first one.</td></tr>';
+
+  $('co-ref').textContent = data.reference ? `Reference: ${data.reference.label} (${when(data.reference.created_at)})` : 'No reference yet — pin a generated snapshot on the Snapshots tab.';
+  $('co-refresh').disabled = !data.reference;
+  $('cos-body').innerHTML = data.change_orders.length ? data.change_orders.map((c) => `<tr><td style="font-weight: 700">${esc(c.number)}</td>
+    <td class="m">${esc(when(c.created_at))}</td><td><span class="pill none">${esc(c.status)}</span></td>
+    <td style="text-align: right"><button type="button" class="btn blue small" data-co="${c.id}">Download CO workbook</button></td></tr>`).join('')
+    : '<tr><td colspan="4" class="m">None yet.</td></tr>';
+
+  const ready = m.sections.filter((s) => s.status === 'ready').length, total = m.sections.filter((s) => s.key !== 'notes').length;
+  const waiting = m.sections.filter((s) => s.status === 'waiting' || s.status === 'no data').map((s) => s.name);
+  $('footer-msg').textContent = `${ready} of ${total} sheets ready${waiting.length ? ` · waiting: ${waiting.join(', ')}` : ''} · generating writes quantities as values, keeps the pricing arithmetic, and saves a locked snapshot`;
+  wire();
+}
+
+function wire() {
+  document.querySelectorAll('[data-dl]').forEach((b) => b.onclick = async () => {
+    try {
+      status('Building the workbook…');
+      const s = await call('snapshot', { snapshot_id: Number(b.dataset.dl) });
+      const wb = buildWorkbook(window.ExcelJS, s.quantities.model, { label: s.label, generated_at: s.created_at, project: data.project.name });
+      await download(wb, `${safe(data.project.name)}_BOM_${safe(s.label)}.xlsx`); status('Downloaded.', 'ok');
+    } catch (e) { status(e.message, 'err'); }
+  });
+  document.querySelectorAll('[data-pin]').forEach((b) => b.onclick = async () => {
+    if (!confirm('Pin this snapshot as the reference? Change orders will compare against it.')) return;
+    try { await call('pin', { snapshot_id: Number(b.dataset.pin) }); await load(); status('Pinned as the reference.', 'ok'); } catch (e) { status(e.message, 'err'); }
+  });
+  document.querySelectorAll('[data-co]').forEach((b) => b.onclick = async () => {
+    try {
+      const r = await call('co', { change_order_id: Number(b.dataset.co) });
+      const wb = buildCoWorkbook(window.ExcelJS, { number: r.change_order.number, lines: r.lines }, { reference: r.reference_label, generated_at: r.change_order.created_at });
+      await download(wb, `${safe(data.project.name)}_${safe(r.change_order.number)}.xlsx`); status('Downloaded.', 'ok');
+    } catch (e) { status(e.message, 'err'); }
+  });
+}
+
+$('generate').onclick = async () => {
+  if (!window.ExcelJS) { showError('EXCEL LIBRARY NOT LOADED', 'The Excel writer could not load — check the connection and reload.'); return; }
+  const notReady = data.model.sections.filter((s) => s.key !== 'notes' && s.status !== 'ready');
+  if (notReady.length && !confirm(`${notReady.length} sheet(s) are not ready (${notReady.map((s) => s.name).join(', ')}). They are generated with what is confirmed and flagged in Notes & Assumptions. Generate now?`)) return;
+  const label = prompt('Label for this snapshot (e.g. "Bid"):', '') ?? null;
+  if (label === null) return;
+  $('generate').disabled = true; status('Generating…');
+  try {
+    const r = await call('generate', { label: label.trim() });
+    const wb = buildWorkbook(window.ExcelJS, r.model, { label: r.snapshot.label, generated_at: r.snapshot.created_at, project: data.project.name });
+    await download(wb, `${safe(data.project.name)}_BOM_${safe(r.snapshot.label)}.xlsx`);
+    await load();
+    status(`Generated and saved as “${r.snapshot.label}”.${data.reference ? '' : ' Pin it as the reference on the Snapshots tab when it is the bid.'}`, 'ok');
+  } catch (e) { showError('GENERATE FAILED', e.message); }
+  $('generate').disabled = false;
+};
+
+$('co-refresh').onclick = async () => {
+  try {
+    preview = await call('co_preview');
+    $('co-body').innerHTML = preview.lines.length ? preview.lines.map((l) => `<tr>
+      <td>${l.line_type === 'add' ? '<span class="pill add">add</span>' : '<span class="pill warn">credit</span>'}</td>
+      <td>${esc(l.item)}</td><td style="color: var(--amber)">${esc(l.step)}</td><td>${fmtN(l.ref_qty)}</td><td>${fmtN(l.cur_qty)}</td>
+      <td style="font-weight: 700">${l.delta > 0 ? '+' : ''}${fmtN(l.delta)}</td><td class="m">${esc(l.cause_note)}</td></tr>`).join('')
+      : '<tr><td colspan="7" class="m">No changes since the reference.</td></tr>';
+    $('co-create').disabled = !preview.lines.length;
+    status(`${preview.lines.length} line(s) changed · ${preview.changes.length} sheet revision(s) differ from the reference.`, 'ok');
+  } catch (e) { status(e.message, 'err'); }
+};
+$('co-create').onclick = async () => {
+  const number = prompt('Change order number:', `CO-${String(data.change_orders.length + 1).padStart(2, '0')}`);
+  if (number === null) return;
+  try { const r = await call('create_co', { number }); await load(); status(`${r.change_order.number} created with ${r.lines} line(s).`, 'ok'); $('co-create').disabled = true; }
+  catch (e) { status(e.message, 'err'); }
+};
+
+async function load() {
+  data = await api('/api/wf/wf8/bom?project_id=' + projectId);
+  $('crumb').textContent = '← ' + data.project.name;
+  render();
+}
+load().catch((e) => showError('COULD NOT LOAD WF8', e.message));
+</script>
+</body>
+</html>
