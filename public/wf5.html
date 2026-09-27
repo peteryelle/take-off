@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WF5 · TR rooms — Take-off</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="auth.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
+<link rel="stylesheet" href="wf.css">
+<style>
+.wf-page { max-width: 1500px; }
+.toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.toolbar .sep { width: 1px; height: 24px; background: var(--line); }
+.viewer { height: 62vh; overflow: auto; background: #000; border-bottom: 1px solid var(--line); }
+.viewer .stack { position: relative; display: inline-block; }
+.viewer canvas { display: block; }
+.viewer canvas.ov { position: absolute; top: 0; left: 0; pointer-events: none; }
+.grid-wrap { max-height: 46vh; overflow: auto; }
+table.grid { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.grid th { position: sticky; top: 0; z-index: 1; background: var(--panel); color: var(--muted); font-weight: normal; font-size: 11px;
+  letter-spacing: .05em; text-transform: uppercase; padding: 8px 4px; border-bottom: 1px solid var(--line); text-align: center; white-space: nowrap; }
+table.grid th.tr, table.grid td.tr { text-align: left; padding-left: 12px; }
+table.grid td { padding: 4px; border-bottom: 1px solid var(--line-soft); text-align: center; }
+table.grid tr.checked td { background: #111d16; }
+table.grid tr.dirty td.tr { color: var(--orange); }
+table.grid td.tr button { font-family: inherit; font-size: 13px; background: none; border: none; color: inherit; padding: 0; cursor: pointer; text-decoration: underline dotted; }
+.cell { width: 64px; font-family: inherit; font-size: 13px; text-align: center; background: var(--bg); color: var(--text); border: 1px solid #3a443f; border-radius: 3px; padding: 5px 4px; }
+.cell.changed { border-color: var(--orange-bd); color: var(--orange); }
+.cell:disabled { opacity: .7; }
+.done-btn { min-width: 92px; }
+.readout { font-size: 13px; color: var(--green); }
+</style>
+</head>
+<body>
+<nav id="to-nav"></nav>
+<script src="nav.js"></script>
+
+<main class="wf-page">
+  <div class="wf-head">
+    <div>
+      <a class="wf-crumb" id="crumb" href="wf-projects.html">← Project</a>
+      <h1 class="wf-title"><span class="code">WF5</span> · TR rooms</h1>
+      <div class="wf-sub">Enter what each enlarged TR room plan (T-40x) shows, one row per TR. Manual entry — no cost.</div>
+    </div>
+    <span class="pill" id="step-pill">…</span>
+  </div>
+
+  <div id="intake"></div>
+
+  <section class="panel" aria-label="Room plan viewer">
+    <div class="toolbar">
+      <label class="muted" style="font-size: 12px">Sheet
+        <select class="field" id="sheet" style="padding: 5px 6px; font-size: 13px; margin-left: 6px" aria-label="Room plan sheet"></select></label>
+      <button type="button" class="btn muted small" id="prev" aria-label="Previous sheet">‹</button>
+      <button type="button" class="btn muted small" id="next" aria-label="Next sheet">›</button>
+      <span class="sep"></span>
+      <button type="button" class="btn muted small" id="zout" aria-label="Zoom out">−</button>
+      <span class="muted" id="zpct" style="min-width: 44px; text-align: center; font-size: 12px">100%</span>
+      <button type="button" class="btn muted small" id="zin" aria-label="Zoom in">+</button>
+      <button type="button" class="btn muted small" id="zfit">Fit</button>
+      <span class="sep"></span>
+      <label class="muted" style="font-size: 12px">Scale
+        <select class="field" id="scale" style="padding: 5px 6px; font-size: 13px; margin-left: 6px" aria-label="Drawing scale">
+          <option value="8">1/8" = 1'-0"</option><option value="5.3333">3/16" = 1'-0"</option><option value="4">1/4" = 1'-0"</option>
+          <option value="2.6667">3/8" = 1'-0"</option><option value="2" selected>1/2" = 1'-0"</option><option value="1.3333">3/4" = 1'-0"</option>
+          <option value="1">1" = 1'-0"</option><option value="0.6667">1-1/2" = 1'-0"</option><option value="0.3333">3" = 1'-0"</option>
+        </select></label>
+      <span class="muted" id="scale-src" style="font-size: 12px"></span>
+      <button type="button" class="btn muted small" id="measure">Measure</button>
+      <button type="button" class="btn muted small" id="mclear">Clear</button>
+      <span class="readout" id="readout"></span>
+    </div>
+    <div class="viewer" id="viewer">
+      <div class="stack" id="stack">
+        <canvas id="pdf"></canvas>
+        <canvas class="ov" id="marks"></canvas>
+        <canvas class="ov" id="mov"></canvas>
+      </div>
+      <div class="empty" id="viewer-empty">No room plan sheets yet. Add the T-40x PDFs above.</div>
+    </div>
+  </section>
+
+  <section class="panel" aria-label="TR rooms">
+    <div class="toolbar">
+      <span style="font-size: 12px; color: var(--muted); letter-spacing: .08em">SET ONE COLUMN</span>
+      <select class="field" id="bulk-cat" style="padding: 5px 6px; font-size: 13px" aria-label="Column"></select>
+      <span class="muted">=</span>
+      <input class="cell" id="bulk-val" inputmode="decimal" value="1" aria-label="Value (blank clears)">
+      <button type="button" class="btn blue small" id="bulk-apply">Apply to checked (0)</button>
+      <label class="check" style="font-size: 12px"><input type="checkbox" id="bulk-all"> all rooms</label>
+      <span style="flex-grow: 1"></span>
+      <button type="button" class="btn muted small" id="check-all">Check all</button>
+      <button type="button" class="btn muted small" id="check-none">Check none</button>
+    </div>
+    <div class="grid-wrap">
+      <table class="grid">
+        <thead><tr id="grid-head"></tr></thead>
+        <tbody id="grid-body"><tr><td colspan="13" class="empty">Loading…</td></tr></tbody>
+      </table>
+    </div>
+    <div class="row">
+      <span class="muted" id="grid-msg" style="flex-grow: 1; font-size: 13px"></span>
+      <button type="button" class="btn muted" id="discard" hidden>Discard changes</button>
+      <button type="button" class="btn green" id="save" disabled>Save changes</button>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="row">
+      <span id="footer-msg" style="flex-grow: 1"></span>
+      <button type="button" class="btn muted" id="reopen" hidden>Reopen</button>
+      <button type="button" class="btn green" id="confirm" style="font-weight: 700">Confirm TR rooms</button>
+    </div>
+  </section>
+  <div class="status-line" id="status" role="status"></div>
+</main>
+
+<script type="module">
+import { mountIntake, api, post } from './lib/wf-intake-ui.js';
+import { CATEGORIES, CATEGORY_LABEL, CATEGORY_UNIT, parseCell, buildRows, rowDirty, changedCells, applyBulk, summary, sheetScale } from './lib/wf5-rows.js';
+
+const projectId = new URLSearchParams(location.search).get('project_id');
+if (!projectId) location.replace('wf-projects.html');
+try { sessionStorage.setItem('to_project_id', projectId); } catch {}
+document.getElementById('crumb').href = 'wf-project.html?project_id=' + projectId;
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const status = (m, c = '') => { $('status').className = 'status-line ' + c; $('status').textContent = m; };
+
+let rows = [];
+let sheets = [];          // WF5 pages: { id, document_id, page_number, sheet_number, title_text }
+let cur = null;           // current sheet
+let locked = false;       // step confirmed -> read only
+const docs = new Map();   // document_id -> pdf.js doc
+let fitScale = 1, zoom = 1, ftPerInch = 2;
+let measuring = false, mpts = [];   // measure points in PDF points
+let placing = null;                 // tr_name waiting for its done-mark click
+
+// ── intake + sheet list ──
+mountIntake($('intake'), { projectId, stepCode: 'WF5', showLocation: false, onData: onIntake });
+
+function onIntake(intake) {
+  sheets = intake.pages
+    .filter((p) => p.step_code === 'WF5' && !p.is_duplicate && !(p.revision && p.revision.status === 'rejected'))
+    .sort((a, b) => String(a.sheet_number || '').localeCompare(String(b.sheet_number || ''), undefined, { numeric: true }) || a.page_number - b.page_number);
+  $('sheet').innerHTML = sheets.length
+    ? sheets.map((p) => `<option value="${p.id}">${esc(p.sheet_number || 'Page ' + p.page_number)}${p.revision && !p.revision.is_current ? ' (not current)' : ''} — ${esc(p.title_text || p.filename || '')}</option>`).join('')
+    : '<option value="">— no room plan sheets —</option>';
+  $('viewer-empty').hidden = !!sheets.length;
+  $('stack').hidden = !sheets.length;
+  if (!sheets.length) { cur = null; return; }
+  const keep = cur && sheets.find((s) => s.id === cur.id);
+  showSheet(keep || sheets[0], !keep);
+}
+$('sheet').onchange = () => { const s = sheets.find((x) => String(x.id) === $('sheet').value); if (s) showSheet(s, true); };
+$('prev').onclick = () => step(-1);
+$('next').onclick = () => step(1);
+function step(d) { if (!cur) return; const i = sheets.findIndex((s) => s.id === cur.id); const s = sheets[i + d]; if (s) showSheet(s, true); }
+
+async function pdfFor(documentId) {
+  if (!docs.has(documentId)) {
+    docs.set(documentId, (async () => {
+      const { url } = await post('/api/wf/documents', { action: 'file_url', document_id: Number(documentId) });
+      return pdfjsLib.getDocument(url).promise;
+    })());
+  }
+  return docs.get(documentId);
+}
+
+async function showSheet(s, refit) {
+  cur = s;
+  $('sheet').value = String(s.id);
+  mpts = [];
+  status(`Loading ${s.sheet_number || 'page ' + s.page_number}…`);
+  try {
+    const doc = await pdfFor(s.document_id);
+    const page = await doc.getPage(s.page_number);
+    if (cur !== s) return;
+    if (refit) {
+      const vp1 = page.getViewport({ scale: 1 });
+      fitScale = ($('viewer').clientWidth || 900) / vp1.width;
+      zoom = 1;
+      // Default the Measure scale to the label printed most often on this sheet.
+      const tc = await page.getTextContent();
+      const sc = sheetScale(tc.items.map((i) => i.str).join(' '));
+      if (sc) { setScaleValue(sc.ft_per_inch); $('scale-src').textContent = `read from sheet (${sc.label} ×${sc.count})`; }
+      else $('scale-src').textContent = 'no scale label found — set it by hand';
+    }
+    await render(page);
+    status('');
+  } catch (e) { status(e.message, 'err'); }
+}
+
+async function render(page) {
+  if (!page) { if (!cur) return; page = await (await pdfFor(cur.document_id)).getPage(cur.page_number); }
+  const vp = page.getViewport({ scale: fitScale * zoom });
+  const c = $('pdf');
+  c.width = Math.floor(vp.width); c.height = Math.floor(vp.height);
+  await page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+  for (const id of ['marks', 'mov']) { $(id).width = c.width; $(id).height = c.height; }
+  $('zpct').textContent = Math.round(zoom * 100) + '%';
+  drawMarks(); drawMeasure();
+}
+$('zin').onclick = () => { zoom = Math.min(6, zoom * 1.4); render(); };
+$('zout').onclick = () => { zoom = Math.max(0.2, zoom / 1.4); render(); };
+$('zfit').onclick = () => cur && showSheet(cur, true);
+$('viewer').addEventListener('wheel', (e) => {
+  if (!cur || !e.ctrlKey) return;          // plain scroll pans
+  e.preventDefault();
+  zoom = e.deltaY < 0 ? Math.min(6, zoom * 1.15) : Math.max(0.2, zoom / 1.15);
+  render();
+}, { passive: false });
+
+// ── measure (cable tray) ──
+function setScaleValue(v) {
+  const opt = [...$('scale').options].find((o) => Math.abs(Number(o.value) - v) < 0.01);
+  if (opt) { $('scale').value = opt.value; ftPerInch = Number(opt.value); }
+  else { const o = new Option(`custom (${v} ft/in)`, String(v)); $('scale').add(o); $('scale').value = String(v); ftPerInch = v; }
+}
+$('scale').onchange = () => { ftPerInch = Number($('scale').value); $('scale-src').textContent = 'set by hand'; drawMeasure(); };
+function setMeasuring(on) {
+  measuring = on;
+  $('measure').textContent = on ? 'Measuring — click points' : 'Measure';
+  $('measure').className = 'btn small ' + (on ? 'amber' : 'muted');
+  $('mov').style.pointerEvents = on ? 'auto' : 'none';
+  $('mov').style.cursor = on ? 'crosshair' : 'default';
+  if (on) setPlacing(null);
+}
+$('measure').onclick = () => setMeasuring(!measuring);
+$('mclear').onclick = () => { mpts = []; drawMeasure(); };
+$('mov').addEventListener('click', (e) => {
+  if (!measuring) return;
+  const r = e.target.getBoundingClientRect(), s = fitScale * zoom;
+  mpts.push([(e.clientX - r.left) / s, (e.clientY - r.top) / s]);
+  drawMeasure();
+});
+function measureFeet() {
+  let pt = 0;
+  for (let i = 1; i < mpts.length; i++) pt += Math.hypot(mpts[i][0] - mpts[i - 1][0], mpts[i][1] - mpts[i - 1][1]);
+  return Math.round((pt / 72) * ftPerInch * 10) / 10;
+}
+function drawMeasure() {
+  const c = $('mov'), ctx = c.getContext('2d'), s = fitScale * zoom;
+  ctx.clearRect(0, 0, c.width, c.height);
+  if (!mpts.length) { $('readout').textContent = ''; return; }
+  ctx.strokeStyle = '#ff4d4d'; ctx.fillStyle = '#ff4d4d'; ctx.lineWidth = 2;
+  ctx.beginPath(); mpts.forEach(([x, y], i) => (i ? ctx.lineTo(x * s, y * s) : ctx.moveTo(x * s, y * s))); ctx.stroke();
+  mpts.forEach(([x, y]) => { ctx.beginPath(); ctx.arc(x * s, y * s, 4, 0, Math.PI * 2); ctx.fill(); });
+  const ft = measureFeet(), [lx, ly] = mpts[mpts.length - 1];
+  if (mpts.length > 1) {
+    ctx.font = 'bold 13px monospace'; ctx.fillStyle = '#000'; ctx.fillRect(lx * s + 8, ly * s - 20, 84, 18);
+    ctx.fillStyle = '#7ee08a'; ctx.fillText(`${ft.toFixed(1)} ft`, lx * s + 12, ly * s - 6);
+  }
+  $('readout').textContent = mpts.length > 1 ? `${ft.toFixed(1)} ft over ${mpts.length - 1} segment(s) — type it into a Tray ft cell` : '1 point — click the next point';
+}
+
+// ── done marks ──
+function drawSmiley(ctx, cx, cy, r) {
+  ctx.lineWidth = 3; ctx.strokeStyle = '#22c55e'; ctx.fillStyle = 'rgba(34,197,94,0.25)';
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#22c55e';
+  ctx.beginPath(); ctx.arc(cx - r * 0.32, cy - r * 0.2, r * 0.1, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx + r * 0.32, cy - r * 0.2, r * 0.1, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx, cy + r * 0.05, r * 0.55, 0.12 * Math.PI, 0.88 * Math.PI); ctx.stroke();
+}
+function drawMarks() {
+  const c = $('marks'), ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, c.width, c.height);
+  if (!cur) return;
+  for (const r of rows) {
+    if (!r.mark || r.mark.page_id !== cur.id) continue;
+    const cx = r.mark.x_norm * c.width, cy = r.mark.y_norm * c.height;
+    drawSmiley(ctx, cx, cy, 20);
+    ctx.font = 'bold 14px monospace';
+    const w = ctx.measureText(r.tr_name).width + 12;
+    ctx.fillStyle = '#000'; ctx.fillRect(cx + 24, cy - 10, w, 20);
+    ctx.fillStyle = '#7ee08a'; ctx.fillText(r.tr_name, cx + 30, cy + 5);
+  }
+}
+function setPlacing(trName) {
+  placing = trName;
+  $('marks').style.pointerEvents = trName ? 'auto' : 'none';
+  $('marks').style.cursor = trName ? 'crosshair' : 'default';
+  if (trName) { setMeasuring(false); status(`Click ${trName}'s room on the drawing to mark it done (Esc cancels).`); }
+  renderGrid();
+}
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && placing) { setPlacing(null); status(''); } });
+$('marks').addEventListener('click', async (e) => {
+  if (!placing || !cur) return;
+  const r = e.target.getBoundingClientRect();
+  const tr = placing;
+  setPlacing(null);
+  try {
+    const m = await post('/api/wf/wf5/rooms', { action: 'mark', project_id: Number(projectId), tr_name: tr, page_id: cur.id,
+      x_norm: (e.clientX - r.left) / e.target.width, y_norm: (e.clientY - r.top) / e.target.height });
+    rows.find((x) => x.tr_name === tr).mark = m;
+    drawMarks(); renderGrid(); touchStep();
+    status(`${tr} marked done.`, 'ok');
+  } catch (err) { status(err.message, 'err'); }
+});
+async function toggleDone(tr) {
+  const r = rows.find((x) => x.tr_name === tr);
+  if (!r.mark) { if (!cur) { status('Open a room plan sheet first.', 'err'); return; } setPlacing(placing === tr ? null : tr); return; }
+  try {
+    await post('/api/wf/wf5/rooms', { action: 'unmark', project_id: Number(projectId), tr_name: tr });
+    r.mark = null; drawMarks(); renderGrid(); status(`${tr} unmarked.`, 'ok');
+  } catch (e) { status(e.message, 'err'); }
+}
+
+// ── grid ──
+$('grid-head').innerHTML = `<th><input type="checkbox" id="head-check" aria-label="Check all rooms"></th><th class="tr">TR</th>`
+  + CATEGORIES.map((c) => `<th>${esc(CATEGORY_LABEL[c])}</th>`).join('') + '<th>Done</th>';
+$('bulk-cat').innerHTML = CATEGORIES.map((c) => `<option value="${c}">${esc(CATEGORY_LABEL[c])}</option>`).join('');
+$('head-check').onchange = (e) => { rows.forEach((r) => (r.checked = e.target.checked)); renderGrid(); };
+$('check-all').onclick = () => { rows.forEach((r) => (r.checked = true)); renderGrid(); };
+$('check-none').onclick = () => { rows.forEach((r) => (r.checked = false)); renderGrid(); };
+$('bulk-all').onchange = () => renderGrid();
+
+function noteEdit(r) {
+  r.edit_page_id = cur?.id ?? null;
+  r.edit_basis = cur ? `Entered from sheet ${cur.sheet_number || 'page ' + cur.page_number}` : null;
+}
+
+function renderGrid() {
+  const body = $('grid-body');
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="13" class="empty">No TRs yet. Confirm the TR list in WF2 first — WF5 has one row per TR.</td></tr>';
+  } else {
+    body.innerHTML = rows.map((r, i) => `
+      <tr class="${r.checked ? 'checked' : ''} ${rowDirty(r) ? 'dirty' : ''}">
+        <td><input type="checkbox" data-chk="${i}" ${r.checked ? 'checked' : ''} aria-label="Check ${esc(r.tr_name)}"></td>
+        <td class="tr">${r.mark ? `<button type="button" data-goto="${i}" title="Show its room plan">${esc(r.tr_name)}</button>` : esc(r.tr_name)}</td>
+        ${CATEGORIES.map((c) => `<td><input class="cell ${(r.counts[c] ?? null) !== (r.saved[c] ?? null) ? 'changed' : ''}" inputmode="${CATEGORY_UNIT[c] === 'ft' ? 'decimal' : 'numeric'}"
+          value="${r.counts[c] ?? ''}" data-i="${i}" data-c="${c}" ${locked ? 'disabled' : ''} aria-label="${esc(r.tr_name)} ${esc(CATEGORY_LABEL[c])}"></td>`).join('')}
+        <td><button type="button" class="btn small done-btn ${r.mark ? 'green' : placing === r.tr_name ? 'amber' : 'muted'}" data-done="${i}">${r.mark ? '😊 Done' : placing === r.tr_name ? 'Click plan…' : 'Mark done'}</button></td>
+      </tr>`).join('');
+  }
+  body.querySelectorAll('[data-chk]').forEach((b) => b.onchange = () => { rows[+b.dataset.chk].checked = b.checked; renderGrid(); });
+  body.querySelectorAll('[data-done]').forEach((b) => b.onclick = () => toggleDone(rows[+b.dataset.done].tr_name));
+  body.querySelectorAll('[data-goto]').forEach((b) => b.onclick = () => {
+    const s = sheets.find((x) => x.id === rows[+b.dataset.goto].mark.page_id);
+    if (s) showSheet(s, cur?.id !== s.id); else status('That room plan sheet is no longer in this step.', 'err');
+  });
+  body.querySelectorAll('[data-c]').forEach((inp) => inp.onchange = () => {
+    const r = rows[+inp.dataset.i], c = inp.dataset.c;
+    const v = parseCell(c, inp.value);
+    if (v === undefined) { status(`${r.tr_name} ${CATEGORY_LABEL[c]}: enter ${CATEGORY_UNIT[c] === 'ft' ? 'feet (e.g. 42.5)' : 'a whole number'}, or leave blank.`, 'err'); inp.value = r.counts[c] ?? ''; return; }
+    r.counts[c] = v; noteEdit(r); status(''); renderGrid();
+  });
+
+  const n = $('bulk-all').checked ? rows.length : rows.filter((r) => r.checked).length;
+  $('bulk-apply').textContent = $('bulk-all').checked ? `Apply to all ${rows.length} rooms` : `Apply to checked (${n})`;
+  $('bulk-apply').disabled = locked || !n;
+  const s = summary(rows);
+  $('save').disabled = locked || !s.unsaved;
+  $('discard').hidden = !s.unsaved;
+  $('save').textContent = s.unsaved ? `Save changes (${s.unsaved} room${s.unsaved === 1 ? '' : 's'})` : 'Save changes';
+  $('grid-msg').textContent = `${s.rooms} TRs · ${s.with_values} with values · ${s.racks_new} new racks · ${s.tray_ft} ft tray`;
+  renderFooter(s);
+}
+
+$('bulk-apply').onclick = () => {
+  const c = $('bulk-cat').value;
+  const v = parseCell(c, $('bulk-val').value);
+  if (v === undefined) { status(`Enter ${CATEGORY_UNIT[c] === 'ft' ? 'feet' : 'a whole number'}, or leave blank to clear.`, 'err'); return; }
+  const all = $('bulk-all').checked;
+  const n = applyBulk(rows, c, v, (r) => (all || r.checked) && (noteEdit(r), true));
+  renderGrid();
+  status(`${CATEGORY_LABEL[c]} = ${v ?? '(blank)'} on ${n} room(s). Review, then save.`, 'ok');
+};
+
+$('save').onclick = async () => {
+  const cells = changedCells(rows);
+  if (!cells.length) return;
+  $('save').disabled = true;
+  try {
+    const r = await post('/api/wf/wf5/rooms', { action: 'save', project_id: Number(projectId), cells });
+    status(`Saved ${r.saved} value(s)${r.deleted ? `, cleared ${r.deleted}` : ''}.`, 'ok');
+    await loadRooms(true);
+    touchStep();
+  } catch (e) { status(e.message, 'err'); renderGrid(); }
+};
+$('discard').onclick = () => { rows.forEach((r) => { r.counts = { ...r.saved }; }); renderGrid(); status(''); };
+
+async function loadRooms(keepChecks) {
+  const d = await api('/api/wf/wf5/rooms?project_id=' + projectId);
+  const checked = new Set(keepChecks ? rows.filter((r) => r.checked).map((r) => r.tr_name) : []);
+  rows = buildRows(d.trs, d.values, d.marks);
+  rows.forEach((r) => (r.checked = checked.has(r.tr_name)));
+  renderGrid(); drawMarks();
+}
+
+// ── step status ──
+let touched = false;
+function touchStep() {
+  if (touched) return; touched = true;
+  post('/api/wf/projects', { action: 'touch_step', project_id: Number(projectId), step_code: 'WF5' }).then(loadStep).catch(() => {});
+}
+let stepRow = null;
+function renderFooter(s = summary(rows)) {
+  if (!stepRow) return;
+  const done = stepRow.status === 'confirmed';
+  $('confirm').hidden = done; $('reopen').hidden = !done;
+  const parts = [`${s.done} of ${s.rooms} rooms done`];
+  if (s.values_not_done) parts.push(`${s.values_not_done} with values not marked done`);
+  if (s.done_empty) parts.push(`${s.done_empty} marked done with nothing entered`);
+  $('footer-msg').textContent = done ? `TR rooms confirmed · ${parts[0]}. Reopen to edit.`
+    : stepRow.status === 'stale' ? `Needs review: ${stepRow.stale_reason || 'a sheet changed'}. ${parts.join(' · ')}`
+    : parts.join(' · ');
+}
+async function loadStep() {
+  const d = await api('/api/wf/projects?id=' + projectId);
+  $('crumb').textContent = '← ' + d.project.name;
+  stepRow = d.steps.find((x) => x.step_code === 'WF5');
+  $('step-pill').className = 'pill ' + stepRow.status;
+  $('step-pill').textContent = stepRow.status === 'stale' ? 'changed' : stepRow.status.replace('_', ' ');
+  locked = stepRow.status === 'confirmed';
+  renderGrid();
+}
+$('confirm').onclick = async () => {
+  const s = summary(rows);
+  if (s.unsaved) { status('Save your changes first.', 'err'); return; }
+  const gaps = s.rooms - s.done;
+  if (gaps && !confirm(`${gaps} of ${s.rooms} rooms are not marked done. Confirm TR rooms anyway?`)) return;
+  try { await post('/api/wf/projects', { action: 'confirm_step', project_id: Number(projectId), step_code: 'WF5' }); status('TR rooms confirmed.', 'ok'); loadStep(); }
+  catch (e) { status(e.message, 'err'); }
+};
+$('reopen').onclick = async () => {
+  try { await post('/api/wf/projects', { action: 'reopen_step', project_id: Number(projectId), step_code: 'WF5' }); loadStep(); }
+  catch (e) { status(e.message, 'err'); }
+};
+
+window.addEventListener('beforeunload', (e) => { if (rows.some(rowDirty)) { e.preventDefault(); e.returnValue = ''; } });
+loadRooms().catch((e) => status(e.message, 'err'));
+loadStep().catch((e) => status(e.message, 'err'));
+</script>
+</body>
+</html>
