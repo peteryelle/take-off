@@ -127,7 +127,8 @@
           </div>
         </div>
         <div class="panel" style="padding: 12px 16px; display: flex; flex-direction: column; gap: 8px">
-          <div class="small muted">Serving areas — only when parts of this sheet go to different TRs. Draw boxes (two opposite corners) for each TR's area; devices inside go to that TR.</div>
+          <div style="color: var(--blue); font-size: 18px; font-weight: 700">TR serving areas</div>
+          <div class="small muted">Only when parts of this sheet go to different TRs. Draw boxes (two opposite corners) for each TR's area; devices inside go to that TR. To leave an area out of the count, use Areas under 4 Count &amp; route.</div>
           <div id="serve-list"></div>
         </div>
         <div class="panel"><div class="row head">All sheets, by PDF</div><div id="pins-overview"></div></div>
@@ -1216,6 +1217,7 @@ function renderRun() {
       <span style="flex-grow: 1; display: flex; gap: 8px; align-items: center">${cls.includes('counting') ? '<span class="spinner"></span>' : ''}<span class="pill ${cls.replace(' counting', '')}" title="${esc(row.run_status_msg || '')}">${st}</span>
         <span class="pill ${isReady(p.id) ? 'confirmed' : 'open'}" title="${isReady(p.id) ? 'Setup confirmed ' + new Date(pageRow(p.id).wf4_ready_at).toLocaleString() : 'Draw its exclusion areas, then Confirm sheet'}">${isReady(p.id) ? 'sheet confirmed' : 'to set up'}</span>
         <button type="button" class="btn ${areasPageId === p.id ? 'green' : 'muted'} small" data-areas="${p.id}" title="Exclusion areas and sheet confirmation">Areas${areaBoxes(p.id).length ? ' (' + areaBoxes(p.id).length + ')' : ''}</button>
+        ${isReady(p.id) ? `<button type="button" class="btn muted small" data-reopen="${p.id}" title="Clear the confirmation so this sheet's setup can be edited"${cls.includes('counting') ? ' disabled' : ''}>Reopen</button>` : ''}
         ${needsScale ? `<input class="cell" style="width: 120px" data-scale="${p.id}" placeholder='1/8" = 1&apos;-0"' value="${esc(scaleInput[p.id] || '')}" aria-label="Scale for ${esc(p.sheet_number || '')}">` : ''}
       </span>
     </div>`;
@@ -1224,6 +1226,12 @@ function renderRun() {
   document.querySelectorAll('[data-pmult]').forEach((inp) => inp.onchange = () => saveSettings({ page_id: Number(inp.dataset.pmult), route_multiplier: inp.value === '' ? null : Number(inp.value) }));
   document.querySelectorAll('[data-scale]').forEach((inp) => inp.oninput = () => { scaleInput[inp.dataset.scale] = inp.value; });
   document.querySelectorAll('[data-areas]').forEach((b) => b.onclick = () => openAreas(Number(b.dataset.areas), true));
+  document.querySelectorAll('[data-reopen]').forEach((b) => b.onclick = async () => {
+    const id = Number(b.dataset.reopen);
+    b.disabled = true;
+    await setReady(id, false);
+    if (areasPageId !== id) openAreas(id);
+  });
 
   const todo = toCount(), open = unconfirmed();
   const countedN = plans.filter((p) => pageRow(p.id).run_status === 'done').length;
